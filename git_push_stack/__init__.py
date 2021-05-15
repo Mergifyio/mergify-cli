@@ -17,11 +17,9 @@
 
 import argparse
 import asyncio
-import filecmp
 import importlib.metadata
 import os
 import re
-import shutil
 import sys
 import typing
 from urllib import parse
@@ -30,9 +28,15 @@ import httpx
 import rich
 import rich.console
 
+from git_push_stack.commit_msg_hook import COMMIT_MSG_HOOK
 
-VERSION = importlib.metadata.version("git-push-stack")
-STACKIFY_HOOK_FILE = os.path.join(os.path.dirname(__file__), "data", "commit-msg")
+
+try:
+    VERSION = importlib.metadata.version("git-push-stack")
+except ImportError:
+    # https://pyoxidizer.readthedocs.io/en/stable/oxidized_importer_behavior_and_compliance.html#importlib-metadata-compatibility
+    VERSION = "0.1"
+
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")  # noqa
 
 console = rich.console.Console(log_path=False, log_time=False)
@@ -90,15 +94,20 @@ def get_slug(url: str) -> typing.Tuple[str, str]:
 async def do_setup() -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     hook_file = os.path.join(".git", "hooks", "commit-msg")
-    if not os.path.exists(hook_file):
-        console.log("Installation of git commit-msg hook")
-        shutil.copyfile(STACKIFY_HOOK_FILE, hook_file)
+    if os.path.exists(hook_file):
+        with open(hook_file, "f") as f:
+            data = f.read()
+        if data != COMMIT_MSG_HOOK:
+            console.print(
+                f"error: {hook_file} differ from git_push_stack hook", style="red"
+            )
+            sys.exit(1)
 
-    if not filecmp.cmp(STACKIFY_HOOK_FILE, hook_file):
-        console.print(
-            f"error: {hook_file} differ from git_push_stack hook", style="red"
-        )
-        sys.exit(1)
+    else:
+
+        console.log("Installation of git commit-msg hook")
+        with open(hook_file, "w") as f:
+            f.write(COMMIT_MSG_HOOK)
 
 
 class GitRef(typing.TypedDict):

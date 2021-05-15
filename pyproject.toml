@@ -3,7 +3,6 @@ name = "git-push-stack"
 version = "0.1.0"
 description = ""
 authors = ["Mehdi Abaakouk <sileht@mergify.io>"]
-include = ["git_push_stack/data/commit-msg"]
 
 
 [tool.poetry.dependencies]
@@ -25,6 +24,7 @@ flake8-comprehensions = {version = "^3.5.0"}
 isort = {version = "^5.8.0"}
 mypy = {version = "^0.812"}
 pytest = {version = "^6.2.4"}
+pyoxidizer = "^0.16.2"
 
 [tool.poetry.scripts]
 git-push-stack = 'git_push_stack:cli'

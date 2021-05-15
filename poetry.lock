@@ -455,6 +455,14 @@ optional = false
 python-versions = ">=3.5"
 
 [[package]]
+name = "pyoxidizer"
+version = "0.16.2"
+description = "Package self-contained Python applications"
+category = "dev"
+optional = false
+python-versions = "*"
+
+[[package]]
 name = "pyparsing"
 version = "2.4.7"
 description = "Python parsing module"
@@ -593,7 +601,7 @@ testing = ["pytest (>=4.6)", "pytest-checkdocs (>=1.2.3)", "pytest-flake8", "pyt
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.6"
-content-hash = "c2ef04ada68033b32735ca6db4eef447155ecd47a46957adaefa080d1b36f5b9"
+content-hash = "b9672d8898d173d8c832c48d5abcb6527756f958eca95f741f96aafdb3721f25"
 
 [metadata.files]
 appdirs = [
@@ -787,6 +795,14 @@ pyflakes = [
 pygments = [
     {file = "Pygments-2.9.0-py3-none-any.whl", hash = "sha256:d66e804411278594d764fc69ec36ec13d9ae9147193a1740cd34d272ca383b8e"},
     {file = "Pygments-2.9.0.tar.gz", hash = "sha256:a18f47b506a429f6f4b9df81bb02beab9ca21d0a5fee38ed15aef65f0545519f"},
+]
+pyoxidizer = [
+    {file = "pyoxidizer-0.16.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:f1ef9cca74a9146e403e40d5c67177aab56d32be7a998907634fede2dc4523e5"},
+    {file = "pyoxidizer-0.16.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:9fa7586044bc8b76047f13a65f9e9800bc06afb76039a3811453b9421085ef18"},
+    {file = "pyoxidizer-0.16.2-py3-none-manylinux2010_i686.whl", hash = "sha256:8d00e894227ae10dcfc6d4bbd721ab1d3d550a73bed9176367d78ae6a33384a7"},
+    {file = "pyoxidizer-0.16.2-py3-none-manylinux2010_x86_64.whl", hash = "sha256:9b6535fd8735c2a9f1e397044044ef91c2c5596fb00a737ba453985a57ce722a"},
+    {file = "pyoxidizer-0.16.2-py3-none-win32.whl", hash = "sha256:70485039d999e46467871c4466daad1e54ffc0127039712ebb815808fb3b282f"},
+    {file = "pyoxidizer-0.16.2-py3-none-win_amd64.whl", hash = "sha256:ab13f619802d75e009acb892c5a93b048aaf6b1e8747641c0b4d31bbc61aacc6"},
 ]
 pyparsing = [
     {file = "pyparsing-2.4.7-py2.py3-none-any.whl", hash = "sha256:ef9d7589ef3c200abe66653d3f1ab1033c3c419ae9b9bdb1240a85b024efc88b"},

@@ -1,5 +1,5 @@
-#!/bin/sh
-# From Gerrit Code Review 3.1.3
+COMMIT_MSG_HOOK = """#!/bin/sh
+# Based on Gerrit Code Review 3.1.3
 #
 # Part of Gerrit Code Review (https://www.gerritcodereview.com/)
 #
@@ -61,3 +61,4 @@ if ! mv "${dest}" "$1" ; then
   echo "cannot mv ${dest} to $1"
   exit 1
 fi
+"""
