@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "git-push-stack"
+version = "0.1.0"
+description = ""
+authors = ["Mehdi Abaakouk <sileht@mergify.io>"]
+include = ["git_push_stack/data/commit-msg"]
+
+
+[tool.poetry.dependencies]
+python = "^3.6"
+httpx = "^0.18.1"
+rich = "^10.2.0"
+
+[tool.poetry.dev-dependencies]
+flake8 = {version = "^3.9.2"}
+flake8-black = {version = "^0.2.1"}
+flake8-blind-except = {version = "^0.2.0"}
+flake8-builtins = {version = "^1.5.3"}
+flake8-bugbear = {version = "^21.4.3"}
+flake8-use-fstring = {version = "^1.1"}
+flake8-docstrings = {version = "^1.6.0"}
+flake8-rst-docstrings = {version = "^0.2.3"}
+flake8-logging-format = {version = "^0.6.0"}
+flake8-comprehensions = {version = "^3.5.0"}
+isort = {version = "^5.8.0"}
+mypy = {version = "^0.812"}
+pytest = {version = "^6.2.4"}
+
+[tool.poetry.scripts]
+git-push-stack = 'git_push_stack:cli'
+

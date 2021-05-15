@@ -1,0 +1,32 @@
+name: Continuous Integration
+permissions: read-all
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  pep8:
+    timeout-minutes: 5
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2.3.4
+      - uses: actions/setup-python@v2.2.2
+        with:
+          python-version: 3.9.5
+      - run: |
+          pip install tox poetry
+          tox -e pep8
+
+  py39:
+    timeout-minutes: 10
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2.3.4
+      - uses: actions/setup-python@v2.2.2
+        with:
+          python-version: 3.9.5
+      - run: |
+          pip install tox poetry
+          tox -e py39
