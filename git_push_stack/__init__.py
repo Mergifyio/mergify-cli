@@ -211,6 +211,25 @@ async def get_changeids_to_delete(
     return changeids_to_delete
 
 
+async def create_or_update_comments(
+    client: httpx.AsyncClient, pulls: typing.List[PullRequest]
+) -> None:
+    first_line = "This pull request is part of a stack:\n"
+    body = first_line
+    for pull in pulls:
+        body += f"* {pull['title']} ([#{pull['number']}]({pull['html_url']}))\n"
+
+    for pull in pulls:
+        r = await client.get(f"issues/{pull['number']}/comments")
+        check_for_status(r)
+        for comment in r.json():
+            if comment["body"].startswith(first_line):
+                await client.patch(comment["url"], json={"body": body})
+                break
+        else:
+            await client.post(f"issues/{pull['number']}/comments", json={"body": body})
+
+
 async def create_or_update_stack(
     client: httpx.AsyncClient,
     stacked_base_branch: str,
@@ -378,11 +397,11 @@ async def main(token: str, dry_run: bool) -> None:
         console.log("new stacked pull request:", style="green")
         stacked_base_branch = base_branch
         draft = False
-        pull = None
+        pulls: typing.List[PullRequest] = []
         for changeid, commit, title, message in reversed(changes):
             depends_on = ""
-            if pull is not None:
-                depends_on = f"\n\nDepends-On: #{pull['number']}"
+            if pulls:
+                depends_on = f"\n\nDepends-On: #{pulls[-1]['number']}"
             stacked_dest_branch = f"{stack_prefix}{changeid}"
             pull = await create_or_update_stack(
                 client,
@@ -395,8 +414,11 @@ async def main(token: str, dry_run: bool) -> None:
                 draft,
                 known_changeids,
             )
+            pulls.append(pull)
             stacked_base_branch = stacked_dest_branch
             draft = True
+
+        await create_or_update_comments(client, pulls)
 
         with console.status("Deleting unused branches..."):
             delete_tasks = [
