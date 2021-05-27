@@ -104,5 +104,6 @@ sudo mv git-push-stack /usr/local/bin/git-push-stack
 
 ```bash
 $ poetry build && poetry run pyoxidizer build --release
-$ sudo cp /home/sileht/workspace/mergify/git-push-stack/./build/x86_64-unknown-linux-gnu/release/install/git-push-stack /usr/local/bin/git-push-stack
+$ strip build/x86_64-unknown-linux-gnu/release/install/git-push-stack
+$ sudo cp build/x86_64-unknown-linux-gnu/release/install/git-push-stack /usr/local/bin/git-push-stack
 ```
