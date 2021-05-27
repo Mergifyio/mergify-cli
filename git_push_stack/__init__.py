@@ -108,6 +108,7 @@ async def do_setup() -> None:
         console.log("Installation of git commit-msg hook")
         with open(hook_file, "w") as f:
             f.write(COMMIT_MSG_HOOK)
+        os.chmod(hook_file, 0o755)
 
 
 class GitRef(typing.TypedDict):
