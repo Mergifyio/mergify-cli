@@ -221,7 +221,7 @@ async def create_or_update_stack(
     message: str,
     draft: bool,
     known_changeids: KnownChangeIDs,
-) -> None:
+) -> PullRequest:
 
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
@@ -283,6 +283,7 @@ async def create_or_update_stack(
     console.log(
         f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}"
     )
+    return pull
 
 
 async def delete_stack(
@@ -377,16 +378,20 @@ async def main(token: str, dry_run: bool) -> None:
         console.log("new stacked pull request:", style="green")
         stacked_base_branch = base_branch
         draft = False
+        pull = None
         for changeid, commit, title, message in reversed(changes):
+            depends_on = ""
+            if pull is not None:
+                depends_on = f"\n\nDepends-On: #{pull['number']}"
             stacked_dest_branch = f"{stack_prefix}{changeid}"
-            await create_or_update_stack(
+            pull = await create_or_update_stack(
                 client,
                 stacked_base_branch,
                 stacked_dest_branch,
                 changeid,
                 commit,
                 title,
-                message,
+                message + depends_on,
                 draft,
                 known_changeids,
             )
