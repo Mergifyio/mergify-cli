@@ -329,7 +329,7 @@ async def main(token: str, dry_run: bool) -> None:
     stack_prefix = f"git_push_stack/{dest_branch}/"
 
     base_commit_sha = await git(f"merge-base --fork-point {remote}/{base_branch}")
-    if base_commit_sha:
+    if not base_commit_sha:
         console.log(
             f"Common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
             style="red",
