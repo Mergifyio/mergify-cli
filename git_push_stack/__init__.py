@@ -217,7 +217,7 @@ async def create_or_update_comments(
     first_line = "This pull request is part of a stack:\n"
     body = first_line
     for pull in pulls:
-        body += f"* {pull['title']} ([#{pull['number']}]({pull['html_url']}))\n"
+        body += f"1. {pull['title']} ([#{pull['number']}]({pull['html_url']}))\n"
 
     for pull in pulls:
         r = await client.get(f"issues/{pull['number']}/comments")
