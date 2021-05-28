@@ -418,7 +418,9 @@ async def main(token: str, dry_run: bool) -> None:
             stacked_base_branch = stacked_dest_branch
             draft = True
 
-        await create_or_update_comments(client, pulls)
+        with console.status("Updating comments..."):
+            await create_or_update_comments(client, pulls)
+        console.log("Comments updated")
 
         with console.status("Deleting unused branches..."):
             delete_tasks = [
