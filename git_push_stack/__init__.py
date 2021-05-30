@@ -385,16 +385,16 @@ async def main(token: str, dry_run: bool) -> None:
                     known_changeids.update(dict([await task]))  # noqa
 
         with console.status("Preparing stacked branches..."):
-            console.log("stacked pull request plan:", style="green")
+            console.log("Stacked pull request plan:", style="green")
             changes = await get_local_changes(commits, known_changeids)
             changeids_to_delete = await get_changeids_to_delete(
                 changes, known_changeids
             )
 
         if dry_run:
-            console.log("[orange]finished (dry-run mode) :tada:[/]")
+            console.log("[orange]Finished (dry-run mode) :tada:[/]")
             sys.exit(0)
-        console.log("new stacked pull request:", style="green")
+        console.log("New stacked pull request:", style="green")
         stacked_base_branch = base_branch
         draft = False
         pulls: typing.List[PullRequest] = []
@@ -420,7 +420,7 @@ async def main(token: str, dry_run: bool) -> None:
 
         with console.status("Updating comments..."):
             await create_or_update_comments(client, pulls)
-        console.log("Comments updated")
+        console.log("[green]Comments updated")
 
         with console.status("Deleting unused branches..."):
             delete_tasks = [
@@ -430,7 +430,7 @@ async def main(token: str, dry_run: bool) -> None:
             if delete_tasks:
                 await asyncio.wait(delete_tasks)
 
-        console.log("[green]finished :tada:[/]")
+        console.log("[green]Finished :tada:[/]")
 
 
 def GitHubToken(v: str) -> str:
