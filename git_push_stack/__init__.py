@@ -38,7 +38,7 @@ except ImportError:
     VERSION = "0.1"
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")  # noqa
-
+READY_FOR_REVIEW_TEMPLATE = "mutation { markPullRequestReadyForReview(input: { pullRequestId: %s }) {} }"  # noqa
 console = rich.console.Console(log_path=False, log_time=False)
 
 
@@ -276,13 +276,19 @@ async def create_or_update_stack(
                 json={
                     "title": title,
                     "body": message,
-                    "draft": draft,
                     "head": stacked_dest_branch,
                     "base": stacked_base_branch,
                 },
             )
             check_for_status(r)
             pull = typing.cast(PullRequest, r.json())
+            if not draft:
+                r = await client.post(
+                    "/graghql",
+                    headers={"Accept": "application/vnd.github.v4.idl"},
+                    content=READY_FOR_REVIEW_TEMPLATE % pull["number"],
+                )
+                check_for_status(r)
     else:
         action = "created"
         with console.status(
