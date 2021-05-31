@@ -224,7 +224,8 @@ async def create_or_update_comments(
         check_for_status(r)
         for comment in r.json():
             if comment["body"].startswith(first_line):
-                await client.patch(comment["url"], json={"body": body})
+                if comment["body"] != body:
+                    await client.patch(comment["url"], json={"body": body})
                 break
         else:
             await client.post(f"issues/{pull['number']}/comments", json={"body": body})
