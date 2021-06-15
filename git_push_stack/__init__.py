@@ -38,8 +38,21 @@ except ImportError:
     VERSION = "0.1"
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")  # noqa
-READY_FOR_REVIEW_TEMPLATE = "mutation { markPullRequestReadyForReview(input: { pullRequestId: %s }) {} }"  # noqa
+READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'  # noqa
 console = rich.console.Console(log_path=False, log_time=False)
+
+
+def check_for_graphql_errors(response: httpx.Response) -> None:
+    data = response.json()
+    if "errors" in data:
+        console.print(f"url: {response.request.url}", style="red")
+        console.print(f"data: {response.request.content.decode()}", style="red")
+        if "errors" in data:
+            console.print(
+                "\n".join(f"* {e.get('message') or e}" for e in data["errors"]),
+                style="red",
+            )
+        sys.exit(1)
 
 
 def check_for_status(response: httpx.Response) -> None:
@@ -125,6 +138,8 @@ class PullRequest(typing.TypedDict):
     title: str
     head: HeadRef
     state: str
+    draft: bool
+    node_id: str
 
 
 ChangeId = typing.NewType("ChangeId", str)
@@ -161,7 +176,7 @@ async def get_local_changes(
     known_changeids: KnownChangeIDs,
 ) -> typing.List[Change]:
     changes = []
-    for commit in commits:
+    for i, commit in enumerate(commits):
         message = await git(f"log -1 --format='%b' {commit}")
         title = await git(f"log -1 --format='%s' {commit}")
         changeids = CHANGEID_RE.findall(message)
@@ -178,7 +193,10 @@ async def get_local_changes(
             url = ""
             commit_info = commit[-7:]
         elif commit == pull["head"]["sha"]:
-            action = "nothing"
+            if i == 0 and pull["draft"]:
+                action = "ready_for_review"
+            else:
+                action = "nothing"
             url = pull["html_url"]
             commit_info = commit[-7:]
         else:
@@ -239,7 +257,7 @@ async def create_or_update_stack(
     commit: str,
     title: str,
     message: str,
-    draft: bool,
+    ready_for_review: bool,
     known_changeids: KnownChangeIDs,
 ) -> PullRequest:
 
@@ -265,7 +283,21 @@ async def create_or_update_stack(
 
     pull = known_changeids.get(changeid)
     if pull and pull["head"]["sha"] == commit:
-        action = "nothing"
+        if ready_for_review and pull["draft"]:
+            action = "ready_for_review"
+            r = await client.post(
+                "https://api.github.com/graphql",
+                headers={
+                    "Accept": "application/vnd.github.v4.idl",
+                    "User-Agent": f"git_push_stack/{VERSION}",
+                    "Authorization": client.headers["Authorization"],
+                },
+                json={"query": READY_FOR_REVIEW_TEMPLATE % pull["node_id"]},
+            )
+            check_for_status(r)
+            check_for_graphql_errors(r)
+        else:
+            action = "nothing"
     elif pull:
         action = "updated"
         with console.status(
@@ -282,13 +314,18 @@ async def create_or_update_stack(
             )
             check_for_status(r)
             pull = typing.cast(PullRequest, r.json())
-            if not draft:
+            if ready_for_review and pull["draft"]:
                 r = await client.post(
-                    "/graghql",
-                    headers={"Accept": "application/vnd.github.v4.idl"},
-                    content=READY_FOR_REVIEW_TEMPLATE % pull["number"],
+                    "https://api.github.com/graphql",
+                    headers={
+                        "Accept": "application/vnd.github.v4.idl",
+                        "User-Agent": f"git_push_stack/{VERSION}",
+                        "Authorization": client.headers["Authorization"],
+                    },
+                    json={"query": READY_FOR_REVIEW_TEMPLATE % pull["node_id"]},
                 )
                 check_for_status(r)
+                check_for_graphql_errors(r)
     else:
         action = "created"
         with console.status(
@@ -299,7 +336,7 @@ async def create_or_update_stack(
                 json={
                     "title": title,
                     "body": message,
-                    "draft": draft,
+                    "draft": not ready_for_review,
                     "head": stacked_dest_branch,
                     "base": stacked_base_branch,
                 },
@@ -364,8 +401,12 @@ async def main(token: str, dry_run: bool) -> None:
         )
         sys.exit(1)
 
-    commits = (await git(f"log --format='%H' {base_commit_sha}..{dest_branch}")).split(
-        "\n"
+    commits = list(
+        reversed(
+            (await git(f"log --format='%H' {base_commit_sha}..{dest_branch}")).split(
+                "\n"
+            )
+        )
     )
 
     known_changeids = KnownChangeIDs({})
@@ -403,9 +444,9 @@ async def main(token: str, dry_run: bool) -> None:
             sys.exit(0)
         console.log("New stacked pull request:", style="green")
         stacked_base_branch = base_branch
-        draft = False
+        ready_for_review = True
         pulls: typing.List[PullRequest] = []
-        for changeid, commit, title, message in reversed(changes):
+        for changeid, commit, title, message in changes:
             depends_on = ""
             if pulls:
                 depends_on = f"\n\nDepends-On: #{pulls[-1]['number']}"
@@ -418,12 +459,12 @@ async def main(token: str, dry_run: bool) -> None:
                 commit,
                 title,
                 message + depends_on,
-                draft,
+                ready_for_review,
                 known_changeids,
             )
             pulls.append(pull)
             stacked_base_branch = stacked_dest_branch
-            draft = True
+            ready_for_review = False
 
         with console.status("Updating comments..."):
             await create_or_update_comments(client, pulls)
