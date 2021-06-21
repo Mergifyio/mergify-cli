@@ -7,7 +7,7 @@ authors = ["Mehdi Abaakouk <sileht@mergify.io>"]
 
 [tool.poetry.dependencies]
 python = "^3.6"
-httpx = "^0.18.1"
+httpx = "^0.18.2"
 rich = "^10.2.2"
 
 [tool.poetry.dev-dependencies]
