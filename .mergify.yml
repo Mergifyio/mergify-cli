@@ -15,7 +15,6 @@ pull_request_rules:
   - name: automatic merge
     conditions:
       - base=main
-      - check-success=GitGuardian Security Checks
       - check-success=Semantic Pull Request
       - check-success=pep8
       - check-success=py39
@@ -28,7 +27,6 @@ pull_request_rules:
         name: default
   - name: automatic merge from dependabot
     conditions:
-      - check-success=GitGuardian Security Checks
       - check-success=Semantic Pull Request
       - author=dependabot[bot]
       - label!=work-in-progress
