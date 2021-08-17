@@ -20,7 +20,7 @@ flake8-use-fstring = {version = "^1.1"}
 flake8-docstrings = {version = "^1.6.0"}
 flake8-rst-docstrings = {version = "^0.2.3"}
 flake8-logging-format = {version = "^0.6.0"}
-flake8-comprehensions = {version = "^3.6.0"}
+flake8-comprehensions = {version = "^3.6.1"}
 isort = {version = "^5.8.0"}
 mypy = {version = "^0.910"}
 pytest = {version = "^6.2.4"}
