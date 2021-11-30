@@ -8,16 +8,16 @@ queue_rules:
   - name: default
     conditions:
       - check-success=pep8
-      - check-success=py39
+      - check-success=py310
     speculative_checks: 5
 
 pull_request_rules:
   - name: automatic merge
     conditions:
       - base=main
-      - check-success=Semantic Pull Request
       - check-success=pep8
-      - check-success=py39
+      - check-success=py310
+      - check-success=semantic-pull-request
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by=0"
       - label!=work-in-progress
@@ -27,7 +27,7 @@ pull_request_rules:
         name: default
   - name: automatic merge from dependabot
     conditions:
-      - check-success=Semantic Pull Request
+      - check-success=semantic-pull-request
       - author=dependabot[bot]
       - label!=work-in-progress
       - label!=manual merge

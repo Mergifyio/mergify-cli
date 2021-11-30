@@ -1,0 +1,19 @@
+name: "Semantic Pull Request"
+permissions: read-all
+
+on:
+  pull_request_target:
+    branches-ignore:
+      - mergify/merge-queue/main/**
+    types:
+      - opened
+      - edited
+      - synchronize
+
+jobs:
+  semantic-pull-request:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v3.4.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
