@@ -394,6 +394,10 @@ async def main(token: str, stack: bool, dry_run: bool) -> None:
     ).partition("/")
     user, repo = get_slug(await git(f"config --get remote.{remote}.url"))
 
+    if base_branch == dest_branch:
+        console.log("[red] base branch and destination branch are the same [/]")
+        sys.exit(1)
+
     if not dry_run:
         with console.status(
             f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
