@@ -41,6 +41,8 @@ CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")  # noqa
 READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'  # noqa
 console = rich.console.Console(log_path=False, log_time=False)
 
+DEBUG = False
+
 
 def check_for_graphql_errors(response: httpx.Response) -> None:
     data = response.json()
@@ -76,7 +78,8 @@ def check_for_status(response: httpx.Response) -> None:
 
 
 async def git(args: str) -> str:
-    # console.print(f"* running: git {args}")
+    if DEBUG:
+        console.print(f"[purple]DEBUG: running: git {args} [/]")
     proc = await asyncio.create_subprocess_shell(
         f"git {args}",
         stdout=asyncio.subprocess.PIPE,
@@ -370,7 +373,20 @@ async def delete_stack(
         )
 
 
-async def main(token: str, dry_run: bool) -> None:
+async def log_httpx_request(request: httpx.Request) -> None:
+    console.print(
+        f"[purple]DEBUG: request: {request.method} {request.url} - Waiting for response[/]"
+    )
+
+
+async def log_httpx_response(response: httpx.Response) -> None:
+    request = response.request
+    console.print(
+        f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]"
+    )
+
+
+async def main(token: str, stack: bool, dry_run: bool) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
     remote, _, base_branch = (
@@ -401,15 +417,29 @@ async def main(token: str, dry_run: bool) -> None:
         )
         sys.exit(1)
 
-    commits = list(
-        reversed(
+    commits = [
+        commit
+        for commit in reversed(
             (await git(f"log --format='%H' {base_commit_sha}..{dest_branch}")).split(
                 "\n"
             )
         )
-    )
+        if commit.strip()
+    ]
+
+    if len(commits) > 1 and not stack:
+        console.log("[red] too many commits and stack mode disabled [/]")
+        sys.exit(1)
+    elif len(commits) <= 1 and stack:
+        console.log("[red] not enough commits and stack mode enabled [/]")
+        sys.exit(1)
 
     known_changeids = KnownChangeIDs({})
+
+    if DEBUG:
+        event_hooks = {"request": [log_httpx_request], "response": [log_httpx_response]}
+    else:
+        event_hooks = {}
 
     async with httpx.AsyncClient(
         base_url=f"https://api.github.com/repos/{user}/{repo}/",
@@ -418,6 +448,7 @@ async def main(token: str, dry_run: bool) -> None:
             "User-Agent": f"git_push_stack/{VERSION}",
             "Authorization": f"token {token}",
         },
+        event_hooks=event_hooks,
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
             r = await client.get(f"git/matching-refs/heads/{stack_prefix}")
@@ -442,6 +473,7 @@ async def main(token: str, dry_run: bool) -> None:
         if dry_run:
             console.log("[orange]Finished (dry-run mode) :tada:[/]")
             sys.exit(0)
+
         console.log("New stacked pull request:", style="green")
         stacked_base_branch = base_branch
         ready_for_review = True
@@ -466,9 +498,10 @@ async def main(token: str, dry_run: bool) -> None:
             stacked_base_branch = stacked_dest_branch
             ready_for_review = False
 
-        with console.status("Updating comments..."):
-            await create_or_update_comments(client, pulls)
-        console.log("[green]Comments updated")
+        if stack:
+            with console.status("Updating comments..."):
+                await create_or_update_comments(client, pulls)
+            console.log("[green]Comments updated")
 
         with console.status("Deleting unused branches..."):
             delete_tasks = [
@@ -488,8 +521,11 @@ def GitHubToken(v: str) -> str:
 
 
 def cli() -> None:
+    global DEBUG
     parser = argparse.ArgumentParser(description="git-push-stack")
-    parser.add_argument("--setup", "-s", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--setup", action="store_true")
+    parser.add_argument("--stack", "-s", action="store_true")
     parser.add_argument("--dry-run", "-n", action="store_true")
     parser.add_argument(
         "--token",
@@ -498,7 +534,9 @@ def cli() -> None:
         help="GitHub personal access token",
     )
     args = parser.parse_args()
+    if args.debug:
+        DEBUG = True
     if args.setup:
         asyncio.run(do_setup())
     else:
-        asyncio.run(main(args.token, args.dry_run))
+        asyncio.run(main(args.token, args.stack, args.dry_run))
