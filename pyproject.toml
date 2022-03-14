@@ -22,7 +22,7 @@ flake8-rst-docstrings = {version = "^0.2.5"}
 flake8-logging-format = {version = "^0.6.0"}
 flake8-comprehensions = {version = "^3.7.0"}
 isort = {version = "^5.8.0"}
-mypy = {version = "^0.930"}
+mypy = {version = "^0.940"}
 pytest = {version = "^6.2.5"}
 pyoxidizer = "^0.18.0"
 
