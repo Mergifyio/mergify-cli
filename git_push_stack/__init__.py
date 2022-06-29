@@ -434,9 +434,6 @@ async def main(token: str, stack: bool, dry_run: bool) -> None:
     if len(commits) > 1 and not stack:
         console.log("[red] too many commits and stack mode disabled [/]")
         sys.exit(1)
-    elif len(commits) <= 1 and stack:
-        console.log("[red] not enough commits and stack mode enabled [/]")
-        sys.exit(1)
 
     known_changeids = KnownChangeIDs({})
 
