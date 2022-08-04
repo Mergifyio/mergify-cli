@@ -11,7 +11,7 @@ httpx = "^0.20.0"
 rich = "^10.11.0"
 
 [tool.poetry.dev-dependencies]
-flake8 = {version = "^4.0.1"}
+flake8 = {version = "^5.0.4"}
 flake8-black = {version = "^0.2.3"}
 flake8-blind-except = {version = "^0.2.0"}
 flake8-builtins = {version = "^1.5.3"}
