@@ -24,7 +24,7 @@ flake8-comprehensions = {version = "^3.7.0"}
 isort = {version = "^5.8.0"}
 mypy = {version = "^0.930"}
 pytest = {version = "^6.2.5"}
-pyoxidizer = "^0.18.0"
+pyoxidizer = "^0.23.0"
 
 [tool.poetry.scripts]
 git-push-stack = 'git_push_stack:cli'
