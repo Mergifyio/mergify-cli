@@ -17,7 +17,7 @@ flake8-blind-except = {version = "^0.2.0"}
 flake8-builtins = {version = "^1.5.3"}
 flake8-bugbear = {version = "^21.11.29"}
 flake8-use-fstring = {version = "^1.3"}
-flake8-docstrings = {version = "^1.6.0"}
+flake8-docstrings = {version = "^1.7.0"}
 flake8-rst-docstrings = {version = "^0.2.5"}
 flake8-logging-format = {version = "^0.6.0"}
 flake8-comprehensions = {version = "^3.7.0"}
