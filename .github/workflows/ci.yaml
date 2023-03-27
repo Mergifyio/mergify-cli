@@ -7,7 +7,7 @@ on:
       - main
 
 jobs:
-  pep8:
+  linters:
     timeout-minutes: 5
     runs-on: ubuntu-20.04
     steps:
@@ -16,10 +16,12 @@ jobs:
         with:
           python-version: 3.10.0
       - run: |
-          pip install tox poetry
-          tox -e pep8
+          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
+          pip install -r requirements-poetry.txt
+          poetry install --sync
+          poetry run poe linters
 
-  py310:
+  test:
     timeout-minutes: 10
     runs-on: ubuntu-20.04
     steps:
@@ -28,8 +30,10 @@ jobs:
         with:
           python-version: 3.10.0
       - run: |
-          pip install tox poetry
-          tox -e py310
+          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
+          pip install -r requirements-poetry.txt
+          poetry install --sync
+          poetry run poe test
 
 
   binary:
@@ -41,5 +45,7 @@ jobs:
         with:
           python-version: 3.10.0
       - run: |
-          pip install poetry pyoxidizer
+          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
+          pip install -r requirements-poetry.txt
+          poetry install --sync
           poetry build && poetry run pyoxidizer build

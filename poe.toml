@@ -1,0 +1,15 @@
+[tool.poe.executor]
+type = "poetry"
+
+[tool.poe.tasks.test]
+cmd = "pytest -v --pyargs git_push_stack"
+
+
+[tool.poe.tasks.linters]
+help = "Run linters"
+default_item_type = "cmd"
+sequence = [
+  "flake8",
+  "isort -c .",
+  "mypy",
+]

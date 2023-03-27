@@ -14,7 +14,9 @@ def make_exe(dist):
         packaging_policy=policy,
         config=python_config,
     )
-    exe.add_python_resources(exe.pip_install(["dist/git_push_stack-0.1.0-py3-none-any.whl"]))
+    exe.add_python_resources(
+        exe.pip_install(["dist/git_push_stack-0.1.1-py3-none-any.whl"])
+    )
     return exe
 
 def make_embedded_resources(exe):
