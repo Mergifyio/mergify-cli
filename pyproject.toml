@@ -23,7 +23,7 @@ flake8-logging-format = {version = "^0.6.0"}
 flake8-comprehensions = {version = "^3.7.0"}
 isort = {version = "^5.8.0"}
 mypy = {version = "^0.930"}
-pytest = {version = "^6.2.5"}
+pytest = {version = "^7.2.2"}
 pyoxidizer = "^0.18.0"
 
 [tool.poetry.scripts]
