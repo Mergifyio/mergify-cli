@@ -120,7 +120,6 @@ async def do_setup() -> None:
             sys.exit(1)
 
     else:
-
         console.log("Installation of git commit-msg hook")
         with open(hook_file, "w") as f:
             f.write(COMMIT_MSG_HOOK)
@@ -262,8 +261,7 @@ async def create_or_update_stack(
     message: str,
     ready_for_review: bool,
     known_changeids: KnownChangeIDs,
-) -> PullRequest:
-
+) -> tuple[PullRequest, str]:
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
         with console.status(
@@ -346,10 +344,7 @@ async def create_or_update_stack(
             )
             check_for_status(r)
             pull = typing.cast(PullRequest, r.json())
-    console.log(
-        f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}"
-    )
-    return pull
+    return pull, action
 
 
 async def delete_stack(
@@ -386,7 +381,7 @@ async def log_httpx_response(response: httpx.Response) -> None:
     )
 
 
-async def main(token: str, stack: bool, dry_run: bool) -> None:
+async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
     remote, _, base_branch = (
@@ -449,7 +444,7 @@ async def main(token: str, stack: bool, dry_run: bool) -> None:
             "User-Agent": f"git_push_stack/{VERSION}",
             "Authorization": f"token {token}",
         },
-        event_hooks=event_hooks,
+        event_hooks=event_hooks,  # type: ignore[arg-type]
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
             r = await client.get(f"git/matching-refs/heads/{stack_prefix}")
@@ -479,25 +474,46 @@ async def main(token: str, stack: bool, dry_run: bool) -> None:
         stacked_base_branch = base_branch
         ready_for_review = True
         pulls: typing.List[PullRequest] = []
+        continue_create_or_update = True
         for changeid, commit, title, message in changes:
             depends_on = ""
             if pulls:
                 depends_on = f"\n\nDepends-On: #{pulls[-1]['number']}"
             stacked_dest_branch = f"{stack_prefix}{changeid}"
-            pull = await create_or_update_stack(
-                client,
-                stacked_base_branch,
-                stacked_dest_branch,
-                changeid,
-                commit,
-                title,
-                message + depends_on,
-                ready_for_review,
-                known_changeids,
+            if continue_create_or_update:
+                pull, action = await create_or_update_stack(
+                    client,
+                    stacked_base_branch,
+                    stacked_dest_branch,
+                    changeid,
+                    commit,
+                    title,
+                    message + depends_on,
+                    ready_for_review,
+                    known_changeids,
+                )
+                pulls.append(pull)
+            else:
+                action = "skipped"
+                pull = known_changeids.get(changeid) or PullRequest(
+                    {
+                        "title": "<not yet created>",
+                        "html_url": "<no-yet-created>",
+                        "number": "-1",
+                        "node_id": "na",
+                        "draft": True,
+                        "state": "",
+                        "head": {"sha": ""},
+                    }
+                )
+
+            console.log(
+                f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}"
             )
-            pulls.append(pull)
             stacked_base_branch = stacked_dest_branch
             ready_for_review = False
+            if continue_create_or_update and next_only:
+                continue_create_or_update = False
 
         if stack:
             with console.status("Updating comments..."):
@@ -528,6 +544,7 @@ def cli() -> None:
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--stack", "-s", action="store_true")
     parser.add_argument("--dry-run", "-n", action="store_true")
+    parser.add_argument("--next-only", "-x", action="store_true")
     parser.add_argument(
         "--token",
         default=os.environ.get("GITHUB_TOKEN", ""),
@@ -540,4 +557,4 @@ def cli() -> None:
     if args.setup:
         asyncio.run(do_setup())
     else:
-        asyncio.run(main(args.token, args.stack, args.dry_run))
+        asyncio.run(main(args.token, args.stack, args.next_only, args.dry_run))
