@@ -544,14 +544,14 @@ def GitHubToken(v: str) -> str:
 
 
 def get_default_branch_prefix() -> str:
-    result = (
-        subprocess.check_output(
+    try:
+        result = subprocess.check_output(
             "git config --get git-push-stack.branch-prefix", shell=True
         )
-        .decode()
-        .strip()
-    )
-    return result or "git_push_stack"
+    except subprocess.CalledProcessError:
+        result = b""
+
+    return result.decode().strip() or "git_push_stack"
 
 
 def cli() -> None:
