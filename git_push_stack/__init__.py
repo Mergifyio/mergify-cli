@@ -20,6 +20,7 @@ import asyncio
 import importlib.metadata
 import os
 import re
+import subprocess
 import sys
 import typing
 from urllib import parse
@@ -154,7 +155,7 @@ async def get_changeid_and_pull(
     client: httpx.AsyncClient, user: str, stack_prefix: str, ref: GitRef
 ) -> typing.Tuple[ChangeId, typing.Optional[PullRequest]]:
     branch = ref["ref"][len("refs/heads/") :]
-    changeid = ChangeId(branch[len(stack_prefix) :])
+    changeid = ChangeId(branch[len(stack_prefix) + 1 :])
     r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "open"})
     check_for_status(r)
     pulls = [
@@ -175,6 +176,7 @@ Change = typing.NewType("Change", typing.Tuple[ChangeId, str, str, str])
 
 async def get_local_changes(
     commits: typing.List[str],
+    stack_prefix: str,
     known_changeids: KnownChangeIDs,
 ) -> typing.List[Change]:
     changes = []
@@ -192,7 +194,7 @@ async def get_local_changes(
         pull = known_changeids.get(changeid)
         if pull is None:
             action = "to create"
-            url = ""
+            url = f"<{stack_prefix}/{changeid}>"
             commit_info = commit[-7:]
         elif commit == pull["head"]["sha"]:
             if i == 0 and pull["draft"]:
@@ -354,7 +356,7 @@ async def delete_stack(
     known_changeids: KnownChangeIDs,
 ) -> None:
     r = await client.delete(
-        f"git/refs/heads/{stack_prefix}{changeid}",
+        f"git/refs/heads/{stack_prefix}/{changeid}",
     )
     check_for_status(r)
     pull = known_changeids[changeid]
@@ -364,7 +366,7 @@ async def delete_stack(
         )
     else:
         console.log(
-            f"* [red]\\[deleted][/] '[red].......[/] - [b]<branch {stack_prefix}{changeid}>[/] - {changeid}"
+            f"* [red]\\[deleted][/] '[red].......[/] - [b]<branch {stack_prefix}/{changeid}>[/] - {changeid}"
         )
 
 
@@ -381,7 +383,9 @@ async def log_httpx_response(response: httpx.Response) -> None:
     )
 
 
-async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
+async def main(
+    token: str, stack: bool, next_only: bool, branch_prefix: str, dry_run: bool
+) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
     remote, _, base_branch = (
@@ -393,6 +397,8 @@ async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
         console.log("[red] base branch and destination branch are the same [/]")
         sys.exit(1)
 
+    stack_prefix = f"{branch_prefix}/{dest_branch}"
+
     if not dry_run:
         with console.status(
             f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
@@ -403,10 +409,8 @@ async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
         with console.status(
             f"Pushing branch `{dest_branch}` to `{remote}/{dest_branch}`...",
         ):
-            await git(f"push -f {remote} {dest_branch}")
+            await git(f"push -f {remote} {dest_branch}:{stack_prefix}/aio")
         console.log(f"branch `{dest_branch}` pushed to `{remote}/{dest_branch}` ")
-
-    stack_prefix = f"git_push_stack/{dest_branch}/"
 
     base_commit_sha = await git(f"merge-base --fork-point {remote}/{base_branch}")
     if not base_commit_sha:
@@ -447,12 +451,14 @@ async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
         event_hooks=event_hooks,  # type: ignore[arg-type]
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
-            r = await client.get(f"git/matching-refs/heads/{stack_prefix}")
+            r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
             check_for_status(r)
             refs = typing.cast(typing.List[GitRef], r.json())
 
             tasks = [
-                get_changeid_and_pull(client, user, stack_prefix, ref) for ref in refs
+                get_changeid_and_pull(client, user, stack_prefix, ref)
+                for ref in refs
+                if not ref["ref"].endswith("/aio")
             ]
             if tasks:
                 done, _ = await asyncio.wait(tasks)
@@ -461,7 +467,7 @@ async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
-            changes = await get_local_changes(commits, known_changeids)
+            changes = await get_local_changes(commits, stack_prefix, known_changeids)
             changeids_to_delete = await get_changeids_to_delete(
                 changes, known_changeids
             )
@@ -479,7 +485,7 @@ async def main(token: str, stack: bool, next_only: bool, dry_run: bool) -> None:
             depends_on = ""
             if pulls:
                 depends_on = f"\n\nDepends-On: #{pulls[-1]['number']}"
-            stacked_dest_branch = f"{stack_prefix}{changeid}"
+            stacked_dest_branch = f"{stack_prefix}/{changeid}"
             if continue_create_or_update:
                 pull, action = await create_or_update_stack(
                     client,
@@ -537,6 +543,17 @@ def GitHubToken(v: str) -> str:
     return v
 
 
+def get_default_branch_prefix() -> str:
+    result = (
+        subprocess.check_output(
+            "git config --get git-push-stack.branch-prefix", shell=True
+        )
+        .decode()
+        .strip()
+    )
+    return result or "git_push_stack"
+
+
 def cli() -> None:
     global DEBUG
     parser = argparse.ArgumentParser(description="git-push-stack")
@@ -545,6 +562,11 @@ def cli() -> None:
     parser.add_argument("--stack", "-s", action="store_true")
     parser.add_argument("--dry-run", "-n", action="store_true")
     parser.add_argument("--next-only", "-x", action="store_true")
+    parser.add_argument(
+        "--branch-prefix",
+        default=get_default_branch_prefix(),
+        help="branch prefix used to create stacked PR",
+    )
     parser.add_argument(
         "--token",
         default=os.environ.get("GITHUB_TOKEN", ""),
@@ -557,4 +579,8 @@ def cli() -> None:
     if args.setup:
         asyncio.run(do_setup())
     else:
-        asyncio.run(main(args.token, args.stack, args.next_only, args.dry_run))
+        asyncio.run(
+            main(
+                args.token, args.stack, args.next_only, args.branch_prefix, args.dry_run
+            )
+        )
