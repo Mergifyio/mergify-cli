@@ -6,7 +6,6 @@ queue_rules:
     conditions:
       - and: &CheckRuns
           - check-success=test
-          - check-success=binary
       - schedule=Mon-Fri 09:00-17:30[Europe/Paris]
     speculative_checks: 5
 

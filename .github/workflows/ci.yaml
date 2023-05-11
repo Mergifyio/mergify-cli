@@ -21,17 +21,4 @@ jobs:
           poetry install --sync
           poetry run poe linters
           poetry run poe test
-
-  binary:
-    timeout-minutes: 10
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v2.3.4
-      - uses: actions/setup-python@v2.2.2
-        with:
-          python-version: 3.11.0
-      - run: |
-          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
-          pip install -r requirements-poetry.txt
-          poetry install --sync
           poetry build && poetry run pyoxidizer build
