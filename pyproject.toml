@@ -11,18 +11,10 @@ httpx = ">=0.20.0"
 rich = ">=10.11.0"
 
 [tool.poetry.group.dev.dependencies]
-flake8 = {version = ">=4.0.1"}
-flake8-black = {version = ">=0.2.3"}
-flake8-blind-except = {version = ">=0.2.0"}
-flake8-builtins = {version = ">=1.5.3"}
-flake8-bugbear = {version = ">=21.11.29"}
-flake8-use-fstring = {version = ">=1.3"}
-flake8-docstrings = {version = ">=1.6.0"}
-flake8-rst-docstrings = {version = ">=0.2.5"}
-flake8-logging-format = {version = ">=0.6.0"}
-flake8-comprehensions = {version = ">=3.7.0"}
-isort = {version = ">=5.8.0"}
 mypy = {version = ">=0.930"}
+mypy-extensions = "^1.0.0"
+black = "^23.3.0"
+ruff = "^0.0.264"
 pytest = {version = ">=6.2.5"}
 pyoxidizer = ">=0.24.0"
 poethepoet = "^0.20.0"
@@ -30,10 +22,61 @@ poethepoet = "^0.20.0"
 [tool.poetry.scripts]
 git-push-stack = 'git_push_stack:cli'
 
+[tool.poe]
+include = ["poe.toml"]
 
-[tool.isort]
-force_single_line = true
-lines_after_imports = 2
-force_sort_within_sections = true
-known_first_party = "git_push_stack"
-default_section = "THIRDPARTY"
+[tool.black]
+target-version = ['py311']
+
+[tool.mypy]
+strict = true
+warn_unreachable = true
+exclude = [".venv"]
+files = ["git_push_stack"]
+show_error_codes = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+select = [
+ "E", "W", "F", "I", "A", "B", "Q",
+ "C4", "T10", "ISC", "ICN", "BLE",
+ "G", "RSE", "TID", "TRY", "PLE", "UP",
+ "RUF", "RET",
+ # FIXME(sileht): very interresting, but require easy manual code change
+ # "DTZ", "ARG", "TCH", "COM",
+ # FIXME(sileht): doctring/rst-docstring like
+ # "D"
+]
+
+ignore = [
+    # NOTE(sileht): line-length is up to black
+    "E501",
+    # NOTE(sileht): we prefer using exc_info=True
+    "G201", "TRY200", "TRY400",
+    # NOTE(sileht): "Unnecessary parentheses on raised exception", this breaks
+    # isinstance on exception
+    "RSE102",
+    # NOTE(sileht): No exception with message set via __init__
+    "TRY003", "TRY301",
+    # NOTE(sileht): built-in shadow, interresting but to raise an error for
+    # TypedDict/NamedTuple with key named like builtin, so it's useless
+    "A003",
+    # NOTE(sileht): This enforce usage of raise ... from ...
+    "B904",
+    # FIXME(sileht): Convert some exception -> TypeError
+    "TRY004",
+    # FIXME(sileht): very interresting, ruff BLE is far better that flake8-blind-except
+    "BLE001",
+    # NOTE(sileht): looks buggy
+    "RET508"
+]
+
+[tool.ruff.isort]
+force-single-line = true
+force-sort-within-sections = true
+lines-after-imports = 2
+known-first-party = ["git_push_stack"]
+
+[tool.ruff.flake8-tidy-imports]
+ban-relative-imports = "all"

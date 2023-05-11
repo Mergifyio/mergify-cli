@@ -1,4 +1,3 @@
-# -*- encoding: utf-8 -*-
 #
 #  Copyright © 2021 Mergify SAS
 #
@@ -38,8 +37,8 @@ except ImportError:
     # https://pyoxidizer.readthedocs.io/en/stable/oxidized_importer_behavior_and_compliance.html#importlib-metadata-compatibility
     VERSION = "0.1"
 
-CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")  # noqa
-READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'  # noqa
+CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
+READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
 console = rich.console.Console(log_path=False, log_time=False)
 
 DEBUG = False
@@ -61,7 +60,8 @@ def check_for_graphql_errors(response: httpx.Response) -> None:
 def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
-    elif response.status_code < 500:
+
+    if response.status_code < 500:
         data = response.json()
         console.print(f"url: {response.request.url}", style="red")
         console.print(f"data: {response.request.content.decode()}", style="red")
@@ -74,8 +74,8 @@ def check_for_status(response: httpx.Response) -> None:
                 style="red",
             )
         sys.exit(1)
-    else:
-        response.raise_for_status()
+
+    response.raise_for_status()
 
 
 async def git(args: str) -> str:
@@ -94,7 +94,7 @@ async def git(args: str) -> str:
     return stdout.decode().strip()
 
 
-def get_slug(url: str) -> typing.Tuple[str, str]:
+def get_slug(url: str) -> tuple[str, str]:
     parsed = parse.urlparse(url)
     if parsed.netloc == "":
         # Probably ssh
@@ -146,39 +146,34 @@ class PullRequest(typing.TypedDict):
 
 
 ChangeId = typing.NewType("ChangeId", str)
-KnownChangeIDs = typing.NewType(
-    "KnownChangeIDs", typing.Dict[ChangeId, typing.Optional[PullRequest]]
-)
+KnownChangeIDs = typing.NewType("KnownChangeIDs", dict[ChangeId, PullRequest | None])
 
 
 async def get_changeid_and_pull(
     client: httpx.AsyncClient, user: str, stack_prefix: str, ref: GitRef
-) -> typing.Tuple[ChangeId, typing.Optional[PullRequest]]:
+) -> tuple[ChangeId, PullRequest | None]:
     branch = ref["ref"][len("refs/heads/") :]
     changeid = ChangeId(branch[len(stack_prefix) + 1 :])
     r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "open"})
     check_for_status(r)
     pulls = [
-        p
-        for p in typing.cast(typing.List[PullRequest], r.json())
-        if p["state"] == "open"
+        p for p in typing.cast(list[PullRequest], r.json()) if p["state"] == "open"
     ]
     if len(pulls) > 1:
         raise RuntimeError(f"More than 1 pull found with this head: {branch}")
-    elif pulls:
+    if pulls:
         return changeid, pulls[0]
-    else:
-        return changeid, None
+    return changeid, None
 
 
-Change = typing.NewType("Change", typing.Tuple[ChangeId, str, str, str])
+Change = typing.NewType("Change", tuple[ChangeId, str, str, str])
 
 
 async def get_local_changes(
-    commits: typing.List[str],
+    commits: list[str],
     stack_prefix: str,
     known_changeids: KnownChangeIDs,
-) -> typing.List[Change]:
+) -> list[Change]:
     changes = []
     for i, commit in enumerate(commits):
         message = await git(f"log -1 --format='%b' {commit}")
@@ -215,8 +210,8 @@ async def get_local_changes(
 
 
 async def get_changeids_to_delete(
-    changes: typing.List[Change], known_changeids: KnownChangeIDs
-) -> typing.Set[ChangeId]:
+    changes: list[Change], known_changeids: KnownChangeIDs
+) -> set[ChangeId]:
     changeids_to_delete = set(known_changeids.keys()) - {
         changeid for changeid, commit, title, message in changes
     }
@@ -234,7 +229,7 @@ async def get_changeids_to_delete(
 
 
 async def create_or_update_comments(
-    client: httpx.AsyncClient, pulls: typing.List[PullRequest]
+    client: httpx.AsyncClient, pulls: list[PullRequest]
 ) -> None:
     first_line = "This pull request is part of a stack:\n"
     body = first_line
@@ -453,7 +448,7 @@ async def main(
         with console.status("Retrieving latest pushed stacks"):
             r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
             check_for_status(r)
-            refs = typing.cast(typing.List[GitRef], r.json())
+            refs = typing.cast(list[GitRef], r.json())
 
             tasks = [
                 get_changeid_and_pull(client, user, stack_prefix, ref)
@@ -463,7 +458,7 @@ async def main(
             if tasks:
                 done, _ = await asyncio.wait(tasks)
                 for task in done:
-                    known_changeids.update(dict([await task]))  # noqa
+                    known_changeids.update(dict([await task]))
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
@@ -479,7 +474,7 @@ async def main(
         console.log("New stacked pull request:", style="green")
         stacked_base_branch = base_branch
         ready_for_review = True
-        pulls: typing.List[PullRequest] = []
+        pulls: list[PullRequest] = []
         continue_create_or_update = True
         for changeid, commit, title, message in changes:
             depends_on = ""
