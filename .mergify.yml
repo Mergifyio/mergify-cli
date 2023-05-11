@@ -25,8 +25,7 @@ pull_request_rules:
   - name: automatic merge
     conditions:
       - base=main
-      - check-success=pep8
-      - check-success=py310
+      - and: *CheckRuns
       - check-success=semantic-pull-request
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by=0"
@@ -37,6 +36,7 @@ pull_request_rules:
         name: default
   - name: automatic merge from dependabot
     conditions:
+      - and: *CheckRuns
       - author=dependabot[bot]
       - label!=work-in-progress
       - label!=manual merge
