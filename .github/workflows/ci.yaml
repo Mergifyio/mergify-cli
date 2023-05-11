@@ -7,34 +7,20 @@ on:
       - main
 
 jobs:
-  linters:
+  test:
     timeout-minutes: 5
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2.3.4
       - uses: actions/setup-python@v2.2.2
         with:
-          python-version: 3.10.0
+          python-version: 3.11.0
       - run: |
           # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
           pip install -r requirements-poetry.txt
           poetry install --sync
           poetry run poe linters
-
-  test:
-    timeout-minutes: 10
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v2.3.4
-      - uses: actions/setup-python@v2.2.2
-        with:
-          python-version: 3.10.0
-      - run: |
-          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
-          pip install -r requirements-poetry.txt
-          poetry install --sync
           poetry run poe test
-
 
   binary:
     timeout-minutes: 10
@@ -43,7 +29,7 @@ jobs:
       - uses: actions/checkout@v2.3.4
       - uses: actions/setup-python@v2.2.2
         with:
-          python-version: 3.10.0
+          python-version: 3.11.0
       - run: |
           # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
           pip install -r requirements-poetry.txt

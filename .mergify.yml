@@ -5,8 +5,8 @@ queue_rules:
     allow_inplace_checks: true
     conditions:
       - and: &CheckRuns
-          - check-success=pep8
-          - check-success=py310
+          - check-success=test
+          - check-success=binary
       - schedule=Mon-Fri 09:00-17:30[Europe/Paris]
     speculative_checks: 5
 
