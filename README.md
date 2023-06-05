@@ -40,7 +40,7 @@ Change-Id: I7074fdf5e24e2d4de721936260e4b962532c9735
 
 These IDs will allow to track what is going on on your `feature` branch.
 
-Like Gerrit, it makes no compromise and it assumes you commit messages are well
+Like Gerrit, it makes no compromise and it assumes your commit messages are well
 written and use them in title and body of pull requests.
 
 Also git-push-stack leverages the GitHub API to do the tidy jobs, keeping your
