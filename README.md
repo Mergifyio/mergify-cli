@@ -1,7 +1,5 @@
 # git push-stack 
 
-[![stability-experimental](https://img.shields.io/badge/stability-experimental-orange.svg)](https://github.com/mkenney/software-guides/blob/master/STABILITY-BADGES.md#experimental)
-
 ## What are stacked pull requests
 
 Imagine you have a branch `feature` with three commit `A`, `B` and `C` based on branch `main`.
