@@ -99,11 +99,3 @@ curl https://github.com/Mergifyio/git-push-stack/releases/download/....
 chmod +x git-push-stack
 sudo mv git-push-stack /usr/local/bin/git-push-stack
 ```
-
-## Build and install the binary:
-
-```bash
-$ poetry build && poetry run pyoxidizer build --release
-$ strip build/x86_64-unknown-linux-gnu/release/install/git-push-stack
-$ sudo cp build/x86_64-unknown-linux-gnu/release/install/git-push-stack /usr/local/bin/git-push-stack
-```

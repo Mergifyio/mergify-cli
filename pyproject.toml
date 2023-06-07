@@ -2,7 +2,7 @@
 name = "git-push-stack"
 version = "0.1.1"
 description = ""
-authors = ["Mehdi Abaakouk <sileht@mergify.io>"]
+authors = ["Mehdi Abaakouk <sileht@mergify.com>"]
 
 
 [tool.poetry.dependencies]
@@ -16,7 +16,6 @@ mypy-extensions = "^1.0.0"
 black = "^23.3.0"
 ruff = "^0.0.271"
 pytest = {version = ">=6.2.5"}
-pyoxidizer = ">=0.24.0"
 poethepoet = "^0.20.0"
 
 [tool.poetry.scripts]
