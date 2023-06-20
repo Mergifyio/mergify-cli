@@ -2,7 +2,7 @@
 type = "poetry"
 
 [tool.poe.tasks.test]
-cmd = "pytest -v --pyargs git_push_stack"
+cmd = "pytest -v --pyargs mergify_cli"
 
 
 [tool.poe.tasks.linters]
