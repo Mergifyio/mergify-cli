@@ -21,4 +21,4 @@ jobs:
           poetry install --sync
           poetry run poe linters
           poetry run poe test
-          poetry build && poetry run pyoxidizer build
+          poetry build
