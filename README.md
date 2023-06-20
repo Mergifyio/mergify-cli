@@ -1,4 +1,4 @@
-# git push-stack 
+# Mergify-cli
 
 ## What are stacked pull requests
 
@@ -29,7 +29,7 @@ Each time you change the feature branch and rebase/update your sub-feature
 branches all commit sha changes and maybe you added a commit, or removed one, or
 even reordered them. Making impossible to track what going on with the commit index or sha.
 
-git-push-stack uses the same technique as other Code Review tools like [Gerrit](https://www.gerritcodereview.com/)
+Mergify-cli uses the same technique as other Code Review tools like [Gerrit](https://www.gerritcodereview.com/)
 It injects automatically into commit message a random ID (via a git commit-msg hook), example:
 
 ```
@@ -41,7 +41,7 @@ These IDs will allow to track what is going on on your `feature` branch.
 Like Gerrit, it makes no compromise and it assumes your commit messages are well
 written and use them in title and body of pull requests.
 
-Also git-push-stack leverages the GitHub API to do the tidy jobs, keeping your
+Also Mergify-cli leverages the GitHub API to do the tidy jobs, keeping your
 local git repository clean.
 
 Unlike Gerrit, it can't use custom namespace to hide the git reference on the
@@ -53,7 +53,7 @@ We put the draft flag.
 
 ## How the git workflow changes:
 
-To uses git-push-stack you have to replace:
+To uses Mergify-cli you have to replace:
 
 ```bash
 $ git checkout feature-A
@@ -73,19 +73,19 @@ by:
 
 ```bash
 ...do some change and commit...
-$ git push-stack
+$ mrgfy push-stack
 ```
 
 ## Setup the git commit-msg hook:
 
 ```bash
-$ git push-stack -s
+$ mrgfy push-stack -s
 ```
 
 ## Push Stack your pull request like a pro 🦾
 
 ```bash
-$ git push-stack
+$ mrgfy push-stack
 ```
 
 Enjoy!
@@ -93,7 +93,7 @@ Enjoy!
 ## Installation
 
 ```bash
-curl https://github.com/Mergifyio/git-push-stack/releases/download/....
-chmod +x git-push-stack
-sudo mv git-push-stack /usr/local/bin/git-push-stack
+curl https://github.com/Mergifyio/mrgfy/releases/download/....
+chmod +x mrgfy
+sudo mv mrgfy /usr/local/bin/mrgfy
 ```

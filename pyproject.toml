@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "git-push-stack"
+name = "mergify_cli"
 version = "0.1.1"
 description = ""
 authors = ["Mehdi Abaakouk <sileht@mergify.com>"]
@@ -19,7 +19,7 @@ pytest = {version = ">=6.2.5"}
 poethepoet = "^0.20.0"
 
 [tool.poetry.scripts]
-git-push-stack = 'git_push_stack:cli'
+mrgfy = 'mergify_cli:cli'
 
 [tool.poe]
 include = ["poe.toml"]
@@ -31,7 +31,7 @@ target-version = ['py311']
 strict = true
 warn_unreachable = true
 exclude = [".venv"]
-files = ["git_push_stack"]
+files = ["mergify_cli"]
 show_error_codes = true
 
 [tool.ruff]
@@ -75,7 +75,7 @@ ignore = [
 force-single-line = true
 force-sort-within-sections = true
 lines-after-imports = 2
-known-first-party = ["git_push_stack"]
+known-first-party = ["mergify_cli"]
 
 [tool.ruff.flake8-tidy-imports]
 ban-relative-imports = "all"

@@ -28,11 +28,11 @@ import httpx
 import rich
 import rich.console
 
-from git_push_stack.commit_msg_hook import COMMIT_MSG_HOOK
+from mergify_cli.commit_msg_hook import COMMIT_MSG_HOOK
 
 
 try:
-    VERSION = importlib.metadata.version("git-push-stack")
+    VERSION = importlib.metadata.version("mrgfy")
 except ImportError:
     # https://pyoxidizer.readthedocs.io/en/stable/oxidized_importer_behavior_and_compliance.html#importlib-metadata-compatibility
     VERSION = "0.1"
@@ -116,7 +116,7 @@ async def do_setup() -> None:
             data = f.read()
         if data != COMMIT_MSG_HOOK:
             console.print(
-                f"error: {hook_file} differ from git_push_stack hook", style="red"
+                f"error: {hook_file} differ from mergify_cli hook", style="red"
             )
             sys.exit(1)
 
@@ -287,7 +287,7 @@ async def create_or_update_stack(
                 "https://api.github.com/graphql",
                 headers={
                     "Accept": "application/vnd.github.v4.idl",
-                    "User-Agent": f"git_push_stack/{VERSION}",
+                    "User-Agent": f"mergify_cli/{VERSION}",
                     "Authorization": client.headers["Authorization"],
                 },
                 json={"query": READY_FOR_REVIEW_TEMPLATE % pull["node_id"]},
@@ -317,7 +317,7 @@ async def create_or_update_stack(
                     "https://api.github.com/graphql",
                     headers={
                         "Accept": "application/vnd.github.v4.idl",
-                        "User-Agent": f"git_push_stack/{VERSION}",
+                        "User-Agent": f"mergify_cli/{VERSION}",
                         "Authorization": client.headers["Authorization"],
                     },
                     json={"query": READY_FOR_REVIEW_TEMPLATE % pull["node_id"]},
@@ -440,7 +440,7 @@ async def main(
         base_url=f"https://api.github.com/repos/{user}/{repo}/",
         headers={
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": f"git_push_stack/{VERSION}",
+            "User-Agent": f"mergify_cli/{VERSION}",
             "Authorization": f"token {token}",
         },
         event_hooks=event_hooks,  # type: ignore[arg-type]
@@ -541,17 +541,17 @@ def GitHubToken(v: str) -> str:
 def get_default_branch_prefix() -> str:
     try:
         result = subprocess.check_output(
-            "git config --get git-push-stack.branch-prefix", shell=True
+            "git config --get mrgfy.branch-prefix", shell=True
         )
     except subprocess.CalledProcessError:
         result = b""
 
-    return result.decode().strip() or "git_push_stack"
+    return result.decode().strip() or "mergify_cli"
 
 
 def cli() -> None:
     global DEBUG
-    parser = argparse.ArgumentParser(description="git-push-stack")
+    parser = argparse.ArgumentParser(description="mrgfy")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--stack", "-s", action="store_true")
