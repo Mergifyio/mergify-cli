@@ -14,7 +14,7 @@ rich = ">=10.11.0"
 mypy = {version = ">=0.930"}
 mypy-extensions = "^1.0.0"
 black = "^23.3.0"
-ruff = "^0.0.272"
+ruff = "^0.0.274"
 pytest = {version = ">=6.2.5"}
 poethepoet = "^0.20.0"
 
