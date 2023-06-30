@@ -451,7 +451,9 @@ async def main(
             refs = typing.cast(list[GitRef], r.json())
 
             tasks = [
-                get_changeid_and_pull(client, user, stack_prefix, ref)
+                asyncio.create_task(
+                    get_changeid_and_pull(client, user, stack_prefix, ref)
+                )
                 for ref in refs
                 if not ref["ref"].endswith("/aio")
             ]
@@ -523,7 +525,9 @@ async def main(
 
         with console.status("Deleting unused branches..."):
             delete_tasks = [
-                delete_stack(client, stack_prefix, changeid, known_changeids)
+                asyncio.create_task(
+                    delete_stack(client, stack_prefix, changeid, known_changeids)
+                )
                 for changeid in changeids_to_delete
             ]
             if delete_tasks:
