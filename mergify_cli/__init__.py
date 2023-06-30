@@ -109,10 +109,10 @@ def get_slug(url: str) -> tuple[str, str]:
 
 
 async def do_setup() -> None:
-    os.chdir((await git("rev-parse --show-toplevel")).strip())
-    hook_file = os.path.join(".git", "hooks", "commit-msg")
+    hooks_dir = (await git("rev-parse --git-path hooks")).strip()
+    hook_file = os.path.join(hooks_dir, "commit-msg")
     if os.path.exists(hook_file):
-        with open(hook_file, "f") as f:
+        with open(hook_file) as f:
             data = f.read()
         if data != COMMIT_MSG_HOOK:
             console.print(
