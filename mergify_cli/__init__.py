@@ -549,6 +549,15 @@ def get_default_branch_prefix() -> str:
     return result.decode().strip() or "mergify_cli"
 
 
+def get_default_token() -> str:
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        token = subprocess.check_output("gh auth token", shell=True).decode().strip()
+    if DEBUG:
+        console.print(f"[purple]DEBUG: token: {token}[/]")
+    return token
+
+
 def cli() -> None:
     global DEBUG
     parser = argparse.ArgumentParser(description="mrgfy")
@@ -564,7 +573,7 @@ def cli() -> None:
     )
     parser.add_argument(
         "--token",
-        default=os.environ.get("GITHUB_TOKEN", ""),
+        default=get_default_token(),
         type=GitHubToken,
         help="GitHub personal access token",
     )
