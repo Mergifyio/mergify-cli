@@ -431,7 +431,6 @@ def get_trunk(trunk: str | None = None) -> tuple[str, str]:
 
 async def main(
     token: str,
-    stack: bool,
     next_only: bool,
     branch_prefix: str,
     dry_run: bool,
@@ -480,10 +479,6 @@ async def main(
         )
         if commit.strip()
     ]
-
-    if len(commits) > 1 and not stack:
-        console.log("[red] too many commits and stack mode disabled [/]")
-        sys.exit(1)
 
     known_changeids = KnownChangeIDs({})
 
@@ -571,10 +566,9 @@ async def main(
             if continue_create_or_update and next_only:
                 continue_create_or_update = False
 
-        if stack:
-            with console.status("Updating comments..."):
-                await create_or_update_comments(client, pulls)
-            console.log("[green]Comments updated")
+        with console.status("Updating comments..."):
+            await create_or_update_comments(client, pulls)
+        console.log("[green]Comments updated")
 
         with console.status("Deleting unused branches..."):
             delete_tasks = [
@@ -621,7 +615,6 @@ def cli() -> None:
     parser = argparse.ArgumentParser(description="mrgfy")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--setup", action="store_true")
-    parser.add_argument("--stack", "-s", action="store_true")
     parser.add_argument("--dry-run", "-n", action="store_true")
     parser.add_argument("--next-only", "-x", action="store_true")
     parser.add_argument("--draft", "-d", action="store_true")
@@ -650,7 +643,6 @@ def cli() -> None:
         asyncio.run(
             main(
                 args.token,
-                args.stack,
                 args.next_only,
                 args.branch_prefix,
                 args.dry_run,
