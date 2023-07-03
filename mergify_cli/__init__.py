@@ -387,14 +387,51 @@ async def log_httpx_response(response: httpx.Response) -> None:
     )
 
 
+def get_trunk(trunk: str | None = None) -> tuple[str, str]:
+    if not trunk:
+        try:
+            trunk = subprocess.check_output(
+                "git config --get mergify-cli.stack-trunk", shell=True
+            )
+        except subprocess.CalledProcessError:
+            trunk = b""
+        trunk = trunk.decode().strip()
+
+    if not trunk:
+        console.log("[red] mergify-cli stack-trunk is not defined [/]")
+        console.log(
+            "[yellow] Setting it using : `git config --add mergify-cli.stack-trunk origin/branch-name` [/]"
+        )
+        console.log("[yellow] or use param : --trunk origin/branch-names [/]")
+        sys.exit(1)
+
+    result = tuple(trunk.split("/", maxsplit=1))
+    if len(result) != 2:
+        console.log(
+            "[red] mergify-cli stack-trunk is not well formated. It must be origin/branch-name [/]"
+        )
+        console.log(
+            "[yellow] Setting it using : `git config --add mergify-cli.stack-trunk origin/branch-name` [/]"
+        )
+        console.log("[yellow] or use param : --trunk origin/branch-names [/]")
+        sys.exit(1)
+
+    return result
+
+
 async def main(
-    token: str, stack: bool, next_only: bool, branch_prefix: str, dry_run: bool
+    token: str,
+    stack: bool,
+    next_only: bool,
+    branch_prefix: str,
+    dry_run: bool,
+    trunk: str | None = None,
 ) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
-    remote, _, base_branch = (
-        await git(f"for-each-ref --format='%(upstream:short)' refs/heads/{dest_branch}")
-    ).partition("/")
+
+    remote, base_branch = get_trunk(trunk)
+
     user, repo = get_slug(await git(f"config --get remote.{remote}.url"))
 
     if base_branch == dest_branch:
@@ -551,7 +588,7 @@ def GitHubToken(v: str) -> str:
 def get_default_branch_prefix() -> str:
     try:
         result = subprocess.check_output(
-            "git config --get mrgfy.branch-prefix", shell=True
+            "git config --get mergify-cli.stack-branch-prefix", shell=True
         )
     except subprocess.CalledProcessError:
         result = b""
@@ -578,6 +615,7 @@ def cli() -> None:
     parser.add_argument("--dry-run", "-n", action="store_true")
     parser.add_argument("--next-only", "-x", action="store_true")
     parser.add_argument("--draft", "-d", action="store_true")
+    parser.add_argument("--trunk", "-t")
     parser.add_argument(
         "--branch-prefix",
         default=get_default_branch_prefix(),
@@ -601,6 +639,11 @@ def cli() -> None:
     else:
         asyncio.run(
             main(
-                args.token, args.stack, args.next_only, args.branch_prefix, args.dry_run
+                args.token,
+                args.stack,
+                args.next_only,
+                args.branch_prefix,
+                args.dry_run,
+                args.trunk,
             )
         )
