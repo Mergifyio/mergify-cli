@@ -113,7 +113,6 @@ async def do_setup() -> None:
     hook_file = os.path.join(hooks_dir, "commit-msg")
     if os.path.exists(hook_file):
         with open(hook_file) as f:
-        
             data = f.read()
         if data != COMMIT_MSG_HOOK:
             console.print(
