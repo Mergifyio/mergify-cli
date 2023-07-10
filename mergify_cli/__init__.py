@@ -19,6 +19,7 @@ import asyncio
 import importlib.metadata
 import os
 import re
+import shutil
 import subprocess
 import sys
 import typing
@@ -28,8 +29,6 @@ import httpx
 import rich
 import rich.console
 
-from mergify_cli.commit_msg_hook import COMMIT_MSG_HOOK
-
 
 try:
     VERSION = importlib.metadata.version("mrgfy")
@@ -37,7 +36,7 @@ except ImportError:
     # https://pyoxidizer.readthedocs.io/en/stable/oxidized_importer_behavior_and_compliance.html#importlib-metadata-compatibility
     VERSION = "0.1"
 
-CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
+CHANGEID_RE = re.compile(r"Mergify-cli stack change-Id: (I[0-9a-z]{40})")
 READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
 DRAFT_TEMPLATE = 'mutation { convertPullRequestToDraft(input: { pullRequestId: "%s" }) { clientMutationId } }'
 console = rich.console.Console(log_path=False, log_time=False)
@@ -112,21 +111,28 @@ def get_slug(url: str) -> tuple[str, str]:
 
 async def do_setup() -> None:
     hooks_dir = (await git("rev-parse --git-path hooks")).strip()
-    hook_file = os.path.join(hooks_dir, "commit-msg")
-    if os.path.exists(hook_file):
-        with open(hook_file) as f:
-            data = f.read()
-        if data != COMMIT_MSG_HOOK:
+    installed_hook_file = os.path.join(hooks_dir, "commit-msg")
+
+    new_hook_file = str(
+        importlib.resources.files(__package__).joinpath("hooks/commit-msg")
+    )
+
+    if os.path.exists(installed_hook_file):
+        with open(installed_hook_file) as f:
+            data_installed = f.read()
+        with open(new_hook_file) as f:
+            data_new = f.read()
+        if data_installed != data_new:
             console.print(
-                f"error: {hook_file} differ from mergify_cli hook", style="red"
+                f"error: {installed_hook_file} differ from mergify_cli hook",
+                style="red",
             )
             sys.exit(1)
 
     else:
         console.log("Installation of git commit-msg hook")
-        with open(hook_file, "w") as f:
-            f.write(COMMIT_MSG_HOOK)
-        os.chmod(hook_file, 0o755)
+        shutil.copy(new_hook_file, installed_hook_file)
+        os.chmod(installed_hook_file, 0o755)
 
 
 class GitRef(typing.TypedDict):
@@ -183,7 +189,8 @@ async def get_local_changes(
         changeids = CHANGEID_RE.findall(message)
         if not changeids:
             console.print(
-                f"`Change-Id:` line is missing on commit {commit}", style="red"
+                f"`Mergify-cli stack change-Id:` line is missing on commit {commit}",
+                style="red",
             )
             sys.exit(1)
         changeid = ChangeId(changeids[-1])
