@@ -13,7 +13,7 @@ rich = ">=10.11.0"
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
 mypy-extensions = "^1.0.0"
-black = "^23.3.0"
+black = "^23.7.0"
 ruff = "^0.0.277"
 pytest = {version = ">=6.2.5"}
 poethepoet = "^0.21.0"
