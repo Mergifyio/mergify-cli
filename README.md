@@ -47,7 +47,7 @@ mergify --setup
 2. Define your trunk branch, which serves as the base branch for your stacked pull requests. You can set it using the following command:
 
 ```bash
-git config --add mergify cli.stack-trunk origin/branch-name
+git config --add mergify-cli.stack-trunk origin/branch-name
 ```
 
 Alternatively, you can set the trunk branch on the fly using the `--trunk` parameter.
@@ -56,7 +56,7 @@ Alternatively, you can set the trunk branch on the fly using the `--trunk` param
 mergify --trunk=origin/branch-name
 ```
 
-3. Set up a GitHub OAuth token for Mergify CLI to access the GitHub API. It is recommended to do it through the [gh client] (https://cli.github.com/)) while you're already authenticated. In this case, Mergify CLI will automatically retrieve the token using `gh auth token`. Alternatively, you can create a [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) with the necessary permissions to create branches and pull requests. Set the token as an environment variable named `GITHUB_TOKEN` or provide it on the fly using the `--token` parameter.
+3. Set up a GitHub OAuth token for Mergify CLI to access the GitHub API. It is recommended to do it through the [gh client](https://cli.github.com/) while you're already authenticated. In this case, Mergify CLI will automatically retrieve the token using `gh auth token`. Alternatively, you can create a [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) with the necessary permissions to create branches and pull requests. Set the token as an environment variable named `GITHUB_TOKEN` or provide it on the fly using the `--token` parameter.
 
 ## Usage
 
