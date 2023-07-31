@@ -612,13 +612,32 @@ def get_default_token() -> str:
 def cli() -> None:
     global DEBUG
     global DRAFT
-    parser = argparse.ArgumentParser(description="mrgfy")
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--setup", action="store_true")
-    parser.add_argument("--dry-run", "-n", action="store_true")
-    parser.add_argument("--next-only", "-x", action="store_true")
-    parser.add_argument("--draft", "-d", action="store_true")
-    parser.add_argument("--trunk", "-t")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--debug", action="store_true", help="debug mode")
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Initial installation of the required git commit-msg hook",
+    )
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Only show what is going to be done",
+    )
+    parser.add_argument(
+        "--next-only",
+        "-x",
+        action="store_true",
+        help="Only rebase and update the next pull request of the stack",
+    )
+    parser.add_argument(
+        "--draft",
+        "-d",
+        action="store_true",
+        help="Create stacked pull request as draft",
+    )
+    parser.add_argument("--trunk", "-t", help="Change the target branch of the stack")
     parser.add_argument(
         "--branch-prefix",
         default=get_default_branch_prefix(),
