@@ -42,7 +42,6 @@ DRAFT_TEMPLATE = 'mutation { convertPullRequestToDraft(input: { pullRequestId: "
 console = rich.console.Console(log_path=False, log_time=False)
 
 DEBUG = False
-DRAFT = False
 
 
 def check_for_graphql_errors(response: httpx.Response) -> None:
@@ -181,6 +180,7 @@ async def get_local_changes(
     commits: list[str],
     stack_prefix: str,
     known_changeids: KnownChangeIDs,
+    create_as_draft: bool,
 ) -> list[Change]:
     changes = []
     for commit in commits:
@@ -204,8 +204,8 @@ async def get_local_changes(
             url = pull["html_url"]
             head_commit = commit[-7:]
             commit_info = head_commit
-            if DRAFT is not pull["draft"]:
-                if DRAFT:
+            if create_as_draft is not pull["draft"]:
+                if create_as_draft:
                     action = "ready_for_review -> draft"
                 else:
                     action = "draft -> ready_for_review"
@@ -270,6 +270,7 @@ async def create_or_update_stack(
     title: str,
     message: str,
     known_changeids: KnownChangeIDs,
+    create_as_draft: bool,
 ) -> tuple[PullRequest, str]:
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
@@ -293,8 +294,8 @@ async def create_or_update_stack(
 
     pull = known_changeids.get(changeid)
     if pull and pull["head"]["sha"] == commit:
-        if DRAFT is not pull["draft"]:
-            action = await check_and_update_pull_status(client, pull)
+        if create_as_draft is not pull["draft"]:
+            action = await check_and_update_pull_status(client, pull, create_as_draft)
         else:
             action = "nothing"
     elif pull:
@@ -313,8 +314,10 @@ async def create_or_update_stack(
             )
             check_for_status(r)
             pull = typing.cast(PullRequest, r.json())
-            if DRAFT is not pull["draft"]:
-                action = await check_and_update_pull_status(client, pull)
+            if create_as_draft is not pull["draft"]:
+                action = await check_and_update_pull_status(
+                    client, pull, create_as_draft
+                )
     else:
         action = "created"
         with console.status(
@@ -325,7 +328,7 @@ async def create_or_update_stack(
                 json={
                     "title": title,
                     "body": message,
-                    "draft": DRAFT,
+                    "draft": create_as_draft,
                     "head": stacked_dest_branch,
                     "base": stacked_base_branch,
                 },
@@ -336,9 +339,9 @@ async def create_or_update_stack(
 
 
 async def check_and_update_pull_status(
-    client: httpx.AsyncClient, pull: PullRequest
+    client: httpx.AsyncClient, pull: PullRequest, create_as_draft: bool
 ) -> str:
-    if DRAFT:
+    if create_as_draft:
         action = "draft"
         template = DRAFT_TEMPLATE
     else:
@@ -429,12 +432,13 @@ def get_trunk(trunk: str | None = None) -> tuple[str, str]:
     return result[0], result[1]
 
 
-async def main(
+async def stack(
     token: str,
     next_only: bool,
     branch_prefix: str,
     dry_run: bool,
     trunk: str | None = None,
+    create_as_draft: bool = False,
 ) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
@@ -516,7 +520,9 @@ async def main(
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
-            changes = await get_local_changes(commits, stack_prefix, known_changeids)
+            changes = await get_local_changes(
+                commits, stack_prefix, known_changeids, create_as_draft
+            )
             changeids_to_delete = await get_changeids_to_delete(
                 changes, known_changeids
             )
@@ -544,6 +550,7 @@ async def main(
                     title,
                     message + depends_on,
                     known_changeids,
+                    create_as_draft,
                 )
                 pulls.append(pull)
             else:
@@ -610,62 +617,74 @@ def get_default_token() -> str:
     return token
 
 
+async def stack_main(args: argparse.Namespace) -> None:
+    if args.setup:
+        await do_setup()
+        return
+
+    await stack(
+        args.token,
+        args.next_only,
+        args.branch_prefix,
+        args.dry_run,
+        args.trunk,
+        args.draft,
+    )
+
+
 def cli() -> None:
     global DEBUG
-    global DRAFT
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="debug mode")
-    parser.add_argument(
-        "--setup",
-        action="store_true",
-        help="Initial installation of the required git commit-msg hook",
-    )
-    parser.add_argument(
-        "--dry-run",
-        "-n",
-        action="store_true",
-        help="Only show what is going to be done",
-    )
-    parser.add_argument(
-        "--next-only",
-        "-x",
-        action="store_true",
-        help="Only rebase and update the next pull request of the stack",
-    )
-    parser.add_argument(
-        "--draft",
-        "-d",
-        action="store_true",
-        help="Create stacked pull request as draft",
-    )
-    parser.add_argument("--trunk", "-t", help="Change the target branch of the stack")
-    parser.add_argument(
-        "--branch-prefix",
-        default=get_default_branch_prefix(),
-        help="branch prefix used to create stacked PR",
-    )
     parser.add_argument(
         "--token",
         default=get_default_token(),
         type=GitHubToken,
         help="GitHub personal access token",
     )
+    parser.add_argument("--dry-run", "-n", action="store_true")
+    sub_parsers = parser.add_subparsers(dest="action")
+
+    stack_parser = sub_parsers.add_parser("stack", help="create a pull requests stack")
+    stack_parser.set_defaults(func=stack_main)
+    stack_parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Initial installation of the required git commit-msg hook",
+    )
+    stack_parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Only show what is going to be done",
+    )
+    stack_parser.add_argument(
+        "--next-only",
+        "-x",
+        action="store_true",
+        help="Only rebase and update the next pull request of the stack",
+    )
+    stack_parser.add_argument(
+        "--draft",
+        "-d",
+        action="store_true",
+        help="Create stacked pull request as draft",
+    )
+    stack_parser.add_argument(
+        "--trunk", "-t", help="Change the target branch of the stack"
+    )
+    stack_parser.add_argument(
+        "--branch-prefix",
+        default=get_default_branch_prefix(),
+        help="branch prefix used to create stacked PR",
+    )
+
+    known_args, extra = parser.parse_known_args()
+    if known_args.action is None:
+        sys.argv.insert(1, "stack")
+
     args = parser.parse_args()
     if args.debug:
         DEBUG = True
 
-    if args.draft:
-        DRAFT = True
-
-    if args.setup:
-        asyncio.run(do_setup())
-    else:
-        asyncio.run(
-            main(
-                args.token,
-                args.next_only,
-                args.branch_prefix,
-                args.dry_run,
-                args.trunk,
-            )
-        )
+    asyncio.run(args.func(args))
