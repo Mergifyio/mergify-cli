@@ -495,6 +495,7 @@ async def main(
             "Authorization": f"token {token}",
         },
         event_hooks=event_hooks,  # type: ignore[arg-type]
+        follow_redirects=True,
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
             r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
