@@ -457,10 +457,10 @@ async def main(
         console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
 
         with console.status(
-            f"Pushing branch `{dest_branch}` to `{remote}/{dest_branch}`...",
+            f"Pushing branch `{dest_branch}` to `{remote}/{stack_prefix}/aio`...",
         ):
             await git(f"push -f {remote} {dest_branch}:{stack_prefix}/aio")
-        console.log(f"branch `{dest_branch}` pushed to `{remote}/{dest_branch}` ")
+        console.log(f"branch `{dest_branch}` pushed to `{remote}/{stack_prefix}/aio` ")
 
     base_commit_sha = await git(f"merge-base --fork-point {remote}/{base_branch}")
     if not base_commit_sha:
