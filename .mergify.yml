@@ -33,6 +33,7 @@ pull_request_rules:
     actions:
       queue:
         name: default
+
   - name: automatic merge from dependabot
     conditions:
       - and: *CheckRuns
@@ -43,3 +44,18 @@ pull_request_rules:
       queue:
         name: lowprio
         method: merge
+
+  - name: request review
+    conditions:
+      - -author=dependabot[bot]
+      - -merged
+      - -closed
+      - and: *CheckRuns
+      - "check-success=Rule: changelog requirements (post_check)"
+      - "#approved-reviews-by=0"
+      - "#changes-requested-reviews-by=0"
+      - "review-requested!=@devs"
+    actions:
+      request_reviews:
+        teams:
+          - devs
