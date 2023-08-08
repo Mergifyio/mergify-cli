@@ -85,16 +85,27 @@ If you have any questions or need further assistance, please refer to the docume
 
 Thank you for using Mergify CLI to streamline your pull request workflow!
 
-
 ## Usage
 
 ```
 $ mergify --help
-usage: mergify [-h] [--debug] [--setup] [--dry-run] [--next-only] [--draft] [--trunk TRUNK] [--branch-prefix BRANCH_PREFIX] [--token TOKEN]
+usage: mergify [-h] [--debug] [--token TOKEN] [--dry-run] {stack} ...
+
+positional arguments:
+  {stack}
+    stack        create a pull requests stack
+
+options:
+  -h, --help     show this help message and exit
+  --debug        debug mode
+  --token TOKEN  GitHub personal access token
+  --dry-run, -n
+
+$ mergify stack --help
+usage: mergify stack [-h] [--setup] [--dry-run] [--next-only] [--draft] [--trunk TRUNK] [--branch-prefix BRANCH_PREFIX]
 
 options:
   -h, --help            show this help message and exit
-  --debug               debug mode
   --setup               Initial installation of the required git commit-msg hook
   --dry-run, -n         Only show what is going to be done
   --next-only, -x       Only rebase and update the next pull request of the stack
@@ -103,5 +114,5 @@ options:
                         Change the target branch of the stack
   --branch-prefix BRANCH_PREFIX
                         branch prefix used to create stacked PR
-  --token TOKEN         GitHub personal access token
+
 ```
