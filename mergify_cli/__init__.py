@@ -196,27 +196,29 @@ async def get_local_changes(
         changeid = ChangeId(changeids[-1])
         changes.append(Change((changeid, commit, title, message)))
         pull = known_changeids.get(changeid)
+        draft = ""
         if pull is None:
             action = "to create"
+            if create_as_draft:
+                draft = " [yellow](draft)[/]"
             url = f"<{stack_prefix}/{changeid}>"
             commit_info = commit[-7:]
         else:
             url = pull["html_url"]
             head_commit = commit[-7:]
             commit_info = head_commit
-            if create_as_draft is not pull["draft"]:
-                if create_as_draft:
-                    action = "ready_for_review -> draft"
-                else:
-                    action = "draft -> ready_for_review"
-            elif pull["head"]["sha"][-7:] != head_commit:
+            if pull["head"]["sha"][-7:] != head_commit:
                 action = "to update"
                 commit_info = f"{pull['head']['sha'][-7:]} -> {head_commit}"
             else:
                 action = "nothing"
 
+            draft = ""
+            if pull["draft"]:
+                draft = " [yellow](draft)[/]"
+
         console.log(
-            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/] {url} - {changeid}"
+            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft} {url} - {changeid}"
         )
 
     return changes
@@ -294,10 +296,7 @@ async def create_or_update_stack(
 
     pull = known_changeids.get(changeid)
     if pull and pull["head"]["sha"] == commit:
-        if create_as_draft is not pull["draft"]:
-            action = await check_and_update_pull_status(client, pull, create_as_draft)
-        else:
-            action = "nothing"
+        action = "nothing"
     elif pull:
         action = "updated"
         with console.status(
@@ -313,11 +312,6 @@ async def create_or_update_stack(
                 },
             )
             check_for_status(r)
-            pull = typing.cast(PullRequest, r.json())
-            if create_as_draft is not pull["draft"]:
-                action = await check_and_update_pull_status(
-                    client, pull, create_as_draft
-                )
     else:
         action = "created"
         with console.status(
@@ -566,9 +560,12 @@ async def stack(
                         "head": {"sha": ""},
                     }
                 )
+            draft = ""
+            if pull["draft"]:
+                draft = " [yellow](draft)[/]"
 
             console.log(
-                f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}"
+                f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/]{draft} {pull['html_url']} - {changeid}"
             )
             stacked_base_branch = stacked_dest_branch
             if continue_create_or_update and next_only:
