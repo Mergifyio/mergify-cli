@@ -16,7 +16,7 @@ mypy-extensions = "^1.0.0"
 black = "^23.7.0"
 ruff = ">=0.0.277,<0.0.285"
 pytest = {version = ">=6.2.5"}
-poethepoet = "^0.21.0"
+poethepoet = ">=0.21,<0.23"
 
 [tool.poetry.scripts]
 mergify = 'mergify_cli:cli'
