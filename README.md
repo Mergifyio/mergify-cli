@@ -64,7 +64,6 @@ To create a stack of pull requests, follow these steps:
 
 1. Create a branch and make your desired changes on that branch.
 2. After making changes on your branch, including any necessary commit message modifications using `git rebase -i`, you can proceed to create your stack of pull requests.
-
 3. To create the stack, simply run the following command:
 
 ```bash
@@ -85,34 +84,22 @@ If you have any questions or need further assistance, please refer to the docume
 
 Thank you for using Mergify CLI to streamline your pull request workflow!
 
-## Usage
+## Command options
 
 ```
 $ mergify --help
-usage: mergify [-h] [--debug] [--token TOKEN] [--dry-run] {stack} ...
-
-positional arguments:
-  {stack}
-    stack        create a pull requests stack
-
-options:
-  -h, --help     show this help message and exit
-  --debug        debug mode
-  --token TOKEN  GitHub personal access token
-  --dry-run, -n
-
-$ mergify stack --help
-usage: mergify stack [-h] [--setup] [--dry-run] [--next-only] [--draft] [--trunk TRUNK] [--branch-prefix BRANCH_PREFIX]
+usage: mergify [-h] [--debug] [--setup] [--dry-run] [--next-only] [--draft] [--trunk TRUNK] [--branch-prefix BRANCH_PREFIX] [--token TOKEN]
 
 options:
   -h, --help            show this help message and exit
-  --setup               Initial installation of the required git commit-msg hook
-  --dry-run, -n         Only show what is going to be done
-  --next-only, -x       Only rebase and update the next pull request of the stack
-  --draft, -d           Create stacked pull request as draft
+  --debug
+  --setup
+  --dry-run, -n
+  --next-only, -x
+  --draft, -d
   --trunk TRUNK, -t TRUNK
-                        Change the target branch of the stack
   --branch-prefix BRANCH_PREFIX
                         branch prefix used to create stacked PR
+  --token TOKEN         GitHub personal access token
 
 ```
