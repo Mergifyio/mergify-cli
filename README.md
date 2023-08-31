@@ -63,8 +63,9 @@ mergify --trunk=origin/branch-name
 To create a stack of pull requests, follow these steps:
 
 1. Create a branch and make your desired changes on that branch.
-2. After making changes on your branch, including any necessary commit message modifications using `git rebase -i`, you can proceed to create your stack of pull requests.
-3. To create the stack, simply run the following command:
+2. Commit your changes. Your commit message now include the `Change-Id` automatically if you have set up Mergify CLI correctly.
+3. If you committed your changes before setting up Mergify CLI, you can reword your commits using `git rebase <base-branch> -i` to include the `Change-Id` automatically.
+4. Run the following command to create the stack:
 
 ```bash
 mergify
