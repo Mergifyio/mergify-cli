@@ -2,7 +2,7 @@ name: upload release to PyPI
 on:
   push:
     branches-ignore:
-      - '*'
+      - '**'
     tags:
       - '*'
 
