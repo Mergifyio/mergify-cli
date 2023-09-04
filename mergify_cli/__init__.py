@@ -608,7 +608,15 @@ def get_default_branch_prefix() -> str:
 def get_default_token() -> str:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
-        token = subprocess.check_output("gh auth token", shell=True).decode().strip()
+        try:
+            token = (
+                subprocess.check_output("gh auth token", shell=True).decode().strip()
+            )
+        except subprocess.CalledProcessError:
+            console.print(
+                "error: please make sure that gh client is installed and you are authenticated, or that you set the "
+                "'GITHUB_TOKEN' environment variable"
+            )
     if DEBUG:
         console.print(f"[purple]DEBUG: token: {token}[/]")
     return token
