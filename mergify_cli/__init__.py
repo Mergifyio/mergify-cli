@@ -391,38 +391,38 @@ async def log_httpx_response(response: httpx.Response) -> None:
     )
 
 
-def get_trunk(trunk: str | None = None) -> tuple[str, str]:
+def get_trunk(trunk: str | None = None) -> str:
+    try:
+        trunk = subprocess.check_output(
+            "git config --get mergify-cli.stack-trunk",
+            shell=True,
+            text=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        trunk = ""
+
     if not trunk:
+        dest_branch = subprocess.check_output(
+            "git rev-parse --abbrev-ref HEAD", shell=True, text=True
+        ).strip()
         try:
-            trunk = (
-                subprocess.check_output(
-                    "git config --get mergify-cli.stack-trunk", shell=True
-                )
-                .decode()
-                .strip()
-            )
+            trunk = subprocess.check_output(
+                f"git for-each-ref --format='%(upstream:short)' refs/heads/{dest_branch}",
+                shell=True,
+                text=True,
+            ).strip()
         except subprocess.CalledProcessError:
             trunk = ""
 
-    if not trunk:
-        console.log("[red] mergify-cli stack-trunk is not defined [/]")
-        console.log(
-            "[yellow] Setting it using : `git config --add mergify-cli.stack-trunk origin/branch-name` [/]"
-        )
-        console.log("[yellow] or use param : --trunk origin/branch-names [/]")
-        sys.exit(1)
+    return trunk
 
+
+def trunk_type(trunk: str) -> tuple[str, str]:
     result = trunk.split("/", maxsplit=1)
     if len(result) != 2:
-        console.log(
-            "[red] mergify-cli stack-trunk is not well formated. It must be origin/branch-name [/]"
+        raise argparse.ArgumentTypeError(
+            "stack-trunk is invalid. It must be origin/branch-name [/]"
         )
-        console.log(
-            "[yellow] Setting it using : `git config --add mergify-cli.stack-trunk origin/branch-name` [/]"
-        )
-        console.log("[yellow] or use param : --trunk origin/branch-names [/]")
-        sys.exit(1)
-
     return result[0], result[1]
 
 
@@ -431,13 +431,13 @@ async def stack(
     next_only: bool,
     branch_prefix: str,
     dry_run: bool,
-    trunk: str | None = None,
+    trunk: tuple[str, str],
     create_as_draft: bool = False,
 ) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
 
-    remote, base_branch = get_trunk(trunk)
+    remote, base_branch = trunk
 
     user, repo = get_slug(await git(f"config --get remote.{remote}.url"))
 
@@ -668,7 +668,11 @@ def cli() -> None:
         help="Create stacked pull request as draft",
     )
     stack_parser.add_argument(
-        "--trunk", "-t", help="Change the target branch of the stack"
+        "--trunk",
+        "-t",
+        type=trunk_type,
+        default=get_trunk(),
+        help="Change the target branch of the stack",
     )
     stack_parser.add_argument(
         "--branch-prefix",
