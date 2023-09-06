@@ -614,7 +614,7 @@ def get_default_token() -> str:
             )
         except subprocess.CalledProcessError:
             console.print(
-                "error: please make sure that gh client is installed and you are authenticated, or that you set the "
+                "error: please make sure that gh client is installed and you are authenticated, or set the "
                 "'GITHUB_TOKEN' environment variable"
             )
     if DEBUG:
