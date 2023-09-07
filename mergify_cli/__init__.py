@@ -192,6 +192,9 @@ async def get_local_changes(
                 f"`Change-Id:` line is missing on commit {commit}",
                 style="red",
             )
+            console.print(
+                "Did you run `mergify stack --setup` for this repository?",
+            )
             sys.exit(1)
         changeid = ChangeId(changeids[-1])
         changes.append(Change((changeid, commit, title, message)))
