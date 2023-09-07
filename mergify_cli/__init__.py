@@ -1,5 +1,5 @@
 #
-#  Copyright © 2021 Mergify SAS
+#  Copyright © 2021-2023 Mergify SAS
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -30,11 +30,7 @@ import rich
 import rich.console
 
 
-try:
-    VERSION = importlib.metadata.version("mrgfy")
-except ImportError:
-    # https://pyoxidizer.readthedocs.io/en/stable/oxidized_importer_behavior_and_compliance.html#importlib-metadata-compatibility
-    VERSION = "0.1"
+VERSION = importlib.metadata.version("mergify-cli")
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
 READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
