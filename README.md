@@ -41,7 +41,7 @@ To use Mergify CLI for creating stacked pull requests in your repository, follow
 1. Install the commit-msg hook by running the following command:
 
 ```bash
-mergify --setup
+mergify stack --setup
 ```
 
 2. Define your trunk branch, which serves as the base branch for your stacked pull requests. You can set it using the following command:
@@ -68,7 +68,7 @@ To create a stack of pull requests, follow these steps:
 4. Run the following command to create the stack:
 
 ```bash
-mergify
+mergify stack
 ```
 
 Mergify CLI will automatically handle the creation of individual pull requests for each commit in your feature branch. This will allow you to use a streamlined and efficient process of managing the changes and reviews associated with each pull request of the stack.
