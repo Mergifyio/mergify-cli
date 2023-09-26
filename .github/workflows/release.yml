@@ -20,12 +20,11 @@ jobs:
         with:
           python-version: 3.11
       - name: Get version
-        id: version
-        run: echo "::set-output name=version::$(date +'%Y.%m.%d.%H.%M')"
+        run: echo "VERSION=$(date +'%Y.%m.%d.%H.%M')" >> $GITHUB_OUTPUT
       - run: |
           pip install poetry
           poetry install --sync
-          git tag ${{ steps.version.outputs.version }} 
+          git tag $VERSION
           poetry build
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
