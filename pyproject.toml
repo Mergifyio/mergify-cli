@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mergify_cli"
-version = "0.1.1"
+version = "0.0.0"
 description = "Mergify CLI is a tool that automates the creation and management of stacked pull requests on GitHub"
 authors = ["Mehdi Abaakouk <sileht@mergify.com>"]
 readme = "README.md"
@@ -10,10 +10,9 @@ license = "Apache License"
 python = ">=3.10"
 httpx = ">=0.20.0"
 rich = ">=10.11.0"
-cleo = "*"
 
-[tool.poetry.plugins."poetry.plugin"]
-version = "version_plugin:VersionPlugin"
+[tool.poetry-version-plugin]
+source = "git-tag"
 
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
