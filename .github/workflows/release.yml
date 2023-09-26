@@ -20,7 +20,8 @@ jobs:
         with:
           python-version: 3.11
       - name: Get version
-        run: echo "version=$(date +'%Y.%m.%d.%H.%M')" >> $GITHUB_OUTPUT
+        run: |
+          echo "{version}={$(date +'%Y.%m.%d.%H.%M')}" >> $GITHUB_STATE
       - run: |
           echo ${{ env.version }}
           git tag ${{ env.version }}
