@@ -22,9 +22,9 @@ jobs:
       - name: Get version
         run: echo "VERSION=$(date +'%Y.%m.%d.%H.%M')" >> $GITHUB_OUTPUT
       - run: |
+          git tag $VERSION
           pip install poetry
           poetry self add poetry-version-plugin
-          git tag $VERSION
           poetry install --sync
           poetry build
       - name: Publish package distributions to PyPI
