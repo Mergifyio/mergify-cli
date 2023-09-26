@@ -10,6 +10,10 @@ license = "Apache License"
 python = ">=3.10"
 httpx = ">=0.20.0"
 rich = ">=10.11.0"
+cleo = "*"
+
+[tool.poetry.plugins."poetry.plugin"]
+version = "version_plugin:VersionPlugin"
 
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
