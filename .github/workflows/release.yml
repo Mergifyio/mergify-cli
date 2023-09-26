@@ -23,6 +23,7 @@ jobs:
         run: echo "VERSION=$(date +'%Y.%m.%d.%H.%M')" >> $GITHUB_OUTPUT
       - run: |
           pip install poetry
+          poetry self add poetry-version-plugin
           poetry install --sync
           git tag $VERSION
           poetry build
