@@ -19,9 +19,13 @@ jobs:
       - uses: actions/setup-python@v2.3.1
         with:
           python-version: 3.11
+      - name: Get version
+        id: version
+        run: echo "::set-output name=version::$(date +'%Y.%m.%d.%H.%M')"
       - run: |
           pip install poetry
           poetry install --sync
+          git tag ${{ steps.version.outputs.version }} 
           poetry build
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
