@@ -24,8 +24,8 @@ jobs:
       - run: |
           pip install poetry
           poetry self add poetry-version-plugin
-          poetry install --sync
           git tag $VERSION
+          poetry install --sync
           poetry build
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
