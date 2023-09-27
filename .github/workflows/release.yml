@@ -21,11 +21,10 @@ jobs:
           python-version: 3.11
       - name: Get version
         run: |
-          echo "$(date +'%Y.%m.%d.%H.%M')"
           echo "version=$(date +'%Y.%m.%d.%H.%M')" >> "$GITHUB_ENV"
       - run: |
-          echo $version
           git tag $version
+          git push origin $version
           pip install poetry
           poetry self add poetry-version-plugin
           poetry install --sync
