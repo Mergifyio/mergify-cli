@@ -1,11 +1,6 @@
 name: upload release to PyPI
 on:
   workflow_dispatch:
-  push:
-    branches-ignore:
-      - '**'
-    tags:
-      - '*'
 
 jobs:
   pypi-publish:
