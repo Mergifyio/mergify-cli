@@ -22,8 +22,6 @@ jobs:
       - name: Get version
         run: |
           echo "version=$(date +'%Y.%m.%d.%H.%M')" >> "$GITHUB_ENV"
-      - env:
-          GH_TOKEN: ${{ secrets.MERGIFY_CI_BOT_PAT }}
       - run: |
           git tag $version
           git push origin $version
