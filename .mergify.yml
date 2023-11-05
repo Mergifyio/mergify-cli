@@ -3,14 +3,16 @@ extends: .github
 queue_rules:
   - name: default
     allow_inplace_checks: true
-    conditions:
+    queue_conditions:
       - and: &CheckRuns
           - check-success=test
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
     speculative_checks: 5
 
   - name: lowprio
     allow_inplace_checks: true
-    conditions:
+    queue_conditions:
       - and: *CheckRuns
     batch_size: 7
     batch_max_wait_time: 5min
@@ -22,26 +24,18 @@ pull_request_rules:
   - name: automatic merge
     conditions:
       - base=main
-      - and: *CheckRuns
       - check-success=semantic-pull-request
-      - "#approved-reviews-by>=1"
-      - "#changes-requested-reviews-by=0"
-      - label!=work-in-progress
-      - label!=manual merge
     actions:
       queue:
         name: default
 
   - name: automatic merge from dependabot
     conditions:
-      - and: *CheckRuns
       - author=dependabot[bot]
-      - label!=work-in-progress
-      - label!=manual merge
+      - check-success=semantic-pull-request
     actions:
       queue:
         name: lowprio
-        method: merge
 
   - name: request review
     conditions:
