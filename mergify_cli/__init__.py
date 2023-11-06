@@ -390,7 +390,7 @@ async def log_httpx_response(response: httpx.Response) -> None:
     )
 
 
-def get_trunk(trunk: str | None = None) -> str:
+def get_trunk() -> str:
     try:
         trunk = subprocess.check_output(
             "git config --get mergify-cli.stack-trunk",
@@ -401,9 +401,13 @@ def get_trunk(trunk: str | None = None) -> str:
         trunk = ""
 
     if not trunk:
-        dest_branch = subprocess.check_output(
-            "git rev-parse --abbrev-ref HEAD", shell=True, text=True
-        ).strip()
+        try:
+            dest_branch = subprocess.check_output(
+                "git rev-parse --abbrev-ref HEAD", shell=True, text=True
+            ).strip()
+        except subprocess.CalledProcessError:
+            return ""
+
         try:
             trunk = subprocess.check_output(
                 f"git for-each-ref --format='%(upstream:short)' refs/heads/{dest_branch}",
@@ -636,8 +640,7 @@ async def stack_main(args: argparse.Namespace) -> None:
     )
 
 
-def cli() -> None:
-    global DEBUG
+def parse_args(args: typing.Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="debug mode")
     parser.add_argument(
@@ -687,12 +690,18 @@ def cli() -> None:
         help="branch prefix used to create stacked PR",
     )
 
-    known_args, extra = parser.parse_known_args()
+    known_args, _ = parser.parse_known_args(args)
     if known_args.action is None:
         sys.argv.insert(1, "stack")
 
-    args = parser.parse_args()
+    return parser.parse_args(args)
+
+
+def cli() -> None:
+    args = parse_args(sys.argv[1:])
+
     if args.debug:
+        global DEBUG
         DEBUG = True
 
     asyncio.run(args.func(args))
