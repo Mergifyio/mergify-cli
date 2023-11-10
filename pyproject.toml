@@ -17,7 +17,6 @@ source = "git-tag"
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
 mypy-extensions = "^1.0.0"
-black = "^23.7.0"
 ruff = ">=0.0.277,<0.1.6"
 pytest = {version = ">=6.2.5"}
 poethepoet = ">=0.21,<0.25"
@@ -28,9 +27,6 @@ mergify = 'mergify_cli:cli'
 [tool.poe]
 include = ["poe.toml"]
 
-[tool.black]
-target-version = ['py311']
-
 [tool.mypy]
 strict = true
 warn_unreachable = true
@@ -40,6 +36,7 @@ show_error_codes = true
 
 [tool.ruff]
 line-length = 88
+indent-width = 4
 target-version = "py311"
 select = [
  "E", "W", "F", "I", "A", "B", "Q",
@@ -53,6 +50,8 @@ select = [
 ]
 
 ignore = [
+    # NOTE(sileht): not compatible with ruff-format
+    "ISC001",
     # NOTE(sileht): line-length is up to black
     "E501",
     # NOTE(sileht): we prefer using exc_info=True
