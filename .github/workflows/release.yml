@@ -18,10 +18,18 @@ jobs:
       - name: Get version
         run: |
           echo "version=$(date +'%Y.%m.%d.%H.%M')" >> "$GITHUB_ENV"
-      - run: |
+      - name: Bump version and push to GitHub
+        run: |
+          pip install poetry
+          poetry version $version
+          git config --global user.email "
+          git config --global user.name "GitHub Actions"
+          git commit -am "chore: Bump version to $version"
+          git push origin main
+      - name: Tag version and build
+        run: |
           git tag $version
           git push origin $version
-          pip install poetry
           poetry self add poetry-version-plugin
           poetry install --sync
           poetry build

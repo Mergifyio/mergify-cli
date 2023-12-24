@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mergify_cli"
-version = "0.0.0"
+version = "2023.09.27.08.14"
 description = "Mergify CLI is a tool that automates the creation and management of stacked pull requests on GitHub"
 authors = ["Mehdi Abaakouk <sileht@mergify.com>"]
 readme = "README.md"
