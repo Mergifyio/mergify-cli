@@ -13,21 +13,25 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import subprocess
-from unittest import mock
+import pathlib
 
 import pytest
 
 import mergify_cli
 
 
+@pytest.fixture(autouse=True)
+def change_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    # Change working directory to avoid doing git commands in the current
+    # repository
+    monkeypatch.chdir(tmp_path)
+
+
 def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
-        with mock.patch(
-            "subprocess.check_output",
-            side_effect=subprocess.CalledProcessError(2, ""),
-        ):
-            mergify_cli.parse_args(["--help"])
+        mergify_cli.parse_args(["--help"])
 
     stdout = capsys.readouterr().out
     assert "usage: " in stdout
