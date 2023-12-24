@@ -664,6 +664,13 @@ async def stack_main(args: argparse.Namespace) -> None:
 
 def parse_args(args: typing.Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"%(prog)s {VERSION}",
+        help="display version",
+    )
     parser.add_argument("--debug", action="store_true", help="debug mode")
     parser.add_argument(
         "--token",
