@@ -13,11 +13,16 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import json
 import pathlib
+import typing
+from unittest import mock
 
 import pytest
+import respx
 
 import mergify_cli
+from mergify_cli.tests import utils as test_utils
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +32,27 @@ def change_working_directory(
     # Change working directory to avoid doing git commands in the current
     # repository
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
+def git_mock(
+    tmp_path: pathlib.Path,
+) -> typing.Generator[test_utils.GitMock, None, None]:
+    git_mock_object = test_utils.GitMock()
+    # Top level directory is a temporary path
+    git_mock_object.mock("rev-parse --show-toplevel", str(tmp_path))
+    # Name of the current branch
+    git_mock_object.mock("rev-parse --abbrev-ref HEAD", "current-branch")
+    # URL of the GitHub repository
+    git_mock_object.mock(
+        "config --get remote.origin.url", "https://github.com/user/repo"
+    )
+    # Mock pull and push commands
+    git_mock_object.mock("pull --rebase origin main", "")
+    git_mock_object.mock("push -f origin current-branch:/current-branch/aio", "")
+
+    with mock.patch("mergify_cli.git", git_mock_object):
+        yield git_mock_object
 
 
 def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -62,4 +88,168 @@ def test_check_local_branch_invalid() -> None:
         mergify_cli.check_local_branch(
             branch_name="prefix/my-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
             branch_prefix="prefix",
+        )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_create(
+    git_mock: test_utils.GitMock, respx_mock: respx.MockRouter
+) -> None:
+    git_mock.mock("merge-base --fork-point origin/main", "base_commit_sha")
+    git_mock.mock(
+        "log --format='%H' base_commit_sha..current-branch", "commit2_sha\ncommit1_sha"
+    )
+    git_mock.mock(
+        "log -1 --format='%b' commit1_sha",
+        "Message commit 1\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    )
+    git_mock.mock("log -1 --format='%s' commit1_sha", "Title commit 1")
+    git_mock.mock(
+        "log -1 --format='%b' commit2_sha",
+        "Message commit 2\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf51",
+    )
+    git_mock.mock("log -1 --format='%s' commit2_sha", "Title commit 2")
+
+    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+        200, json=[]
+    )
+    respx_mock.post("/repos/user/repo/git/refs").respond(200, json={})
+    respx_mock.post("/repos/user/repo/pulls", json__title="Title commit 1").respond(
+        200,
+        json={
+            "html_url": "https://github.com/repo/user/pull/1",
+            "number": "1",
+            "title": "Title commit 1",
+            "head": {"sha": "commit1_sha"},
+            "state": "open",
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.post("/repos/user/repo/pulls", json__title="Title commit 2").respond(
+        200,
+        json={
+            "html_url": "https://github.com/repo/user/pull/2",
+            "number": "2",
+            "title": "Title commit 2",
+            "head": {"sha": "commit2_sha"},
+            "state": "open",
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
+    post_comment_mock = respx_mock.post("/repos/user/repo/issues/1/comments").respond(
+        200
+    )
+    respx_mock.get("/repos/user/repo/issues/2/comments").respond(200, json=[])
+    respx_mock.post("/repos/user/repo/issues/2/comments").respond(200)
+
+    await mergify_cli.stack(
+        token="",
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+    )
+
+    assert len(post_comment_mock.calls) == 1
+    expected_body = """This pull request is part of a stack:
+1. Title commit 1 ([#1](https://github.com/repo/user/pull/1))
+1. Title commit 2 ([#2](https://github.com/repo/user/pull/2))
+"""
+    assert json.loads(post_comment_mock.calls.last.request.content) == {
+        "body": expected_body
+    }
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_update(
+    git_mock: test_utils.GitMock, respx_mock: respx.MockRouter
+) -> None:
+    git_mock.mock("merge-base --fork-point origin/main", "base_commit_sha")
+    git_mock.mock("log --format='%H' base_commit_sha..current-branch", "commit_sha")
+    git_mock.mock(
+        "log -1 --format='%b' commit_sha",
+        "Message\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    )
+    git_mock.mock("log -1 --format='%s' commit_sha", "Title")
+
+    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+        200,
+        json=[
+            {
+                "ref": "refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50"
+            }
+        ],
+    )
+    respx_mock.get(
+        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=open"
+    ).respond(
+        200,
+        json=[
+            {
+                "html_url": "",
+                "number": "123",
+                "title": "Title",
+                "head": {"sha": "previous_commit_sha"},
+                "state": "open",
+                "draft": False,
+                "node_id": "",
+            }
+        ],
+    )
+    respx_mock.patch(
+        "/repos/user/repo/git/refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50"
+    ).respond(200, json={})
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            }
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+
+    await mergify_cli.stack(
+        token="",
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+    )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_on_destination_branch_raises_an_error(
+    git_mock: test_utils.GitMock,
+) -> None:
+    git_mock.mock("rev-parse --abbrev-ref HEAD", "main")
+
+    with pytest.raises(SystemExit, match="1"):
+        await mergify_cli.stack(
+            token="",
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_without_common_commit_raises_an_error(
+    git_mock: test_utils.GitMock,
+) -> None:
+    git_mock.mock("merge-base --fork-point origin/main", "")
+
+    with pytest.raises(SystemExit, match="1"):
+        await mergify_cli.stack(
+            token="",
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
         )
