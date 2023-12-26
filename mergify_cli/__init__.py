@@ -150,6 +150,11 @@ class PullRequest(typing.TypedDict):
     node_id: str
 
 
+class Comment(typing.TypedDict):
+    body: str
+    url: str
+
+
 ChangeId = typing.NewType("ChangeId", str)
 KnownChangeIDs = typing.NewType("KnownChangeIDs", dict[ChangeId, PullRequest | None])
 
@@ -252,7 +257,9 @@ async def create_or_update_comments(
 
         r = await client.get(f"issues/{pull['number']}/comments")
         check_for_status(r)
-        for comment in r.json():
+
+        comments = typing.cast(list[Comment], r.json())
+        for comment in comments:
             if comment["body"].startswith(STACK_COMMENT_FIRST_LINE):
                 if comment["body"] != new_body:
                     await client.patch(comment["url"], json={"body": new_body})
