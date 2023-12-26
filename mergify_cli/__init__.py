@@ -34,6 +34,7 @@ import rich.console
 VERSION = importlib.metadata.version("mergify-cli")
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
+STACK_COMMENT_FIRST_LINE = "This pull request is part of a stack:\n"
 READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
 DRAFT_TEMPLATE = 'mutation { convertPullRequestToDraft(input: { pullRequestId: "%s" }) { clientMutationId } }'
 console = rich.console.Console(log_path=False, log_time=False)
@@ -246,21 +247,30 @@ async def get_changeids_to_delete(
 async def create_or_update_comments(
     client: httpx.AsyncClient, pulls: list[PullRequest]
 ) -> None:
-    first_line = "This pull request is part of a stack:\n"
-    body = first_line
     for pull in pulls:
-        body += f"1. {pull['title']} ([#{pull['number']}]({pull['html_url']}))\n"
+        new_body = stack_comment_body(pulls, pull)
 
-    for pull in pulls:
         r = await client.get(f"issues/{pull['number']}/comments")
         check_for_status(r)
         for comment in r.json():
-            if comment["body"].startswith(first_line):
-                if comment["body"] != body:
-                    await client.patch(comment["url"], json={"body": body})
+            if comment["body"].startswith(STACK_COMMENT_FIRST_LINE):
+                if comment["body"] != new_body:
+                    await client.patch(comment["url"], json={"body": new_body})
                 break
         else:
-            await client.post(f"issues/{pull['number']}/comments", json={"body": body})
+            await client.post(
+                f"issues/{pull['number']}/comments", json={"body": new_body}
+            )
+
+
+def stack_comment_body(pulls: list[PullRequest], current_pull: PullRequest) -> str:
+    body = STACK_COMMENT_FIRST_LINE
+    for pull in pulls:
+        body += f"1. {pull['title']} ([#{pull['number']}]({pull['html_url']}))"
+        if pull == current_pull:
+            body += " 👈"
+        body += "\n"
+    return body
 
 
 async def create_or_update_stack(

@@ -139,11 +139,13 @@ async def test_stack_create(
         },
     )
     respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
-    post_comment_mock = respx_mock.post("/repos/user/repo/issues/1/comments").respond(
+    post_comment1_mock = respx_mock.post("/repos/user/repo/issues/1/comments").respond(
         200
     )
     respx_mock.get("/repos/user/repo/issues/2/comments").respond(200, json=[])
-    respx_mock.post("/repos/user/repo/issues/2/comments").respond(200)
+    post_comment2_mock = respx_mock.post("/repos/user/repo/issues/2/comments").respond(
+        200
+    )
 
     await mergify_cli.stack(
         token="",
@@ -153,12 +155,21 @@ async def test_stack_create(
         trunk=("origin", "main"),
     )
 
-    assert len(post_comment_mock.calls) == 1
+    assert len(post_comment1_mock.calls) == 1
     expected_body = """This pull request is part of a stack:
-1. Title commit 1 ([#1](https://github.com/repo/user/pull/1))
+1. Title commit 1 ([#1](https://github.com/repo/user/pull/1)) 👈
 1. Title commit 2 ([#2](https://github.com/repo/user/pull/2))
 """
-    assert json.loads(post_comment_mock.calls.last.request.content) == {
+    assert json.loads(post_comment1_mock.calls.last.request.content) == {
+        "body": expected_body
+    }
+
+    assert len(post_comment2_mock.calls) == 1
+    expected_body = """This pull request is part of a stack:
+1. Title commit 1 ([#1](https://github.com/repo/user/pull/1))
+1. Title commit 2 ([#2](https://github.com/repo/user/pull/2)) 👈
+"""
+    assert json.loads(post_comment2_mock.calls.last.request.content) == {
         "body": expected_body
     }
 
