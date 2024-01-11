@@ -679,7 +679,7 @@ async def stack_main(args: argparse.Namespace) -> None:
     )
 
 
-def parse_args(args: typing.Sequence[str]) -> argparse.Namespace:
+def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--version",
@@ -738,7 +738,7 @@ def parse_args(args: typing.Sequence[str]) -> argparse.Namespace:
 
     known_args, _ = parser.parse_known_args(args)
     if known_args.action is None:
-        sys.argv.insert(1, "stack")
+        args.insert(1, "stack")
 
     return parser.parse_args(args)
 
