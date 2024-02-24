@@ -1,5 +1,5 @@
 #
-#  Copyright © 2021-2023 Mergify SAS
+#  Copyright © 2021-2024 Mergify SAS
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -13,11 +13,20 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import dataclasses
+import typing
+
+
+class Commit(typing.TypedDict):
+    sha: str
+    title: str
+    message: str
+    change_id: str
 
 
 @dataclasses.dataclass
 class GitMock:
     _mocked: dict[str, str] = dataclasses.field(init=False, default_factory=dict)
+    _commits: list[Commit] = dataclasses.field(init=False, default_factory=list)
 
     def mock(self, command: str, output: str) -> None:
         self._mocked[command] = output
@@ -27,3 +36,21 @@ class GitMock:
             return self._mocked[args]
 
         raise AssertionError(f"git_mock called with `{args}`, not mocked!")
+
+    def commit(self, commit: Commit) -> None:
+        self._commits.append(commit)
+
+        # Base commit SHA
+        self.mock("merge-base --fork-point origin/main", "base_commit_sha")
+        # Commit message
+        self.mock(
+            f"log -1 --format='%b' {commit['sha']}",
+            f"{commit['message']}\n\nChange-Id: {commit['change_id']}",
+        )
+        # Commit title
+        self.mock(f"log -1 --format='%s' {commit['sha']}", commit["title"])
+        # List of commit SHAs
+        self.mock(
+            "log --format='%H' base_commit_sha..current-branch",
+            "\n".join(c["sha"] for c in reversed(self._commits)),
+        )

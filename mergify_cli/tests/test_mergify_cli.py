@@ -96,20 +96,22 @@ async def test_stack_create(
     git_mock: test_utils.GitMock, respx_mock: respx.MockRouter
 ) -> None:
     # Mock 2 commits on branch `current-branch`
-    git_mock.mock("merge-base --fork-point origin/main", "base_commit_sha")
-    git_mock.mock(
-        "log --format='%H' base_commit_sha..current-branch", "commit2_sha\ncommit1_sha"
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        )
     )
-    git_mock.mock(
-        "log -1 --format='%b' commit1_sha",
-        "Message commit 1\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit2_sha",
+            title="Title commit 2",
+            message="Message commit 2",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf51",
+        )
     )
-    git_mock.mock("log -1 --format='%s' commit1_sha", "Title commit 1")
-    git_mock.mock(
-        "log -1 --format='%b' commit2_sha",
-        "Message commit 2\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf51",
-    )
-    git_mock.mock("log -1 --format='%s' commit2_sha", "Title commit 2")
 
     # Mock HTTP calls
     respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
@@ -207,13 +209,14 @@ async def test_stack_update(
     git_mock: test_utils.GitMock, respx_mock: respx.MockRouter
 ) -> None:
     # Mock 1 commits on branch `current-branch`
-    git_mock.mock("merge-base --fork-point origin/main", "base_commit_sha")
-    git_mock.mock("log --format='%H' base_commit_sha..current-branch", "commit_sha")
-    git_mock.mock(
-        "log -1 --format='%b' commit_sha",
-        "Message\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        )
     )
-    git_mock.mock("log -1 --format='%s' commit_sha", "Title")
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
