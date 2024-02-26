@@ -1,5 +1,5 @@
 #
-#  Copyright © 2021-2023 Mergify SAS
+#  Copyright © 2021-2024 Mergify SAS
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -95,6 +95,7 @@ def test_check_local_branch_invalid() -> None:
 async def test_stack_create(
     git_mock: test_utils.GitMock, respx_mock: respx.MockRouter
 ) -> None:
+    # Mock 2 commits on branch `current-branch`
     git_mock.mock("merge-base --fork-point origin/main", "base_commit_sha")
     git_mock.mock(
         "log --format='%H' base_commit_sha..current-branch", "commit2_sha\ncommit1_sha"
@@ -110,11 +111,14 @@ async def test_stack_create(
     )
     git_mock.mock("log -1 --format='%s' commit2_sha", "Title commit 2")
 
+    # Mock HTTP calls
     respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
         200, json=[]
     )
     respx_mock.post("/repos/user/repo/git/refs").respond(200, json={})
-    respx_mock.post("/repos/user/repo/pulls", json__title="Title commit 1").respond(
+    post_pull1_mock = respx_mock.post(
+        "/repos/user/repo/pulls", json__title="Title commit 1"
+    ).respond(
         200,
         json={
             "html_url": "https://github.com/repo/user/pull/1",
@@ -126,7 +130,9 @@ async def test_stack_create(
             "node_id": "",
         },
     )
-    respx_mock.post("/repos/user/repo/pulls", json__title="Title commit 2").respond(
+    post_pull2_mock = respx_mock.post(
+        "/repos/user/repo/pulls", json__title="Title commit 2"
+    ).respond(
         200,
         json={
             "html_url": "https://github.com/repo/user/pull/2",
@@ -155,6 +161,27 @@ async def test_stack_create(
         trunk=("origin", "main"),
     )
 
+    # First pull request is created
+    assert len(post_pull1_mock.calls) == 1
+    assert json.loads(post_pull1_mock.calls.last.request.content) == {
+        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "base": "main",
+        "title": "Title commit 1",
+        "body": "Message commit 1\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "draft": False,
+    }
+
+    # Second pull request is created
+    assert len(post_pull2_mock.calls) == 1
+    assert json.loads(post_pull2_mock.calls.last.request.content) == {
+        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf51",
+        "base": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "title": "Title commit 2",
+        "body": "Message commit 2\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf51\n\nDepends-On: #1",
+        "draft": False,
+    }
+
+    # First stack comment is created
     assert len(post_comment1_mock.calls) == 1
     expected_body = """This pull request is part of a stack:
 1. Title commit 1 ([#1](https://github.com/repo/user/pull/1)) 👈
@@ -164,6 +191,7 @@ async def test_stack_create(
         "body": expected_body
     }
 
+    # Second stack comment is created
     assert len(post_comment2_mock.calls) == 1
     expected_body = """This pull request is part of a stack:
 1. Title commit 1 ([#1](https://github.com/repo/user/pull/1))
@@ -178,6 +206,7 @@ async def test_stack_create(
 async def test_stack_update(
     git_mock: test_utils.GitMock, respx_mock: respx.MockRouter
 ) -> None:
+    # Mock 1 commits on branch `current-branch`
     git_mock.mock("merge-base --fork-point origin/main", "base_commit_sha")
     git_mock.mock("log --format='%H' base_commit_sha..current-branch", "commit_sha")
     git_mock.mock(
@@ -186,6 +215,8 @@ async def test_stack_update(
     )
     git_mock.mock("log -1 --format='%s' commit_sha", "Title")
 
+    # Mock HTTP calls: the stack already exists but it's out of date, it should
+    # be updated
     respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
         200,
         json=[
@@ -213,7 +244,9 @@ async def test_stack_update(
     respx_mock.patch(
         "/repos/user/repo/git/refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50"
     ).respond(200, json={})
-    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
+        200, json={}
+    )
     respx_mock.get("/repos/user/repo/issues/123/comments").respond(
         200,
         json=[
@@ -232,6 +265,15 @@ async def test_stack_update(
         dry_run=False,
         trunk=("origin", "main"),
     )
+
+    # The pull request is updated
+    assert len(patch_pull_mock.calls) == 1
+    assert json.loads(patch_pull_mock.calls.last.request.content) == {
+        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "base": "main",
+        "title": "Title",
+        "body": "Message\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    }
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
