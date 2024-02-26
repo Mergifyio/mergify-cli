@@ -1,5 +1,5 @@
 #
-#  Copyright © 2021-2023 Mergify SAS
+#  Copyright © 2021-2024 Mergify SAS
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -572,9 +572,7 @@ async def stack(
         pulls: list[PullRequest] = []
         continue_create_or_update = True
         for changeid, commit, title, message in changes:
-            depends_on = ""
-            if pulls:
-                depends_on = f"\n\nDepends-On: #{pulls[-1]['number']}"
+            depends_on = pulls[-1] if pulls else None
             stacked_dest_branch = f"{stack_prefix}/{changeid}"
             if continue_create_or_update:
                 pull, action = await create_or_update_stack(
@@ -584,7 +582,7 @@ async def stack(
                     changeid,
                     commit,
                     title,
-                    message + depends_on,
+                    format_pull_description(message, depends_on),
                     known_changeids,
                     create_as_draft,
                 )
@@ -628,6 +626,16 @@ async def stack(
                 await asyncio.wait(delete_tasks)
 
         console.log("[green]Finished :tada:[/]")
+
+
+def format_pull_description(message: str, depends_on: PullRequest | None) -> str:
+    depends_on_header = ""
+    if depends_on is not None:
+        depends_on_header = f"\n\nDepends-On: #{depends_on['number']}"
+
+    message = CHANGEID_RE.sub("", message).rstrip("\n")
+
+    return message + depends_on_header
 
 
 def GitHubToken(v: str) -> str:

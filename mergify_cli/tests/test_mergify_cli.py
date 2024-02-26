@@ -167,7 +167,7 @@ async def test_stack_create(
         "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "title": "Title commit 1",
-        "body": "Message commit 1\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "body": "Message commit 1",
         "draft": False,
     }
 
@@ -177,7 +177,7 @@ async def test_stack_create(
         "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf51",
         "base": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "title": "Title commit 2",
-        "body": "Message commit 2\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf51\n\nDepends-On: #1",
+        "body": "Message commit 2\n\nDepends-On: #1",
         "draft": False,
     }
 
@@ -272,7 +272,7 @@ async def test_stack_update(
         "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "title": "Title",
-        "body": "Message\n\nChange-Id: I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "body": "Message",
     }
 
 
