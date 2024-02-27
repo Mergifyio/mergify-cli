@@ -10,6 +10,7 @@ license = "Apache License"
 python = ">=3.10"
 httpx = ">=0.20.0"
 rich = ">=10.11.0"
+aiofiles = "^23.2.1"
 
 [tool.poetry-version-plugin]
 source = "git-tag"
@@ -22,6 +23,7 @@ pytest = {version = ">=6.2.5"}
 poethepoet = ">=0.21,<0.26"
 pytest-asyncio = "^0.23.2"
 respx = "^0.20.2"
+types-aiofiles = "^23.2.0.20240106"
 
 [tool.poetry.scripts]
 mergify = 'mergify_cli:cli'
@@ -43,47 +45,91 @@ show_error_codes = true
 line-length = 88
 indent-width = 4
 target-version = "py311"
+
+[tool.ruff.lint]
+preview = true
 select = [
- "E", "W", "F", "I", "A", "B", "Q",
- "C4", "T10", "ISC", "ICN", "BLE",
- "G", "RSE", "TID", "TRY", "PLE", "UP",
- "RUF", "RET",
- # FIXME(sileht): very interresting, but require easy manual code change
- # "DTZ", "ARG", "TCH", "COM",
- # FIXME(sileht): doctring/rst-docstring like
- # "D"
+    "F",
+    "E",
+    "W",
+    "I",
+    "N",
+    "UP",
+    "YTT",
+    "ANN",
+    "ASYNC",
+    "S",
+    "BLE",
+    "FBT",
+    "B",
+    "A",
+    "COM",
+    "C4",
+    "DTZ",
+    "T10",
+    "EM",
+    "FA",
+    "ISC",
+    "ICN",
+    "G",
+    "INP",
+    "PIE",
+    "T20",
+    "PYI",
+    "PT",
+    "Q",
+    "RSE",
+    "RET",
+    "SLF",
+    "SLOT",
+    "SIM",
+    "TID",
+    "TCH",
+    "INT",
+    "ARG",
+    "PTH",
+    "TD",
+    "ERA",
+    "PGH",
+    "PL",
+    "TRY",
+    "FLY",
+    "NPY",
+    "PERF",
+    "FURB",
+    "LOG",
+    "RUF",
 ]
 
 ignore = [
-    # NOTE(sileht): not compatible with ruff-format
-    "ISC001",
-    # NOTE(sileht): line-length is up to black
+    # NOTE(charly): line-length is up to the formatter
     "E501",
-    # NOTE(sileht): we prefer using exc_info=True
-    "G201", "TRY200", "TRY400",
-    # NOTE(sileht): "Unnecessary parentheses on raised exception", this breaks
-    # isinstance on exception
-    "RSE102",
-    # NOTE(sileht): No exception with message set via __init__
-    "TRY003", "TRY301",
-    # NOTE(sileht): built-in shadow, interresting but to raise an error for
-    # TypedDict/NamedTuple with key named like builtin, so it's useless
-    "A003",
-    # NOTE(sileht): This enforce usage of raise ... from ...
-    "B904",
-    # FIXME(sileht): Convert some exception -> TypeError
-    "TRY004",
-    # FIXME(sileht): very interresting, ruff BLE is far better that flake8-blind-except
-    "BLE001",
-    # NOTE(sileht): looks buggy
-    "RET508"
+    # NOTE(charly): `subprocess` module is possibly insecure
+    "S404",
+    # NOTE(charly): `subprocess` call with `shell=True`
+    "S602",
+    # NOTE(charly): Starting a process with a partial executable path
+    "S607",
+    # NOTE(charly): Boolean-typed positional argument in function definition.
+    # Interesting, but require some work.
+    "FBT001",
+    # NOTE(charly): Boolean default positional argument in function definition.
+    # Interesting, but require some work.
+    "FBT002",
+    # NOTE(charly): Missing issue link on the line following this TODO
+    "TD003",
+    # NOTE(charly): Magic value used in comparison
+    "PLR2004",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.per-file-ignores]
+"mergify_cli/tests/**/*.py" = ["S101"]
+
+[tool.ruff.lint.isort]
 force-single-line = true
 force-sort-within-sections = true
 lines-after-imports = 2
 known-first-party = ["mergify_cli"]
 
-[tool.ruff.flake8-tidy-imports]
+[tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
