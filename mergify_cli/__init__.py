@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import importlib.metadata
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ import sys
 import typing
 from urllib import parse
 
+import aiofiles
 import httpx
 import rich
 import rich.console
@@ -64,7 +66,8 @@ def check_for_status(response: httpx.Response) -> None:
         console.print(f"url: {response.request.url}", style="red")
         console.print(f"data: {response.request.content.decode()}", style="red")
         console.print(
-            f"HTTPError {response.status_code}: {data['message']}", style="red"
+            f"HTTPError {response.status_code}: {data['message']}",
+            style="red",
         )
         if "errors" in data:
             console.print(
@@ -94,7 +97,7 @@ async def git(args: str) -> str:
 
 def get_slug(url: str) -> tuple[str, str]:
     parsed = parse.urlparse(url)
-    if parsed.netloc == "":
+    if not parsed.netloc:
         # Probably ssh
         _, _, path = parsed.path.partition(":")
     else:
@@ -107,17 +110,17 @@ def get_slug(url: str) -> tuple[str, str]:
 
 
 async def do_setup() -> None:
-    hooks_dir = (await git("rev-parse --git-path hooks")).strip()
-    installed_hook_file = os.path.join(hooks_dir, "commit-msg")
+    hooks_dir = pathlib.Path((await git("rev-parse --git-path hooks")).strip())
+    installed_hook_file = hooks_dir / "commit-msg"
 
     new_hook_file = str(
-        importlib.resources.files(__package__).joinpath("hooks/commit-msg")
+        importlib.resources.files(__package__).joinpath("hooks/commit-msg"),
     )
 
-    if os.path.exists(installed_hook_file):
-        with open(installed_hook_file) as f:
+    if installed_hook_file.exists():
+        async with aiofiles.open(installed_hook_file) as f:
             data_installed = f.read()
-        with open(new_hook_file) as f:
+        async with aiofiles.open(new_hook_file) as f:
             data_new = f.read()
         if data_installed != data_new:
             console.print(
@@ -129,7 +132,7 @@ async def do_setup() -> None:
     else:
         console.log("Installation of git commit-msg hook")
         shutil.copy(new_hook_file, installed_hook_file)
-        os.chmod(installed_hook_file, 0o755)
+        installed_hook_file.chmod(0o755)
 
 
 class GitRef(typing.TypedDict):
@@ -160,7 +163,10 @@ KnownChangeIDs = typing.NewType("KnownChangeIDs", dict[ChangeId, PullRequest | N
 
 
 async def get_changeid_and_pull(
-    client: httpx.AsyncClient, user: str, stack_prefix: str, ref: GitRef
+    client: httpx.AsyncClient,
+    user: str,
+    stack_prefix: str,
+    ref: GitRef,
 ) -> tuple[ChangeId, PullRequest | None]:
     branch = ref["ref"][len("refs/heads/") :]
     changeid = ChangeId(branch[len(stack_prefix) + 1 :])
@@ -170,7 +176,8 @@ async def get_changeid_and_pull(
         p for p in typing.cast(list[PullRequest], r.json()) if p["state"] == "open"
     ]
     if len(pulls) > 1:
-        raise RuntimeError(f"More than 1 pull found with this head: {branch}")
+        msg = f"More than 1 pull found with this head: {branch}"
+        raise RuntimeError(msg)
     if pulls:
         return changeid, pulls[0]
     return changeid, None
@@ -224,14 +231,15 @@ async def get_local_changes(
                 draft = " [yellow](draft)[/]"
 
         console.log(
-            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft} {url} - {changeid}"
+            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft} {url} - {changeid}",
         )
 
     return changes
 
 
 async def get_changeids_to_delete(
-    changes: list[Change], known_changeids: KnownChangeIDs
+    changes: list[Change],
+    known_changeids: KnownChangeIDs,
 ) -> set[ChangeId]:
     changeids_to_delete = set(known_changeids.keys()) - {
         changeid for changeid, commit, title, message in changes
@@ -240,17 +248,18 @@ async def get_changeids_to_delete(
         pull = known_changeids.get(changeid)
         if pull:
             console.log(
-                f"* [red]\\[to delete][/] '[red]{pull['head']['sha'][-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}"
+                f"* [red]\\[to delete][/] '[red]{pull['head']['sha'][-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}",
             )
         else:
             console.log(
-                f"* [red]\\[to delete][/] '[red].......[/] - [b]<missing pull request>[/] - {changeid}"
+                f"* [red]\\[to delete][/] '[red].......[/] - [b]<missing pull request>[/] - {changeid}",
             )
     return changeids_to_delete
 
 
 async def create_or_update_comments(
-    client: httpx.AsyncClient, pulls: list[PullRequest]
+    client: httpx.AsyncClient,
+    pulls: list[PullRequest],
 ) -> None:
     for pull in pulls:
         new_body = stack_comment_body(pulls, pull)
@@ -266,7 +275,8 @@ async def create_or_update_comments(
                 break
         else:
             await client.post(
-                f"issues/{pull['number']}/comments", json={"body": new_body}
+                f"issues/{pull['number']}/comments",
+                json={"body": new_body},
             )
 
 
@@ -280,7 +290,7 @@ def stack_comment_body(pulls: list[PullRequest], current_pull: PullRequest) -> s
     return body
 
 
-async def create_or_update_stack(
+async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     client: httpx.AsyncClient,
     stacked_base_branch: str,
     stacked_dest_branch: str,
@@ -294,7 +304,7 @@ async def create_or_update_stack(
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
         with console.status(
-            f"* updating stacked branch `{stacked_dest_branch}` ({commit[-7:]}) - {pull['html_url'] if pull else '<stack branch without associated pull>'})"
+            f"* updating stacked branch `{stacked_dest_branch}` ({commit[-7:]}) - {pull['html_url'] if pull else '<stack branch without associated pull>'})",
         ):
             r = await client.patch(
                 f"git/refs/heads/{stacked_dest_branch}",
@@ -302,7 +312,7 @@ async def create_or_update_stack(
             )
     else:
         with console.status(
-            f"* creating stacked branch `{stacked_dest_branch}` ({commit[-7:]})"
+            f"* creating stacked branch `{stacked_dest_branch}` ({commit[-7:]})",
         ):
             r = await client.post(
                 "git/refs",
@@ -317,7 +327,7 @@ async def create_or_update_stack(
     elif pull:
         action = "updated"
         with console.status(
-            f"* updating pull request `{title}` (#{pull['number']}) ({commit[-7:]})"
+            f"* updating pull request `{title}` (#{pull['number']}) ({commit[-7:]})",
         ):
             r = await client.patch(
                 f"pulls/{pull['number']}",
@@ -332,7 +342,7 @@ async def create_or_update_stack(
     else:
         action = "created"
         with console.status(
-            f"* creating stacked pull request `{title}` ({commit[-7:]})"
+            f"* creating stacked pull request `{title}` ({commit[-7:]})",
         ):
             r = await client.post(
                 "pulls",
@@ -350,7 +360,9 @@ async def create_or_update_stack(
 
 
 async def check_and_update_pull_status(
-    client: httpx.AsyncClient, pull: PullRequest, create_as_draft: bool
+    client: httpx.AsyncClient,
+    pull: PullRequest,
+    create_as_draft: bool,
 ) -> str:
     if create_as_draft:
         action = "draft"
@@ -387,24 +399,24 @@ async def delete_stack(
     pull = known_changeids[changeid]
     if pull:
         console.log(
-            f"* [red]\\[deleted][/] '[red]{pull['head']['sha'][-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}"
+            f"* [red]\\[deleted][/] '[red]{pull['head']['sha'][-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}",
         )
     else:
         console.log(
-            f"* [red]\\[deleted][/] '[red].......[/] - [b]<branch {stack_prefix}/{changeid}>[/] - {changeid}"
+            f"* [red]\\[deleted][/] '[red].......[/] - [b]<branch {stack_prefix}/{changeid}>[/] - {changeid}",
         )
 
 
 async def log_httpx_request(request: httpx.Request) -> None:
     console.print(
-        f"[purple]DEBUG: request: {request.method} {request.url} - Waiting for response[/]"
+        f"[purple]DEBUG: request: {request.method} {request.url} - Waiting for response[/]",
     )
 
 
 async def log_httpx_response(response: httpx.Response) -> None:
     request = response.request
     console.print(
-        f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]"
+        f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]",
     )
 
 
@@ -421,7 +433,9 @@ def get_trunk() -> str:
     if not trunk:
         try:
             dest_branch = subprocess.check_output(
-                "git rev-parse --abbrev-ref HEAD", shell=True, text=True
+                "git rev-parse --abbrev-ref HEAD",
+                shell=True,
+                text=True,
             ).strip()
         except subprocess.CalledProcessError:
             return ""
@@ -441,25 +455,28 @@ def get_trunk() -> str:
 def trunk_type(trunk: str) -> tuple[str, str]:
     result = trunk.split("/", maxsplit=1)
     if len(result) != 2:
-        raise argparse.ArgumentTypeError(
-            "stack-trunk is invalid. It must be origin/branch-name [/]"
-        )
+        msg = "stack-trunk is invalid. It must be origin/branch-name [/]"
+        raise argparse.ArgumentTypeError(msg)
     return result[0], result[1]
 
 
 @dataclasses.dataclass
-class LocalBranchInvalid(Exception):
+class LocalBranchInvalidError(Exception):
     message: str
 
 
 def check_local_branch(branch_name: str, branch_prefix: str) -> None:
     if branch_name.startswith(branch_prefix) and re.search(
-        r"I[0-9a-z]{40}$", branch_name
+        r"I[0-9a-z]{40}$",
+        branch_name,
     ):
-        raise LocalBranchInvalid("Local branch is a branch generated by Mergify CLI")
+        msg = "Local branch is a branch generated by Mergify CLI"
+        raise LocalBranchInvalidError(msg)
 
 
-async def stack(
+# TODO(charly): fix PLR0913,PLR0914,PLR0915,PLR0917 (number of arguments, local
+# variables and statements)
+async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     token: str,
     next_only: bool,
     branch_prefix: str,
@@ -472,10 +489,10 @@ async def stack(
 
     try:
         check_local_branch(branch_name=dest_branch, branch_prefix=branch_prefix)
-    except LocalBranchInvalid as e:
+    except LocalBranchInvalidError as e:
         console.log(f"[red] {e.message} [/]")
         console.log(
-            "You should run `mergify stack` on the branch you created in the first place"
+            "You should run `mergify stack` on the branch you created in the first place",
         )
         sys.exit(1)
 
@@ -514,8 +531,8 @@ async def stack(
         commit
         for commit in reversed(
             (await git(f"log --format='%H' {base_commit_sha}..{dest_branch}")).split(
-                "\n"
-            )
+                "\n",
+            ),
         )
         if commit.strip()
     ]
@@ -544,7 +561,7 @@ async def stack(
 
             tasks = [
                 asyncio.create_task(
-                    get_changeid_and_pull(client, user, stack_prefix, ref)
+                    get_changeid_and_pull(client, user, stack_prefix, ref),
                 )
                 for ref in refs
                 if not ref["ref"].endswith("/aio")
@@ -557,10 +574,14 @@ async def stack(
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
             changes = await get_local_changes(
-                commits, stack_prefix, known_changeids, create_as_draft
+                commits,
+                stack_prefix,
+                known_changeids,
+                create_as_draft,
             )
             changeids_to_delete = await get_changeids_to_delete(
-                changes, known_changeids
+                changes,
+                known_changeids,
             )
 
         if dry_run:
@@ -598,14 +619,14 @@ async def stack(
                         "draft": True,
                         "state": "",
                         "head": {"sha": ""},
-                    }
+                    },
                 )
             draft = ""
             if pull["draft"]:
                 draft = " [yellow](draft)[/]"
 
             console.log(
-                f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/]{draft} {pull['html_url']} - {changeid}"
+                f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/]{draft} {pull['html_url']} - {changeid}",
             )
             stacked_base_branch = stacked_dest_branch
             if continue_create_or_update and next_only:
@@ -618,7 +639,7 @@ async def stack(
         with console.status("Deleting unused branches..."):
             delete_tasks = [
                 asyncio.create_task(
-                    delete_stack(client, stack_prefix, changeid, known_changeids)
+                    delete_stack(client, stack_prefix, changeid, known_changeids),
                 )
                 for changeid in changeids_to_delete
             ]
@@ -638,7 +659,7 @@ def format_pull_description(message: str, depends_on: PullRequest | None) -> str
     return message + depends_on_header
 
 
-def GitHubToken(v: str) -> str:
+def GitHubToken(v: str) -> str:  # noqa: N802
     if not v:
         raise ValueError
     return v
@@ -647,7 +668,8 @@ def GitHubToken(v: str) -> str:
 def get_default_branch_prefix() -> str:
     try:
         result = subprocess.check_output(
-            "git config --get mergify-cli.stack-branch-prefix", shell=True
+            "git config --get mergify-cli.stack-branch-prefix",
+            shell=True,
         )
     except subprocess.CalledProcessError:
         result = b""
@@ -665,7 +687,7 @@ def get_default_token() -> str:
         except subprocess.CalledProcessError:
             console.print(
                 "error: please make sure that gh client is installed and you are authenticated, or set the "
-                "'GITHUB_TOKEN' environment variable"
+                "'GITHUB_TOKEN' environment variable",
             )
     if DEBUG:
         console.print(f"[purple]DEBUG: token: {token}[/]")
@@ -755,7 +777,7 @@ def cli() -> None:
     args = parse_args(sys.argv[1:])
 
     if args.debug:
-        global DEBUG
+        global DEBUG  # noqa: PLW0603
         DEBUG = True
 
     asyncio.run(args.func(args))

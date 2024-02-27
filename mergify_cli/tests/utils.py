@@ -35,7 +35,8 @@ class GitMock:
         if args in self._mocked:
             return self._mocked[args]
 
-        raise AssertionError(f"git_mock called with `{args}`, not mocked!")
+        msg = f"git_mock called with `{args}`, not mocked!"
+        raise AssertionError(msg)
 
     def commit(self, commit: Commit) -> None:
         self._commits.append(commit)
