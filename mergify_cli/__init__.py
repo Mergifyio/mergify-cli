@@ -36,7 +36,6 @@ import rich.console
 VERSION = importlib.metadata.version("mergify-cli")
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
-STACK_COMMENT_FIRST_LINE = "This pull request is part of a stack:\n"
 READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
 DRAFT_TEMPLATE = 'mutation { convertPullRequestToDraft(input: { pullRequestId: "%s" }) { clientMutationId } }'
 console = rich.console.Console(log_path=False, log_time=False)
@@ -261,15 +260,17 @@ async def create_or_update_comments(
     client: httpx.AsyncClient,
     pulls: list[PullRequest],
 ) -> None:
+    stack_comment = StackComment(pulls)
+
     for pull in pulls:
-        new_body = stack_comment_body(pulls, pull)
+        new_body = stack_comment.body(pull)
 
         r = await client.get(f"issues/{pull['number']}/comments")
         check_for_status(r)
 
         comments = typing.cast(list[Comment], r.json())
         for comment in comments:
-            if comment["body"].startswith(STACK_COMMENT_FIRST_LINE):
+            if StackComment.is_stack_comment(comment):
                 if comment["body"] != new_body:
                     await client.patch(comment["url"], json={"body": new_body})
                 break
@@ -285,14 +286,26 @@ async def create_or_update_comments(
             )
 
 
-def stack_comment_body(pulls: list[PullRequest], current_pull: PullRequest) -> str:
-    body = STACK_COMMENT_FIRST_LINE
-    for pull in pulls:
-        body += f"1. {pull['title']} ([#{pull['number']}]({pull['html_url']}))"
-        if pull == current_pull:
-            body += " 👈"
-        body += "\n"
-    return body
+@dataclasses.dataclass
+class StackComment:
+    pulls: list[PullRequest]
+
+    STACK_COMMENT_FIRST_LINE = "This pull request is part of a stack:\n"
+
+    def body(self, current_pull: PullRequest) -> str:
+        body = self.STACK_COMMENT_FIRST_LINE
+
+        for pull in self.pulls:
+            body += f"1. {pull['title']} ([#{pull['number']}]({pull['html_url']}))"
+            if pull == current_pull:
+                body += " 👈"
+            body += "\n"
+
+        return body
+
+    @staticmethod
+    def is_stack_comment(comment: Comment) -> bool:
+        return comment["body"].startswith(StackComment.STACK_COMMENT_FIRST_LINE)
 
 
 async def create_or_update_stack(  # noqa: PLR0913,PLR0917
