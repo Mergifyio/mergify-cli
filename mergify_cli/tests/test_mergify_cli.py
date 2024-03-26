@@ -212,6 +212,63 @@ async def test_stack_create(
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_create_single_pull(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    # Mock 1 commits on branch `current-branch`
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+
+    # Mock HTTP calls
+    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+        200,
+        json=[],
+    )
+    respx_mock.post("/repos/user/repo/git/refs").respond(200, json={})
+    post_pull_mock = respx_mock.post(
+        "/repos/user/repo/pulls",
+        json__title="Title commit 1",
+    ).respond(
+        200,
+        json={
+            "html_url": "https://github.com/repo/user/pull/1",
+            "number": "1",
+            "title": "Title commit 1",
+            "head": {"sha": "commit1_sha"},
+            "state": "open",
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
+
+    await mergify_cli.stack(
+        token="",
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+    )
+
+    # Pull request is created without stack comment
+    assert len(post_pull_mock.calls) == 1
+    assert json.loads(post_pull_mock.calls.last.request.content) == {
+        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "base": "main",
+        "title": "Title commit 1",
+        "body": "Message commit 1",
+        "draft": False,
+    }
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
 async def test_stack_update(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,
