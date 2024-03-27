@@ -274,6 +274,11 @@ async def create_or_update_comments(
                     await client.patch(comment["url"], json={"body": new_body})
                 break
         else:
+            # NOTE(charly): dont't create a stack comment if there is only one
+            # pull, it's not a stack
+            if len(pulls) == 1:
+                continue
+
             await client.post(
                 f"issues/{pull['number']}/comments",
                 json={"body": new_body},
