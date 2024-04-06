@@ -27,12 +27,17 @@ class Commit(typing.TypedDict):
 class GitMock:
     _mocked: dict[str, str] = dataclasses.field(init=False, default_factory=dict)
     _commits: list[Commit] = dataclasses.field(init=False, default_factory=list)
+    _called: list[str] = dataclasses.field(init=False, default_factory=list)
 
     def mock(self, command: str, output: str) -> None:
         self._mocked[command] = output
 
+    def has_been_called_with(self, args: str) -> bool:
+        return args in self._called
+
     async def __call__(self, args: str) -> str:
         if args in self._mocked:
+            self._called.append(args)
             return self._mocked[args]
 
         msg = f"git_mock called with `{args}`, not mocked!"

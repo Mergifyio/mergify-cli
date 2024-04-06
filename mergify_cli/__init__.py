@@ -496,6 +496,7 @@ def check_local_branch(branch_name: str, branch_prefix: str) -> None:
 # variables and statements)
 async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     token: str,
+    skip_rebase: bool,
     next_only: bool,
     branch_prefix: str,
     dry_run: bool,
@@ -525,11 +526,14 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     stack_prefix = f"{branch_prefix}/{dest_branch}"
 
     if not dry_run:
-        with console.status(
-            f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
-        ):
-            await git(f"pull --rebase {remote} {base_branch}")
-        console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
+        if skip_rebase:
+            console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
+        else:
+            with console.status(
+                f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
+            ):
+                await git(f"pull --rebase {remote} {base_branch}")
+            console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
 
         with console.status(
             f"Pushing branch `{dest_branch}` to `{remote}/{stack_prefix}/aio`...",
@@ -719,6 +723,7 @@ async def stack_main(args: argparse.Namespace) -> None:
 
     await stack(
         args.token,
+        args.skip_rebase,
         args.next_only,
         args.branch_prefix,
         args.dry_run,
@@ -764,6 +769,12 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         "-x",
         action="store_true",
         help="Only rebase and update the next pull request of the stack",
+    )
+    stack_parser.add_argument(
+        "--skip-rebase",
+        "-R",
+        action="store_true",
+        help="Skip stack rebase",
     )
     stack_parser.add_argument(
         "--draft",
