@@ -318,6 +318,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     message: str,
     known_changeids: KnownChangeIDs,
     create_as_draft: bool,
+    keep_pull_request_title_and_body: bool,
 ) -> tuple[PullRequest, str]:
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
@@ -347,15 +348,14 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
         with console.status(
             f"* updating pull request `{title}` (#{pull['number']}) ({commit[-7:]})",
         ):
-            r = await client.patch(
-                f"pulls/{pull['number']}",
-                json={
-                    "title": title,
-                    "body": message,
-                    "head": stacked_dest_branch,
-                    "base": stacked_base_branch,
-                },
-            )
+            pull_changes = {
+                "head": stacked_dest_branch,
+                "base": stacked_base_branch,
+            }
+            if not keep_pull_request_title_and_body:
+                pull_changes.update({"title": title, "body": message})
+
+            r = await client.patch(f"pulls/{pull['number']}", json=pull_changes)
             check_for_status(r)
     else:
         action = "created"
@@ -502,6 +502,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     dry_run: bool,
     trunk: tuple[str, str],
     create_as_draft: bool = False,
+    keep_pull_request_title_and_body: bool = False,
 ) -> None:
     os.chdir((await git("rev-parse --show-toplevel")).strip())
     dest_branch = await git("rev-parse --abbrev-ref HEAD")
@@ -628,6 +629,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
                     format_pull_description(message, depends_on),
                     known_changeids,
                     create_as_draft,
+                    keep_pull_request_title_and_body,
                 )
                 pulls.append(pull)
             else:
@@ -729,6 +731,7 @@ async def stack_main(args: argparse.Namespace) -> None:
         args.dry_run,
         args.trunk,
         args.draft,
+        args.keep_pull_request_title_and_body,
     )
 
 
@@ -781,6 +784,12 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         "-d",
         action="store_true",
         help="Create stacked pull request as draft",
+    )
+    stack_parser.add_argument(
+        "--keep-pull-request-title-and-body",
+        "-k",
+        action="store_true",
+        help="Don't update the title and body of already opened pull requests",
     )
     stack_parser.add_argument(
         "--trunk",

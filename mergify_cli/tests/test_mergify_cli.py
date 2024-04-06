@@ -429,6 +429,83 @@ async def test_stack_update(
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_update_keep_title_and_body(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    # Mock 1 commits on branch `current-branch`
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit_sha",
+            title="New Title that should be ignored",
+            message="New Message that should be ignored",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+
+    # Mock HTTP calls: the stack already exists but it's out of date, it should
+    # be updated
+    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+        200,
+        json=[
+            {
+                "ref": "refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+        ],
+    )
+    respx_mock.get(
+        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=open",
+    ).respond(
+        200,
+        json=[
+            {
+                "html_url": "",
+                "number": "123",
+                "title": "Title",
+                "head": {"sha": "previous_commit_sha"},
+                "state": "open",
+                "draft": False,
+                "node_id": "",
+            },
+        ],
+    )
+    respx_mock.patch(
+        "/repos/user/repo/git/refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    ).respond(200, json={})
+    patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
+        200,
+        json={},
+    )
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+
+    await mergify_cli.stack(
+        token="",
+        skip_rebase=False,
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+        keep_pull_request_title_and_body=True,
+    )
+
+    # The pull request is updated
+    assert len(patch_pull_mock.calls) == 1
+    assert json.loads(patch_pull_mock.calls.last.request.content) == {
+        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "base": "main",
+    }
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
 async def test_stack_on_destination_branch_raises_an_error(
     git_mock: test_utils.GitMock,
 ) -> None:
