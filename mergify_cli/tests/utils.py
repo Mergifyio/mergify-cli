@@ -60,3 +60,9 @@ class GitMock:
             "log --format='%H' base_commit_sha..current-branch",
             "\n".join(c["sha"] for c in reversed(self._commits)),
         )
+        self.mock(f"branch mergify-cli-tmp {commit['sha']}", "")
+        self.mock("branch -D mergify-cli-tmp", "")
+        self.mock(
+            f"push -f origin mergify-cli-tmp:/current-branch/{commit['change_id']}",
+            "",
+        )

@@ -122,7 +122,6 @@ async def test_stack_create(
         200,
         json=[],
     )
-    respx_mock.post("/repos/user/repo/git/refs").respond(200, json={})
     post_pull1_mock = respx_mock.post(
         "/repos/user/repo/pulls",
         json__title="Title commit 1",
@@ -232,7 +231,6 @@ async def test_stack_create_single_pull(
         200,
         json=[],
     )
-    respx_mock.post("/repos/user/repo/git/refs").respond(200, json={})
     post_pull_mock = respx_mock.post(
         "/repos/user/repo/pulls",
         json__title="Title commit 1",
@@ -311,9 +309,6 @@ async def test_stack_update_no_rebase(
             },
         ],
     )
-    respx_mock.patch(
-        "/repos/user/repo/git/refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
-    ).respond(200, json={})
     patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
         200,
         json={},
@@ -390,9 +385,6 @@ async def test_stack_update(
             },
         ],
     )
-    respx_mock.patch(
-        "/repos/user/repo/git/refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
-    ).respond(200, json={})
     patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
         200,
         json={},
@@ -469,9 +461,6 @@ async def test_stack_update_keep_title_and_body(
             },
         ],
     )
-    respx_mock.patch(
-        "/repos/user/repo/git/refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
-    ).respond(200, json={})
     patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
         200,
         json={},
