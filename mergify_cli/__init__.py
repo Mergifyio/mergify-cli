@@ -16,6 +16,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import dataclasses
 import importlib.metadata
 import os
@@ -63,7 +64,8 @@ def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 500:
         data = response.json()
         console.print(f"url: {response.request.url}", style="red")
-        console.print(f"data: {response.request.content.decode()}", style="red")
+        with contextlib.suppress(httpx.RequestNotRead):
+            console.print(f"data: {response.request.content.decode()}", style="red")
         console.print(
             f"HTTPError {response.status_code}: {data['message']}",
             style="red",
