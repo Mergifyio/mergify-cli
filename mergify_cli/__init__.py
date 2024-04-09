@@ -310,6 +310,7 @@ class StackComment:
 
 async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     client: httpx.AsyncClient,
+    remote: str,
     stacked_base_branch: str,
     stacked_dest_branch: str,
     changeid: ChangeId,
@@ -322,23 +323,16 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
 ) -> tuple[PullRequest, str]:
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
-        with console.status(
-            f"* updating stacked branch `{stacked_dest_branch}` ({commit[-7:]}) - {pull['html_url'] if pull else '<stack branch without associated pull>'})",
-        ):
-            r = await client.patch(
-                f"git/refs/heads/{stacked_dest_branch}",
-                json={"sha": commit, "force": True},
-            )
+        message = f"* updating stacked branch `{stacked_dest_branch}` ({commit[-7:]}) - {pull['html_url'] if pull else '<stack branch without associated pull>'})"
     else:
-        with console.status(
-            f"* creating stacked branch `{stacked_dest_branch}` ({commit[-7:]})",
-        ):
-            r = await client.post(
-                "git/refs",
-                json={"ref": f"refs/heads/{stacked_dest_branch}", "sha": commit},
-            )
+        message = f"* creating stacked branch `{stacked_dest_branch}` ({commit[-7:]})"
 
-    check_for_status(r)
+    with console.status(message):
+        await git(f"branch stack-branch-tmp {commit}")
+        try:
+            await git(f"push -f {remote} stack-branch-tmp:{stacked_dest_branch}")
+        finally:
+            await git("branch -D stack-branch-tmp")
 
     pull = known_changeids.get(changeid)
     if pull and pull["head"]["sha"] == commit:
@@ -536,12 +530,6 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
                 await git(f"pull --rebase {remote} {base_branch}")
             console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
 
-        with console.status(
-            f"Pushing branch `{dest_branch}` to `{remote}/{stack_prefix}/aio`...",
-        ):
-            await git(f"push -f {remote} {dest_branch}:{stack_prefix}/aio")
-        console.log(f"branch `{dest_branch}` pushed to `{remote}/{stack_prefix}/aio` ")
-
     base_commit_sha = await git(f"merge-base --fork-point {remote}/{base_branch}")
     if not base_commit_sha:
         console.log(
@@ -587,6 +575,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
                     get_changeid_and_pull(client, user, stack_prefix, ref),
                 )
                 for ref in refs
+                # For backward compat
                 if not ref["ref"].endswith("/aio")
             ]
             if tasks:
@@ -621,6 +610,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
             if continue_create_or_update:
                 pull, action = await create_or_update_stack(
                     client,
+                    remote,
                     stacked_base_branch,
                     stacked_dest_branch,
                     changeid,
