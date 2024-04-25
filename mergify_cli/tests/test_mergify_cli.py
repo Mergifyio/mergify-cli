@@ -15,6 +15,7 @@
 
 import json
 import pathlib
+import subprocess
 import typing
 from unittest import mock
 
@@ -526,3 +527,20 @@ async def test_stack_without_common_commit_raises_an_error(
             dry_run=False,
             trunk=("origin", "main"),
         )
+
+
+@pytest.mark.parametrize(
+    ("default_arg_fct", "config_get_result", "expected_default"),
+    [
+        (mergify_cli.get_default_keep_pr_title_body, b"true", True),
+        (mergify_cli.get_trunk, "dummy-origin/main", "dummy-origin/main"),
+        (mergify_cli.get_default_branch_prefix, b"dummy-prefix", "dummy-prefix"),
+    ],
+)
+def test_defaults_config_args_set(
+    default_arg_fct: typing.Callable[[], bool | str],
+    config_get_result: bytes,
+    expected_default: bool,
+) -> None:
+    with mock.patch.object(subprocess, "check_output", return_value=config_get_result):
+        assert default_arg_fct() == expected_default

@@ -696,6 +696,18 @@ def get_default_branch_prefix() -> str:
     return result.decode().strip() or "mergify_cli"
 
 
+def get_default_keep_pr_title_body() -> bool:
+    try:
+        result = subprocess.check_output(
+            "git config --get mergify-cli.stack-keep-pr-title-body",
+            shell=True,
+        )
+    except subprocess.CalledProcessError:
+        result = b"false"
+
+    return result.decode().strip() == "true"
+
+
 def get_default_token() -> str:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -749,7 +761,11 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", "-n", action="store_true")
     sub_parsers = parser.add_subparsers(dest="action")
 
-    stack_parser = sub_parsers.add_parser("stack", help="create a pull requests stack")
+    stack_parser = sub_parsers.add_parser(
+        "stack",
+        description="Stacked Pull Requests CLI",
+        help="Create a pull requests stack",
+    )
     stack_parser.set_defaults(func=stack_main)
     stack_parser.add_argument(
         "--setup",
@@ -784,19 +800,23 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         "--keep-pull-request-title-and-body",
         "-k",
         action="store_true",
-        help="Don't update the title and body of already opened pull requests",
+        default=get_default_keep_pr_title_body(),
+        help="Don't update the title and body of already opened pull requests. "
+        "Default fetched from git config if added with `git config --add mergify-cli.stack-keep-pr-title-body true`",
     )
     stack_parser.add_argument(
         "--trunk",
         "-t",
         type=trunk_type,
         default=get_trunk(),
-        help="Change the target branch of the stack",
+        help="Change the target branch of the stack. "
+        "Default fetched from git config if added with `git config --add mergify-cli.stack-trunk origin/branch-name`",
     )
     stack_parser.add_argument(
         "--branch-prefix",
         default=get_default_branch_prefix(),
-        help="branch prefix used to create stacked PR",
+        help="Branch prefix used to create stacked PR. "
+        "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
     )
 
     known_args, _ = parser.parse_known_args(args)
