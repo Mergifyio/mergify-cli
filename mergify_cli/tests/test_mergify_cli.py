@@ -37,6 +37,16 @@ def _change_working_directory(
 
 
 @pytest.fixture()
+def _git_repo() -> None:
+    subprocess.call(["git", "init", "--initial-branch=main"])
+    subprocess.call(["git", "config", "user.email", "test@example.com"])
+    subprocess.call(["git", "config", "user.name", "Test User"])
+    subprocess.call(["git", "commit", "--allow-empty", "-m", "Initial commit"])
+    subprocess.call(["git", "config", "--add", "branch.main.merge", "refs/heads/main"])
+    subprocess.call(["git", "config", "--add", "branch.main.remote", "origin"])
+
+
+@pytest.fixture()
 def git_mock(
     tmp_path: pathlib.Path,
 ) -> typing.Generator[test_utils.GitMock, None, None]:
@@ -58,6 +68,7 @@ def git_mock(
         yield git_mock_object
 
 
+@pytest.mark.usefixtures("_git_repo")
 def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
         mergify_cli.parse_args(["--help"])
@@ -66,6 +77,26 @@ def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "usage: " in stdout
     assert "positional arguments:" in stdout
     assert "options:" in stdout
+
+
+@pytest.mark.usefixtures("_git_repo")
+def test_get_branch_name() -> None:
+    assert mergify_cli.git_get_branch_name() == "main"
+
+
+@pytest.mark.usefixtures("_git_repo")
+def test_get_target_branch() -> None:
+    assert mergify_cli.git_get_target_branch("main") == "main"
+
+
+@pytest.mark.usefixtures("_git_repo")
+def test_get_remote_for_branch() -> None:
+    assert mergify_cli.git_get_remote_for_branch("main") == "origin"
+
+
+@pytest.mark.usefixtures("_git_repo")
+def test_get_trunk() -> None:
+    assert mergify_cli.get_trunk() == "origin/main"
 
 
 @pytest.mark.parametrize(
@@ -533,7 +564,6 @@ async def test_stack_without_common_commit_raises_an_error(
     ("default_arg_fct", "config_get_result", "expected_default"),
     [
         (mergify_cli.get_default_keep_pr_title_body, b"true", True),
-        (mergify_cli.get_trunk, "dummy-origin/main", "dummy-origin/main"),
         (mergify_cli.get_default_branch_prefix, b"dummy-prefix", "dummy-prefix"),
     ],
 )

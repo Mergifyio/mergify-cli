@@ -108,6 +108,8 @@ ignore = [
     "S404",
     # NOTE(charly): `subprocess` call with `shell=True`
     "S602",
+    # NOTE(jd): likely a false positive https://github.com/PyCQA/bandit/issues/333
+    "S603",
     # NOTE(charly): Starting a process with a partial executable path
     "S607",
     # NOTE(charly): Boolean-typed positional argument in function definition.
