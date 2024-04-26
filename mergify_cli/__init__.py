@@ -239,7 +239,7 @@ async def get_local_changes(
     return changes
 
 
-async def get_changeids_to_delete(
+def get_changeids_to_delete(
     changes: list[Change],
     known_changeids: KnownChangeIDs,
 ) -> set[ChangeId]:
@@ -424,13 +424,13 @@ async def delete_stack(
         )
 
 
-async def log_httpx_request(request: httpx.Request) -> None:
+async def log_httpx_request(request: httpx.Request) -> None:  # noqa: RUF029
     console.print(
         f"[purple]DEBUG: request: {request.method} {request.url} - Waiting for response[/]",
     )
 
 
-async def log_httpx_response(response: httpx.Response) -> None:
+async def log_httpx_response(response: httpx.Response) -> None:  # noqa: RUF029
     request = response.request
     console.print(
         f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]",
@@ -596,7 +596,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
                 known_changeids,
                 create_as_draft,
             )
-            changeids_to_delete = await get_changeids_to_delete(
+            changeids_to_delete = get_changeids_to_delete(
                 changes,
                 known_changeids,
             )
