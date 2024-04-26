@@ -2,14 +2,21 @@
 type = "poetry"
 
 [tool.poe.tasks.test]
+deps = ["setup"]
 cmd = "pytest -v --pyargs mergify_cli"
 
 
 [tool.poe.tasks.linters]
 help = "Run linters"
+deps = ["setup"]
 default_item_type = "cmd"
 sequence = [
   "ruff check .",
   "ruff format --check .",
   "mypy",
 ]
+
+[tool.poe.tasks.setup]
+help = "Sync poetry virtualenv"
+executor = { type  = "simple" }
+cmd = "./tools/poetry-install.sh"
