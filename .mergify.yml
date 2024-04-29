@@ -56,12 +56,11 @@ pull_request_rules:
           - devs
 
   - name: changelog requirements
-    conditions:
-      - base=main
+    conditions: []
     actions:
       post_check:
         title: |
-          {% if check_succeed %}
+          {% if check_succeeded %}
           Changelog requirements are present.
           {% else %}
           Changelog requirements are missing.
