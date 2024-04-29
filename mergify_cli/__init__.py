@@ -437,42 +437,60 @@ async def log_httpx_response(response: httpx.Response) -> None:  # noqa: RUF029
     )
 
 
+def git_get_branch_name() -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        text=True,
+    ).strip()
+
+
+def git_get_target_branch(branch: str) -> str:
+    target_branch = subprocess.check_output(
+        ["git", "config", "--get", "branch." + branch + ".merge"],
+        text=True,
+    ).strip()
+
+    return target_branch.removeprefix("refs/heads/")
+
+
+def git_get_remote_for_branch(branch: str) -> str:
+    return subprocess.check_output(
+        ["git", "config", "--get", "branch." + branch + ".remote"],
+        text=True,
+    ).strip()
+
+
 def get_trunk() -> str:
     try:
-        trunk = subprocess.check_output(
-            "git config --get mergify-cli.stack-trunk",
-            shell=True,
-            text=True,
-        ).strip()
+        branch_name = git_get_branch_name()
     except subprocess.CalledProcessError:
-        trunk = ""
-
-    if not trunk:
-        try:
-            dest_branch = subprocess.check_output(
-                "git rev-parse --abbrev-ref HEAD",
-                shell=True,
-                text=True,
-            ).strip()
-        except subprocess.CalledProcessError:
-            return ""
-
-        try:
-            trunk = subprocess.check_output(
-                f"git for-each-ref --format='%(upstream:short)' refs/heads/{dest_branch}",
-                shell=True,
-                text=True,
-            ).strip()
-        except subprocess.CalledProcessError:
-            trunk = ""
-
-    return trunk
+        console.print("error: can't get the current branch", style="red")
+        raise
+    try:
+        target_branch = git_get_target_branch(branch_name)
+    except subprocess.CalledProcessError:
+        # It's possible this has not been set; ignore
+        console.print("error: can't get the remote target branch", style="red")
+        console.print(
+            f"Please set the target branch with `git branch {branch_name} --set-upstream-to=<remote>/<branch>",
+            style="red",
+        )
+        raise
+    try:
+        remote = git_get_remote_for_branch(target_branch)
+    except subprocess.CalledProcessError:
+        console.print(
+            f"error: can't get the remote for branch {target_branch}",
+            style="red",
+        )
+        raise
+    return f"{remote}/{target_branch}"
 
 
 def trunk_type(trunk: str) -> tuple[str, str]:
     result = trunk.split("/", maxsplit=1)
     if len(result) != 2:
-        msg = "stack-trunk is invalid. It must be origin/branch-name [/]"
+        msg = "Trunk is invalid. It must be origin/branch-name [/]"
         raise argparse.ArgumentTypeError(msg)
     return result[0], result[1]
 
@@ -809,8 +827,7 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         "-t",
         type=trunk_type,
         default=get_trunk(),
-        help="Change the target branch of the stack. "
-        "Default fetched from git config if added with `git config --add mergify-cli.stack-trunk origin/branch-name`",
+        help="Change the target branch of the stack.",
     )
     stack_parser.add_argument(
         "--branch-prefix",
