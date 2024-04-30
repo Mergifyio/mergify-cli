@@ -52,17 +52,25 @@ def git_mock(
 ) -> typing.Generator[test_utils.GitMock, None, None]:
     git_mock_object = test_utils.GitMock()
     # Top level directory is a temporary path
-    git_mock_object.mock("rev-parse --show-toplevel", str(tmp_path))
+    git_mock_object.mock("rev-parse", "--show-toplevel", output=str(tmp_path))
     # Name of the current branch
-    git_mock_object.mock("rev-parse --abbrev-ref HEAD", "current-branch")
+    git_mock_object.mock("rev-parse", "--abbrev-ref", "HEAD", output="current-branch")
     # URL of the GitHub repository
     git_mock_object.mock(
-        "config --get remote.origin.url",
-        "https://github.com/user/repo",
+        "config",
+        "--get",
+        "remote.origin.url",
+        output="https://github.com/user/repo",
     )
     # Mock pull and push commands
-    git_mock_object.mock("pull --rebase origin main", "")
-    git_mock_object.mock("push -f origin current-branch:/current-branch/aio", "")
+    git_mock_object.mock("pull", "--rebase", "origin", "main", output="")
+    git_mock_object.mock(
+        "push",
+        "-f",
+        "origin",
+        "current-branch:/current-branch/aio",
+        output="",
+    )
 
     with mock.patch("mergify_cli.git", git_mock_object):
         yield git_mock_object
@@ -364,7 +372,7 @@ async def test_stack_update_no_rebase(
         dry_run=False,
         trunk=("origin", "main"),
     )
-    assert not git_mock.has_been_called_with("pull --rebase origin main")
+    assert not git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
 
     # The pull request is updated
     assert len(patch_pull_mock.calls) == 1
@@ -440,7 +448,7 @@ async def test_stack_update(
         dry_run=False,
         trunk=("origin", "main"),
     )
-    assert git_mock.has_been_called_with("pull --rebase origin main")
+    assert git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
 
     # The pull request is updated
     assert len(patch_pull_mock.calls) == 1
@@ -530,7 +538,7 @@ async def test_stack_update_keep_title_and_body(
 async def test_stack_on_destination_branch_raises_an_error(
     git_mock: test_utils.GitMock,
 ) -> None:
-    git_mock.mock("rev-parse --abbrev-ref HEAD", "main")
+    git_mock.mock("rev-parse", "--abbrev-ref", "HEAD", output="main")
 
     with pytest.raises(SystemExit, match="1"):
         await mergify_cli.stack(
@@ -547,7 +555,7 @@ async def test_stack_on_destination_branch_raises_an_error(
 async def test_stack_without_common_commit_raises_an_error(
     git_mock: test_utils.GitMock,
 ) -> None:
-    git_mock.mock("merge-base --fork-point origin/main", "")
+    git_mock.mock("merge-base", "--fork-point", "origin/main", output="")
 
     with pytest.raises(SystemExit, match="1"):
         await mergify_cli.stack(

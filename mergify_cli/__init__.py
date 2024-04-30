@@ -81,17 +81,17 @@ def check_for_status(response: httpx.Response) -> None:
     response.raise_for_status()
 
 
-async def git(args: str) -> str:
+async def git(*args: str) -> str:
     if DEBUG:
-        console.print(f"[purple]DEBUG: running: git {args} [/]")
-    proc = await asyncio.create_subprocess_shell(
-        f"git {args}",
+        console.print(f"[purple]DEBUG: running: git {' '.join(args)} [/]")
+    proc = await asyncio.create_subprocess_exec(
+        *["git", *args],
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
     stdout, _ = await proc.communicate()
     if proc.returncode != 0:
-        console.log(f"fail to run `git {args}`:", style="red")
+        console.log(f"fail to run `git {' '.join(args)}`:", style="red")
         console.log(f"{stdout.decode()}", style="red")
         sys.exit(1)
     return stdout.decode().strip()
@@ -112,7 +112,7 @@ def get_slug(url: str) -> tuple[str, str]:
 
 
 async def do_setup() -> None:
-    hooks_dir = pathlib.Path((await git("rev-parse --git-path hooks")).strip())
+    hooks_dir = pathlib.Path((await git("rev-parse", "--git-path", "hooks")).strip())
     installed_hook_file = hooks_dir / "commit-msg"
 
     new_hook_file = str(
@@ -196,8 +196,8 @@ async def get_local_changes(
 ) -> list[Change]:
     changes = []
     for commit in commits:
-        message = await git(f"log -1 --format='%b' {commit}")
-        title = await git(f"log -1 --format='%s' {commit}")
+        message = await git("log", "-1", "--format='%b'", commit)
+        title = await git("log", "-1", "--format='%s'", commit)
         changeids = CHANGEID_RE.findall(message)
         if not changeids:
             console.print(
@@ -333,11 +333,16 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
         )
 
     with console.status(status_message):
-        await git(f"branch {TMP_STACK_BRANCH} {commit}")
+        await git("branch", TMP_STACK_BRANCH, commit)
         try:
-            await git(f"push -f {remote} {TMP_STACK_BRANCH}:{stacked_dest_branch}")
+            await git(
+                "push",
+                "-f",
+                remote,
+                TMP_STACK_BRANCH + ":" + stacked_dest_branch,
+            )
         finally:
-            await git(f"branch -D {TMP_STACK_BRANCH}")
+            await git("branch", "-D", TMP_STACK_BRANCH)
 
     pull = known_changeids.get(changeid)
     if pull and pull["head"]["sha"] == commit:
@@ -521,8 +526,8 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     create_as_draft: bool = False,
     keep_pull_request_title_and_body: bool = False,
 ) -> None:
-    os.chdir((await git("rev-parse --show-toplevel")).strip())
-    dest_branch = await git("rev-parse --abbrev-ref HEAD")
+    os.chdir((await git("rev-parse", "--show-toplevel")).strip())
+    dest_branch = await git("rev-parse", "--abbrev-ref", "HEAD")
 
     try:
         check_local_branch(branch_name=dest_branch, branch_prefix=branch_prefix)
@@ -535,7 +540,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
 
     remote, base_branch = trunk
 
-    user, repo = get_slug(await git(f"config --get remote.{remote}.url"))
+    user, repo = get_slug(await git("config", "--get", f"remote.{remote}.url"))
 
     if base_branch == dest_branch:
         console.log("[red] base branch and destination branch are the same [/]")
@@ -550,10 +555,10 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
             with console.status(
                 f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
             ):
-                await git(f"pull --rebase {remote} {base_branch}")
+                await git("pull", "--rebase", remote, base_branch)
             console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
 
-    base_commit_sha = await git(f"merge-base --fork-point {remote}/{base_branch}")
+    base_commit_sha = await git("merge-base", "--fork-point", f"{remote}/{base_branch}")
     if not base_commit_sha:
         console.log(
             f"Common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
@@ -564,7 +569,9 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     commits = [
         commit
         for commit in reversed(
-            (await git(f"log --format='%H' {base_commit_sha}..{dest_branch}")).split(
+            (
+                await git("log", "--format='%H'", f"{base_commit_sha}..{dest_branch}")
+            ).split(
                 "\n",
             ),
         )

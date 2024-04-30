@@ -25,17 +25,20 @@ class Commit(typing.TypedDict):
 
 @dataclasses.dataclass
 class GitMock:
-    _mocked: dict[str, str] = dataclasses.field(init=False, default_factory=dict)
+    _mocked: dict[tuple[str, ...], str] = dataclasses.field(
+        init=False,
+        default_factory=dict,
+    )
     _commits: list[Commit] = dataclasses.field(init=False, default_factory=list)
-    _called: list[str] = dataclasses.field(init=False, default_factory=list)
+    _called: list[tuple[str, ...]] = dataclasses.field(init=False, default_factory=list)
 
-    def mock(self, command: str, output: str) -> None:
-        self._mocked[command] = output
+    def mock(self, *args: str, output: str) -> None:
+        self._mocked[args] = output
 
-    def has_been_called_with(self, args: str) -> bool:
+    def has_been_called_with(self, *args: str) -> bool:
         return args in self._called
 
-    async def __call__(self, args: str) -> str:
+    async def __call__(self, *args: str) -> str:
         if args in self._mocked:
             self._called.append(args)
             return self._mocked[args]
@@ -47,22 +50,30 @@ class GitMock:
         self._commits.append(commit)
 
         # Base commit SHA
-        self.mock("merge-base --fork-point origin/main", "base_commit_sha")
+        self.mock("merge-base", "--fork-point", "origin/main", output="base_commit_sha")
         # Commit message
         self.mock(
-            f"log -1 --format='%b' {commit['sha']}",
-            f"{commit['message']}\n\nChange-Id: {commit['change_id']}",
+            "log",
+            "-1",
+            "--format='%b'",
+            commit["sha"],
+            output=f"{commit['message']}\n\nChange-Id: {commit['change_id']}",
         )
         # Commit title
-        self.mock(f"log -1 --format='%s' {commit['sha']}", commit["title"])
+        self.mock("log", "-1", "--format='%s'", commit["sha"], output=commit["title"])
         # List of commit SHAs
         self.mock(
-            "log --format='%H' base_commit_sha..current-branch",
-            "\n".join(c["sha"] for c in reversed(self._commits)),
+            "log",
+            "--format='%H'",
+            "base_commit_sha..current-branch",
+            output="\n".join(c["sha"] for c in reversed(self._commits)),
         )
-        self.mock(f"branch mergify-cli-tmp {commit['sha']}", "")
-        self.mock("branch -D mergify-cli-tmp", "")
+        self.mock("branch", "mergify-cli-tmp", commit["sha"], output="")
+        self.mock("branch", "-D", "mergify-cli-tmp", output="")
         self.mock(
-            f"push -f origin mergify-cli-tmp:/current-branch/{commit['change_id']}",
-            "",
+            "push",
+            "-f",
+            "origin",
+            f"mergify-cli-tmp:/current-branch/{commit['change_id']}",
+            output="",
         )
