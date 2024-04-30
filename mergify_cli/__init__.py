@@ -23,7 +23,6 @@ import os
 import pathlib
 import re
 import shutil
-import subprocess
 import sys
 import typing
 from urllib import parse
@@ -81,20 +80,32 @@ def check_for_status(response: httpx.Response) -> None:
     response.raise_for_status()
 
 
-async def git(*args: str) -> str:
+@dataclasses.dataclass
+class CommandError(Exception):
+    command_args: tuple[str, ...]
+    returncode: int | None
+    stdout: bytes
+
+    def __str__(self) -> str:
+        return f"failed to run `{' '.join(self.command_args)}`: {self.stdout.decode()}"
+
+
+async def _run_command(*args: str) -> str:
     if DEBUG:
         console.print(f"[purple]DEBUG: running: git {' '.join(args)} [/]")
     proc = await asyncio.create_subprocess_exec(
-        *["git", *args],
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
     stdout, _ = await proc.communicate()
     if proc.returncode != 0:
-        console.log(f"fail to run `git {' '.join(args)}`:", style="red")
-        console.log(f"{stdout.decode()}", style="red")
-        sys.exit(1)
+        raise CommandError(args, proc.returncode, stdout)
     return stdout.decode().strip()
+
+
+async def git(*args: str) -> str:
+    return await _run_command("git", *args)
 
 
 def get_slug(url: str) -> tuple[str, str]:
@@ -112,7 +123,7 @@ def get_slug(url: str) -> tuple[str, str]:
 
 
 async def do_setup() -> None:
-    hooks_dir = pathlib.Path((await git("rev-parse", "--git-path", "hooks")).strip())
+    hooks_dir = pathlib.Path(await git("rev-parse", "--git-path", "hooks"))
     installed_hook_file = hooks_dir / "commit-msg"
 
     new_hook_file = str(
@@ -442,38 +453,29 @@ async def log_httpx_response(response: httpx.Response) -> None:  # noqa: RUF029
     )
 
 
-def git_get_branch_name() -> str:
-    return subprocess.check_output(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        text=True,
-    ).strip()
+async def git_get_branch_name() -> str:
+    return await git("rev-parse", "--abbrev-ref", "HEAD")
 
 
-def git_get_target_branch(branch: str) -> str:
-    target_branch = subprocess.check_output(
-        ["git", "config", "--get", "branch." + branch + ".merge"],
-        text=True,
-    ).strip()
-
-    return target_branch.removeprefix("refs/heads/")
+async def git_get_target_branch(branch: str) -> str:
+    return (await git("config", "--get", "branch." + branch + ".merge")).removeprefix(
+        "refs/heads/",
+    )
 
 
-def git_get_remote_for_branch(branch: str) -> str:
-    return subprocess.check_output(
-        ["git", "config", "--get", "branch." + branch + ".remote"],
-        text=True,
-    ).strip()
+async def git_get_remote_for_branch(branch: str) -> str:
+    return await git("config", "--get", "branch." + branch + ".remote")
 
 
-def get_trunk() -> str:
+async def get_trunk() -> str:
     try:
-        branch_name = git_get_branch_name()
-    except subprocess.CalledProcessError:
+        branch_name = await git_get_branch_name()
+    except CommandError:
         console.print("error: can't get the current branch", style="red")
         raise
     try:
-        target_branch = git_get_target_branch(branch_name)
-    except subprocess.CalledProcessError:
+        target_branch = await git_get_target_branch(branch_name)
+    except CommandError:
         # It's possible this has not been set; ignore
         console.print("error: can't get the remote target branch", style="red")
         console.print(
@@ -482,8 +484,8 @@ def get_trunk() -> str:
         )
         raise
     try:
-        remote = git_get_remote_for_branch(target_branch)
-    except subprocess.CalledProcessError:
+        remote = await git_get_remote_for_branch(target_branch)
+    except CommandError:
         console.print(
             f"error: can't get the remote for branch {target_branch}",
             style="red",
@@ -526,7 +528,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
     create_as_draft: bool = False,
     keep_pull_request_title_and_body: bool = False,
 ) -> None:
-    os.chdir((await git("rev-parse", "--show-toplevel")).strip())
+    os.chdir(await git("rev-parse", "--show-toplevel"))
     dest_branch = await git("rev-parse", "--abbrev-ref", "HEAD")
 
     try:
@@ -575,7 +577,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
                 "\n",
             ),
         )
-        if commit.strip()
+        if commit
     ]
 
     known_changeids = KnownChangeIDs({})
@@ -709,36 +711,30 @@ def GitHubToken(v: str) -> str:  # noqa: N802
     return v
 
 
-def get_default_branch_prefix() -> str:
+async def get_default_branch_prefix() -> str:
     try:
-        result = subprocess.check_output(
-            ["git", "config", "--get", "mergify-cli.stack-branch-prefix"],
-            text=True,
-        )
-    except subprocess.CalledProcessError:
+        result = await git("config", "--get", "mergify-cli.stack-branch-prefix")
+    except CommandError:
         result = ""
 
-    return result.strip() or "mergify_cli"
+    return result or "mergify_cli"
 
 
-def get_default_keep_pr_title_body() -> bool:
+async def get_default_keep_pr_title_body() -> bool:
     try:
-        result = subprocess.check_output(
-            ["git", "config", "--get", "mergify-cli.stack-keep-pr-title-body"],
-            text=True,
-        )
-    except subprocess.CalledProcessError:
+        result = await git("config", "--get", "mergify-cli.stack-keep-pr-title-body")
+    except CommandError:
         return False
 
-    return result.strip() == "true"
+    return result == "true"
 
 
-def get_default_token() -> str:
+async def get_default_token() -> str:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         try:
-            token = subprocess.check_output(["gh", "auth", "token"], text=True).strip()
-        except subprocess.CalledProcessError:
+            token = await _run_command("gh", "auth", "token")
+        except CommandError:
             console.print(
                 "error: please make sure that gh client is installed and you are authenticated, or set the "
                 "'GITHUB_TOKEN' environment variable",
@@ -765,7 +761,7 @@ async def stack_main(args: argparse.Namespace) -> None:
     )
 
 
-def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
+async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--version",
@@ -777,7 +773,7 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="debug mode")
     parser.add_argument(
         "--token",
-        default=get_default_token(),
+        default=await get_default_token(),
         type=GitHubToken,
         help="GitHub personal access token",
     )
@@ -823,7 +819,7 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         "--keep-pull-request-title-and-body",
         "-k",
         action="store_true",
-        default=get_default_keep_pr_title_body(),
+        default=await get_default_keep_pr_title_body(),
         help="Don't update the title and body of already opened pull requests. "
         "Default fetched from git config if added with `git config --add mergify-cli.stack-keep-pr-title-body true`",
     )
@@ -831,12 +827,12 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         "--trunk",
         "-t",
         type=trunk_type,
-        default=get_trunk(),
+        default=await get_trunk(),
         help="Change the target branch of the stack.",
     )
     stack_parser.add_argument(
         "--branch-prefix",
-        default=get_default_branch_prefix(),
+        default=await get_default_branch_prefix(),
         help="Branch prefix used to create stacked PR. "
         "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
     )
@@ -848,11 +844,15 @@ def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
-def cli() -> None:
-    args = parse_args(sys.argv[1:])
+async def main() -> None:
+    args = await parse_args(sys.argv[1:])
 
     if args.debug:
         global DEBUG  # noqa: PLW0603
         DEBUG = True
 
-    asyncio.run(args.func(args))
+    await args.func(args)
+
+
+def cli() -> None:
+    asyncio.run(main())

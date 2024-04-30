@@ -12,7 +12,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-
+import collections
 import json
 import pathlib
 import subprocess
@@ -77,9 +77,9 @@ def git_mock(
 
 
 @pytest.mark.usefixtures("_git_repo")
-def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
-        mergify_cli.parse_args(["--help"])
+        await mergify_cli.parse_args(["--help"])
 
     stdout = capsys.readouterr().out
     assert "usage: " in stdout
@@ -88,23 +88,23 @@ def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 @pytest.mark.usefixtures("_git_repo")
-def test_get_branch_name() -> None:
-    assert mergify_cli.git_get_branch_name() == "main"
+async def test_get_branch_name() -> None:
+    assert await mergify_cli.git_get_branch_name() == "main"
 
 
 @pytest.mark.usefixtures("_git_repo")
-def test_get_target_branch() -> None:
-    assert mergify_cli.git_get_target_branch("main") == "main"
+async def test_get_target_branch() -> None:
+    assert await mergify_cli.git_get_target_branch("main") == "main"
 
 
 @pytest.mark.usefixtures("_git_repo")
-def test_get_remote_for_branch() -> None:
-    assert mergify_cli.git_get_remote_for_branch("main") == "origin"
+async def test_get_remote_for_branch() -> None:
+    assert await mergify_cli.git_get_remote_for_branch("main") == "origin"
 
 
 @pytest.mark.usefixtures("_git_repo")
-def test_get_trunk() -> None:
-    assert mergify_cli.get_trunk() == "origin/main"
+async def test_get_trunk() -> None:
+    assert await mergify_cli.get_trunk() == "origin/main"
 
 
 @pytest.mark.parametrize(
@@ -575,10 +575,13 @@ async def test_stack_without_common_commit_raises_an_error(
         (mergify_cli.get_default_branch_prefix, "dummy-prefix", "dummy-prefix"),
     ],
 )
-def test_defaults_config_args_set(
-    default_arg_fct: typing.Callable[[], bool | str],
+async def test_defaults_config_args_set(
+    default_arg_fct: collections.abc.Callable[
+        [],
+        collections.abc.Awaitable[bool | str],
+    ],
     config_get_result: bytes,
     expected_default: bool,
 ) -> None:
-    with mock.patch.object(subprocess, "check_output", return_value=config_get_result):
-        assert default_arg_fct() == expected_default
+    with mock.patch.object(mergify_cli, "_run_command", return_value=config_get_result):
+        assert (await default_arg_fct()) == expected_default
