@@ -563,8 +563,8 @@ async def test_stack_without_common_commit_raises_an_error(
 @pytest.mark.parametrize(
     ("default_arg_fct", "config_get_result", "expected_default"),
     [
-        (mergify_cli.get_default_keep_pr_title_body, b"true", True),
-        (mergify_cli.get_default_branch_prefix, b"dummy-prefix", "dummy-prefix"),
+        (mergify_cli.get_default_keep_pr_title_body, "true", True),
+        (mergify_cli.get_default_branch_prefix, "dummy-prefix", "dummy-prefix"),
     ],
 )
 def test_defaults_config_args_set(

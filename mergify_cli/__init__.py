@@ -705,34 +705,32 @@ def GitHubToken(v: str) -> str:  # noqa: N802
 def get_default_branch_prefix() -> str:
     try:
         result = subprocess.check_output(
-            "git config --get mergify-cli.stack-branch-prefix",
-            shell=True,
+            ["git", "config", "--get", "mergify-cli.stack-branch-prefix"],
+            text=True,
         )
     except subprocess.CalledProcessError:
-        result = b""
+        result = ""
 
-    return result.decode().strip() or "mergify_cli"
+    return result.strip() or "mergify_cli"
 
 
 def get_default_keep_pr_title_body() -> bool:
     try:
         result = subprocess.check_output(
-            "git config --get mergify-cli.stack-keep-pr-title-body",
-            shell=True,
+            ["git", "config", "--get", "mergify-cli.stack-keep-pr-title-body"],
+            text=True,
         )
     except subprocess.CalledProcessError:
-        result = b"false"
+        return False
 
-    return result.decode().strip() == "true"
+    return result.strip() == "true"
 
 
 def get_default_token() -> str:
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         try:
-            token = (
-                subprocess.check_output("gh auth token", shell=True).decode().strip()
-            )
+            token = subprocess.check_output(["gh", "auth", "token"], text=True).strip()
         except subprocess.CalledProcessError:
             console.print(
                 "error: please make sure that gh client is installed and you are authenticated, or set the "
