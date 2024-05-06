@@ -18,7 +18,7 @@ source = "git-tag"
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
 mypy-extensions = "^1.0.0"
-ruff = ">=0.0.277,<0.4.3"
+ruff = ">=0.0.277,<0.4.4"
 pytest = {version = ">=6.2.5"}
 poethepoet = ">=0.21,<0.27"
 pytest-asyncio = "^0.23.2"
