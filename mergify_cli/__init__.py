@@ -516,9 +516,9 @@ def check_local_branch(branch_name: str, branch_prefix: str) -> None:
         raise LocalBranchInvalidError(msg)
 
 
-# TODO(charly): fix PLR0913,PLR0914,PLR0915,PLR0917 (number of arguments, local
-# variables and statements)
-async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917
+# TODO(charly): fix code to conform to linter (number of arguments, local
+# variables, statements, positional arguments, branches)
+async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917,PLR0912
     token: str,
     skip_rebase: bool,
     next_only: bool,
