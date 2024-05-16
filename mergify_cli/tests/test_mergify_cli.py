@@ -498,6 +498,7 @@ async def test_stack_update_keep_title_and_body(
                 "state": "open",
                 "draft": False,
                 "node_id": "",
+                "body": "DONT TOUCH ME\n\nDepends-On: #12345\n",
             },
         ],
     )
@@ -531,6 +532,7 @@ async def test_stack_update_keep_title_and_body(
     assert json.loads(patch_pull_mock.calls.last.request.content) == {
         "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
+        "body": "DONT TOUCH ME",
     }
 
 
