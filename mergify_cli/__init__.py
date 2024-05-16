@@ -36,6 +36,7 @@ import rich.console
 VERSION = importlib.metadata.version("mergify-cli")
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
+DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
 READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
 DRAFT_TEMPLATE = 'mutation { convertPullRequestToDraft(input: { pullRequestId: "%s" }) { clientMutationId } }'
 console = rich.console.Console(log_path=False, log_time=False)
@@ -160,6 +161,7 @@ class PullRequest(typing.TypedDict):
     html_url: str
     number: str
     title: str
+    body: str
     head: HeadRef
     state: str
     draft: bool
@@ -331,6 +333,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     commit: str,
     title: str,
     message: str,
+    depends_on: PullRequest | None,
     known_changeids: KnownChangeIDs,
     create_as_draft: bool,
     keep_pull_request_title_and_body: bool,
@@ -367,8 +370,17 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 "head": stacked_dest_branch,
                 "base": stacked_base_branch,
             }
-            if not keep_pull_request_title_and_body:
-                pull_changes.update({"title": title, "body": message})
+            if keep_pull_request_title_and_body:
+                pull_changes.update(
+                    {"body": format_pull_description(pull["body"], depends_on)},
+                )
+            else:
+                pull_changes.update(
+                    {
+                        "title": title,
+                        "body": format_pull_description(message, depends_on),
+                    },
+                )
 
             r = await client.patch(f"pulls/{pull['number']}", json=pull_changes)
             check_for_status(r)
@@ -381,7 +393,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 "pulls",
                 json={
                     "title": title,
-                    "body": message,
+                    "body": format_pull_description(message, depends_on),
                     "draft": create_as_draft,
                     "head": stacked_dest_branch,
                     "base": stacked_base_branch,
@@ -440,13 +452,13 @@ async def delete_stack(
         )
 
 
-async def log_httpx_request(request: httpx.Request) -> None:  # noqa: RUF029
+def log_httpx_request(request: httpx.Request) -> None:
     console.print(
         f"[purple]DEBUG: request: {request.method} {request.url} - Waiting for response[/]",
     )
 
 
-async def log_httpx_response(response: httpx.Response) -> None:  # noqa: RUF029
+def log_httpx_response(response: httpx.Response) -> None:
     request = response.request
     console.print(
         f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]",
@@ -518,7 +530,7 @@ def check_local_branch(branch_name: str, branch_prefix: str) -> None:
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917,PLR0912
+async def stack(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
     token: str,
     skip_rebase: bool,
     next_only: bool,
@@ -648,7 +660,8 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917,PLR0912
                     changeid,
                     commit,
                     title,
-                    format_pull_description(message, depends_on),
+                    message,
+                    depends_on,
                     known_changeids,
                     create_as_draft,
                     keep_pull_request_title_and_body,
@@ -659,6 +672,7 @@ async def stack(  # noqa: PLR0913,PLR0914,PLR0915,PLR0917,PLR0912
                 pull = known_changeids.get(changeid) or PullRequest(
                     {
                         "title": "<not yet created>",
+                        "body": "<not yet created>",
                         "html_url": "<no-yet-created>",
                         "number": "-1",
                         "node_id": "na",
@@ -701,6 +715,7 @@ def format_pull_description(message: str, depends_on: PullRequest | None) -> str
         depends_on_header = f"\n\nDepends-On: #{depends_on['number']}"
 
     message = CHANGEID_RE.sub("", message).rstrip("\n")
+    message = DEPENDS_ON_RE.sub("", message).rstrip("\n")
 
     return message + depends_on_header
 
