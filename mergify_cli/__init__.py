@@ -209,8 +209,8 @@ async def get_local_changes(
 ) -> list[Change]:
     changes = []
     for commit in commits:
-        message = await git("log", "-1", "--format='%b'", commit)
-        title = await git("log", "-1", "--format='%s'", commit)
+        message = await git("log", "-1", "--format=%b", commit)
+        title = await git("log", "-1", "--format=%s", commit)
         changeids = CHANGEID_RE.findall(message)
         if not changeids:
             console.print(
@@ -584,7 +584,7 @@ async def stack(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         commit
         for commit in reversed(
             (
-                await git("log", "--format='%H'", f"{base_commit_sha}..{dest_branch}")
+                await git("log", "--format=%H", f"{base_commit_sha}..{dest_branch}")
             ).split(
                 "\n",
             ),
