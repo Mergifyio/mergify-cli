@@ -55,16 +55,16 @@ class GitMock:
         self.mock(
             "log",
             "-1",
-            "--format='%b'",
+            "--format=%b",
             commit["sha"],
             output=f"{commit['message']}\n\nChange-Id: {commit['change_id']}",
         )
         # Commit title
-        self.mock("log", "-1", "--format='%s'", commit["sha"], output=commit["title"])
+        self.mock("log", "-1", "--format=%s", commit["sha"], output=commit["title"])
         # List of commit SHAs
         self.mock(
             "log",
-            "--format='%H'",
+            "--format=%H",
             "base_commit_sha..current-branch",
             output="\n".join(c["sha"] for c in reversed(self._commits)),
         )
