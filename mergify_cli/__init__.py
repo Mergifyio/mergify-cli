@@ -148,7 +148,7 @@ class PullRequest(typing.TypedDict):
     html_url: str
     number: str
     title: str
-    body: str
+    body: str | None
     head: HeadRef
     state: str
     draft: bool
@@ -181,7 +181,12 @@ async def get_changeid_and_pull(
         msg = f"More than 1 pull found with this head: {branch}"
         raise RuntimeError(msg)
     if pulls:
-        return changeid, pulls[0]
+        pull = pulls[0]
+        if pull["body"] is None:
+            r = await client.get(f"pulls/{pull['number']}")
+            check_for_status(r)
+            pull = typing.cast(PullRequest, r.json())
+        return changeid, pull
     return changeid, None
 
 
@@ -358,6 +363,9 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 "base": stacked_base_branch,
             }
             if keep_pull_request_title_and_body:
+                if pull["body"] is None:
+                    msg = "GitHub returned a pull request without body set"
+                    raise RuntimeError(msg)
                 pull_changes.update(
                     {"body": format_pull_description(pull["body"], depends_on)},
                 )
