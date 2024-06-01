@@ -202,6 +202,7 @@ async def test_stack_create(
     )
 
     await mergify_cli.stack(
+        github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
         next_only=False,
@@ -289,6 +290,7 @@ async def test_stack_create_single_pull(
     respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
 
     await mergify_cli.stack(
+        github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
         next_only=False,
@@ -365,6 +367,7 @@ async def test_stack_update_no_rebase(
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
 
     await mergify_cli.stack(
+        github_server="https://api.github.com/",
         token="",
         skip_rebase=True,
         next_only=False,
@@ -441,6 +444,7 @@ async def test_stack_update(
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
 
     await mergify_cli.stack(
+        github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
         next_only=False,
@@ -518,6 +522,7 @@ async def test_stack_update_keep_title_and_body(
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
 
     await mergify_cli.stack(
+        github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
         next_only=False,
@@ -544,6 +549,7 @@ async def test_stack_on_destination_branch_raises_an_error(
 
     with pytest.raises(SystemExit, match="1"):
         await mergify_cli.stack(
+            github_server="https://api.github.com/",
             token="",
             skip_rebase=False,
             next_only=False,
@@ -561,6 +567,7 @@ async def test_stack_without_common_commit_raises_an_error(
 
     with pytest.raises(SystemExit, match="1"):
         await mergify_cli.stack(
+            github_server="https://api.github.com/",
             token="",
             skip_rebase=False,
             next_only=False,

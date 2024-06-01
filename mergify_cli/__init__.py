@@ -531,6 +531,7 @@ def check_local_branch(branch_name: str, branch_prefix: str) -> None:
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
 async def stack(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
+    github_server: str,
     token: str,
     skip_rebase: bool,
     next_only: bool,
@@ -600,7 +601,7 @@ async def stack(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         event_hooks = {}
 
     async with httpx.AsyncClient(
-        base_url=f"https://api.github.com/repos/{user}/{repo}/",
+        base_url=f"{github_server}/repos/{user}/{repo}/",
         headers={
             "Accept": "application/vnd.github.v3+json",
             "User-Agent": f"mergify_cli/{VERSION}",
@@ -726,6 +727,22 @@ def GitHubToken(v: str) -> str:  # noqa: N802
     return v
 
 
+async def get_default_github_server() -> str:
+    try:
+        result = await git("config", "--get", "mergify-cli.github-server")
+    except CommandError:
+        result = ""
+
+    url = parse.urlparse(result or "https://api.github.com/")
+    url = url._replace(scheme="https")
+
+    if url.hostname == "api.github.com":
+        url = url._replace(path="")
+    else:
+        url = url._replace(path="/api/v3")
+    return url.geturl()
+
+
 async def get_default_branch_prefix() -> str:
     try:
         result = await git("config", "--get", "mergify-cli.stack-branch-prefix")
@@ -765,6 +782,7 @@ async def stack_main(args: argparse.Namespace) -> None:
         return
 
     await stack(
+        args.github_server,
         args.token,
         args.skip_rebase,
         args.next_only,
@@ -793,6 +811,11 @@ async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         help="GitHub personal access token",
     )
     parser.add_argument("--dry-run", "-n", action="store_true")
+    parser.add_argument(
+        "--github-server",
+        action="store_true",
+        default=await get_default_github_server(),
+    )
     sub_parsers = parser.add_subparsers(dest="action")
 
     stack_parser = sub_parsers.add_parser(
