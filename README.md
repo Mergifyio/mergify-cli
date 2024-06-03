@@ -8,8 +8,8 @@ Before diving into its functionalities, let's grasp the concept of stacked pull 
 
 ## Documentation
 
-- [Setting up stacked PR automation in a repository](https://docs.mergify.com/stacked_prs/#setting-up-mergify-cli)
-- [Creating and managing your PR stack](https://docs.mergify.com/stacked_prs/#creating-stacked-pull-requests)
+- [Setting up stacked PR automation in a repository](https://docs.mergify.com/stacks/#setting-up-mergify-cli)
+- [Creating and managing your PR stack](https://docs.mergify.com/stacks/#creating-stacked-pull-requests)
 
 ## Contributing
 
