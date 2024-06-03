@@ -45,19 +45,6 @@ DEBUG = False
 TMP_STACK_BRANCH = "mergify-cli-tmp"
 
 
-def check_for_graphql_errors(response: httpx.Response) -> None:
-    data = response.json()
-    if "errors" in data:
-        console.print(f"url: {response.request.url}", style="red")
-        console.print(f"data: {response.request.content.decode()}", style="red")
-        if "errors" in data:
-            console.print(
-                "\n".join(f"* {e.get('message') or e}" for e in data["errors"]),
-                style="red",
-            )
-        sys.exit(1)
-
-
 def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
@@ -402,33 +389,6 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
             check_for_status(r)
             pull = typing.cast(PullRequest, r.json())
     return pull, action
-
-
-async def check_and_update_pull_status(
-    client: httpx.AsyncClient,
-    pull: PullRequest,
-    create_as_draft: bool,
-) -> str:
-    if create_as_draft:
-        action = "draft"
-        template = DRAFT_TEMPLATE
-    else:
-        action = "ready_for_review"
-        template = READY_FOR_REVIEW_TEMPLATE
-
-    r = await client.post(
-        "https://api.github.com/graphql",
-        headers={
-            "Accept": "application/vnd.github.v4.idl",
-            "User-Agent": f"mergify_cli/{VERSION}",
-            "Authorization": client.headers["Authorization"],
-        },
-        json={"query": template % pull["node_id"]},
-    )
-    check_for_status(r)
-    check_for_graphql_errors(r)
-
-    return action
 
 
 async def delete_stack(
