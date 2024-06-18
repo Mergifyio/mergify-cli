@@ -98,8 +98,8 @@ async def test_get_target_branch() -> None:
 
 
 @pytest.mark.usefixtures("_git_repo")
-async def test_get_remote_for_branch() -> None:
-    assert await mergify_cli.git_get_remote_for_branch("main") == "origin"
+async def test_get_target_remote() -> None:
+    assert await mergify_cli.git_get_target_remote("main") == "origin"
 
 
 @pytest.mark.usefixtures("_git_repo")
