@@ -443,7 +443,7 @@ async def git_get_target_branch(branch: str) -> str:
     )
 
 
-async def git_get_remote_for_branch(branch: str) -> str:
+async def git_get_target_remote(branch: str) -> str:
     return await git("config", "--get", "branch." + branch + ".remote")
 
 
@@ -463,15 +463,16 @@ async def get_trunk() -> str:
             style="red",
         )
         raise
+
     try:
-        remote = await git_get_remote_for_branch(target_branch)
+        target_remote = await git_get_target_remote(branch_name)
     except CommandError:
         console.print(
-            f"error: can't get the remote for branch {target_branch}",
+            f"error: can't get the target remote for branch {branch_name}",
             style="red",
         )
         raise
-    return f"{remote}/{target_branch}"
+    return f"{target_remote}/{target_branch}"
 
 
 def trunk_type(trunk: str) -> tuple[str, str]:
