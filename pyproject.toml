@@ -10,7 +10,7 @@ license = "Apache License"
 python = ">=3.10"
 httpx = ">=0.20.0"
 rich = ">=10.11.0"
-aiofiles = "^23.2.1"
+aiofiles = ">=23.2.1,<25.0.0"
 
 [tool.poetry-version-plugin]
 source = "git-tag"
