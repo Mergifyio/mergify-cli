@@ -23,7 +23,7 @@ pytest = {version = ">=6.2.5"}
 poethepoet = ">=0.21,<0.27"
 pytest-asyncio = "^0.23.2"
 respx = ">=0.20.2,<0.22.0"
-types-aiofiles = "^23.2.0.20240106"
+types-aiofiles = ">=23.2.0.20240106,<25.0.0.0"
 
 [tool.poetry.scripts]
 mergify = 'mergify_cli:cli'
