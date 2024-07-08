@@ -578,6 +578,7 @@ async def stack(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         },
         event_hooks=event_hooks,  # type: ignore[arg-type]
         follow_redirects=True,
+        timeout=5.0,
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
             r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")

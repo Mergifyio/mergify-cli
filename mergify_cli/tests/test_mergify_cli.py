@@ -36,7 +36,7 @@ def _change_working_directory(
     monkeypatch.chdir(tmp_path)
 
 
-@pytest.fixture()
+@pytest.fixture
 def _git_repo() -> None:
     subprocess.call(["git", "init", "--initial-branch=main"])
     subprocess.call(["git", "config", "user.email", "test@example.com"])
@@ -46,7 +46,7 @@ def _git_repo() -> None:
     subprocess.call(["git", "config", "--add", "branch.main.remote", "origin"])
 
 
-@pytest.fixture()
+@pytest.fixture
 def git_mock(
     tmp_path: pathlib.Path,
 ) -> typing.Generator[test_utils.GitMock, None, None]:
