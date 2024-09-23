@@ -119,10 +119,12 @@ async def do_setup() -> None:
 
     if installed_hook_file.exists():
         async with aiofiles.open(installed_hook_file) as f:
-            data_installed = f.read()
+            data_installed = await f.read()
         async with aiofiles.open(new_hook_file) as f:
-            data_new = f.read()
-        if data_installed != data_new:
+            data_new = await f.read()
+        if data_installed == data_new:
+            console.log("Git commit-msg hook is up to date")
+        else:
             console.print(
                 f"error: {installed_hook_file} differ from mergify_cli hook",
                 style="red",
