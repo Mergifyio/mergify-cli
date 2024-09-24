@@ -105,8 +105,7 @@ def get_slug(url: str) -> tuple[str, str]:
         path = parsed.path[1:].rstrip("/")
 
     user, repo = path.split("/", 1)
-    if repo.endswith(".git"):
-        repo = repo[:-4]
+    repo = repo.removesuffix(".git")
     return user, repo
 
 
