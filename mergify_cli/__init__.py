@@ -13,6 +13,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -109,7 +110,7 @@ def get_slug(url: str) -> tuple[str, str]:
     return user, repo
 
 
-async def do_setup() -> None:
+async def stack_setup(_: argparse.Namespace) -> None:
     hooks_dir = pathlib.Path(await git("rev-parse", "--git-path", "hooks"))
     installed_hook_file = hooks_dir / "commit-msg"
 
@@ -498,9 +499,16 @@ def check_local_branch(branch_name: str, branch_prefix: str) -> None:
         raise LocalBranchInvalidError(msg)
 
 
+async def stack_edit(_: argparse.Namespace) -> None:
+    os.chdir(await git("rev-parse", "--show-toplevel"))
+    trunk = await get_trunk()
+    base = await git("merge-base", trunk, "HEAD")
+    os.execvp("git", ("git", "rebase", "-i", f"{base}^"))  # noqa: S606
+
+
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
+async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
     github_server: str,
     token: str,
     skip_rebase: bool,
@@ -747,12 +755,13 @@ async def get_default_token() -> str:
     return token
 
 
-async def stack_main(args: argparse.Namespace) -> None:
+async def _stack_push(args: argparse.Namespace) -> None:
     if args.setup:
-        await do_setup()
+        # backward compat
+        await stack_setup(args)
         return
 
-    await stack(
+    await stack_push(
         args.github_server,
         args.token,
         args.skip_rebase,
@@ -762,6 +771,92 @@ async def stack_main(args: argparse.Namespace) -> None:
         args.trunk,
         args.draft,
         args.keep_pull_request_title_and_body,
+    )
+
+
+def register_stack_setup_parser(
+    sub_parsers: argparse._SubParsersAction[typing.Any],
+) -> None:
+    parser = sub_parsers.add_parser(
+        "setup",
+        description="Configure the git hooks",
+        help="Initial installation of the required git commit-msg hook",
+    )
+    parser.set_defaults(func=stack_setup)
+
+
+def register_stack_edit_parser(
+    sub_parsers: argparse._SubParsersAction[typing.Any],
+) -> None:
+    parser = sub_parsers.add_parser(
+        "edit",
+        description="Edit the stack history",
+        help="Edit the stack history",
+    )
+    parser.set_defaults(func=stack_edit)
+
+
+async def register_stack_push_parser(
+    sub_parsers: argparse._SubParsersAction[typing.Any],
+) -> None:
+    parser = sub_parsers.add_parser(
+        "push",
+        description="Push/sync the pull requests stack",
+        help="Push/sync the pull requests stack",
+    )
+    parser.set_defaults(func=_stack_push)
+
+    # Backward compat
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Initial installation of the required git commit-msg hook",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Only show what is going to be done",
+    )
+    parser.add_argument(
+        "--next-only",
+        "-x",
+        action="store_true",
+        help="Only rebase and update the next pull request of the stack",
+    )
+    parser.add_argument(
+        "--skip-rebase",
+        "-R",
+        action="store_true",
+        help="Skip stack rebase",
+    )
+    parser.add_argument(
+        "--draft",
+        "-d",
+        action="store_true",
+        help="Create stacked pull request as draft",
+    )
+    parser.add_argument(
+        "--keep-pull-request-title-and-body",
+        "-k",
+        action="store_true",
+        default=await get_default_keep_pr_title_body(),
+        help="Don't update the title and body of already opened pull requests. "
+        "Default fetched from git config if added with `git config --add mergify-cli.stack-keep-pr-title-body true`",
+    )
+    parser.add_argument(
+        "--trunk",
+        "-t",
+        type=trunk_type,
+        default=await get_trunk(),
+        help="Change the target branch of the stack.",
+    )
+    parser.add_argument(
+        "--branch-prefix",
+        default=await get_default_branch_prefix(),
+        help="Branch prefix used to create stacked PR. "
+        "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
     )
 
 
@@ -794,61 +889,21 @@ async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         description="Stacked Pull Requests CLI",
         help="Create a pull requests stack",
     )
-    stack_parser.set_defaults(func=stack_main)
-    stack_parser.add_argument(
-        "--setup",
-        action="store_true",
-        help="Initial installation of the required git commit-msg hook",
-    )
-    stack_parser.add_argument(
-        "--dry-run",
-        "-n",
-        action="store_true",
-        help="Only show what is going to be done",
-    )
-    stack_parser.add_argument(
-        "--next-only",
-        "-x",
-        action="store_true",
-        help="Only rebase and update the next pull request of the stack",
-    )
-    stack_parser.add_argument(
-        "--skip-rebase",
-        "-R",
-        action="store_true",
-        help="Skip stack rebase",
-    )
-    stack_parser.add_argument(
-        "--draft",
-        "-d",
-        action="store_true",
-        help="Create stacked pull request as draft",
-    )
-    stack_parser.add_argument(
-        "--keep-pull-request-title-and-body",
-        "-k",
-        action="store_true",
-        default=await get_default_keep_pr_title_body(),
-        help="Don't update the title and body of already opened pull requests. "
-        "Default fetched from git config if added with `git config --add mergify-cli.stack-keep-pr-title-body true`",
-    )
-    stack_parser.add_argument(
-        "--trunk",
-        "-t",
-        type=trunk_type,
-        default=await get_trunk(),
-        help="Change the target branch of the stack.",
-    )
-    stack_parser.add_argument(
-        "--branch-prefix",
-        default=await get_default_branch_prefix(),
-        help="Branch prefix used to create stacked PR. "
-        "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
-    )
+    stack_sub_parsers = stack_parser.add_subparsers(dest="stack_action")
+    await register_stack_push_parser(stack_sub_parsers)
+    register_stack_edit_parser(stack_sub_parsers)
+    register_stack_setup_parser(stack_sub_parsers)
 
     known_args, _ = parser.parse_known_args(args)
+
+    # Default
     if known_args.action is None:
-        args.insert(1, "stack")
+        args.insert(0, "stack")
+
+    known_args, _ = parser.parse_known_args(args)
+
+    if known_args.action == "stack" and known_args.stack_action is None:
+        args.insert(1, "push")
 
     return parser.parse_args(args)
 
