@@ -27,6 +27,13 @@ from mergify_cli.tests import utils as test_utils
 
 
 @pytest.fixture(autouse=True)
+def _unset_github_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "whatever")
+
+
+@pytest.fixture(autouse=True)
 def _change_working_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -201,7 +208,7 @@ async def test_stack_create(
         200,
     )
 
-    await mergify_cli.stack(
+    await mergify_cli.stack_push(
         github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
@@ -289,7 +296,7 @@ async def test_stack_create_single_pull(
     )
     respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
 
-    await mergify_cli.stack(
+    await mergify_cli.stack_push(
         github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
@@ -367,7 +374,7 @@ async def test_stack_update_no_rebase(
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
 
-    await mergify_cli.stack(
+    await mergify_cli.stack_push(
         github_server="https://api.github.com/",
         token="",
         skip_rebase=True,
@@ -445,7 +452,7 @@ async def test_stack_update(
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
 
-    await mergify_cli.stack(
+    await mergify_cli.stack_push(
         github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
@@ -523,7 +530,7 @@ async def test_stack_update_keep_title_and_body(
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
 
-    await mergify_cli.stack(
+    await mergify_cli.stack_push(
         github_server="https://api.github.com/",
         token="",
         skip_rebase=False,
@@ -550,7 +557,7 @@ async def test_stack_on_destination_branch_raises_an_error(
     git_mock.mock("rev-parse", "--abbrev-ref", "HEAD", output="main")
 
     with pytest.raises(SystemExit, match="1"):
-        await mergify_cli.stack(
+        await mergify_cli.stack_push(
             github_server="https://api.github.com/",
             token="",
             skip_rebase=False,
@@ -568,7 +575,7 @@ async def test_stack_without_common_commit_raises_an_error(
     git_mock.mock("merge-base", "--fork-point", "origin/main", output="")
 
     with pytest.raises(SystemExit, match="1"):
-        await mergify_cli.stack(
+        await mergify_cli.stack_push(
             github_server="https://api.github.com/",
             token="",
             skip_rebase=False,
@@ -596,3 +603,31 @@ async def test_defaults_config_args_set(
 ) -> None:
     with mock.patch.object(mergify_cli, "_run_command", return_value=config_get_result):
         assert (await default_arg_fct()) == expected_default
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-R"],
+        ["stack", "-R"],
+        ["stack", "push", "-R"],
+    ],
+)
+async def test_default(
+    git_mock: test_utils.GitMock,
+    args: list[str],
+) -> None:
+    git_mock.default_cli_args()
+    parsed = await mergify_cli.parse_args(args)
+    assert parsed.action == "stack"
+    assert parsed.stack_action == "push"
+    assert parsed.skip_rebase
+
+
+async def test_parse_edit(
+    git_mock: test_utils.GitMock,
+) -> None:
+    git_mock.default_cli_args()
+    parsed = await mergify_cli.parse_args(["stack", "edit"])
+    assert parsed.action == "stack"
+    assert parsed.stack_action == "edit"
