@@ -520,7 +520,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
     keep_pull_request_title_and_body: bool = False,
 ) -> None:
     os.chdir(await git("rev-parse", "--show-toplevel"))
-    dest_branch = await git("rev-parse", "--abbrev-ref", "HEAD")
+    dest_branch = await git_get_branch_name()
 
     try:
         check_local_branch(branch_name=dest_branch, branch_prefix=branch_prefix)
