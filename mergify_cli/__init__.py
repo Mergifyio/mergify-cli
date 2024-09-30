@@ -200,6 +200,7 @@ async def get_local_changes(
     stack_prefix: str,
     known_changeids: KnownChangeIDs,
     create_as_draft: bool,
+    only_update_existing_pulls: bool,
 ) -> list[Change]:
     changes = []
     for commit in commits:
@@ -215,33 +216,49 @@ async def get_local_changes(
                 "Did you run `mergify stack --setup` for this repository?",
             )
             sys.exit(1)
+
         changeid = ChangeId(changeids[-1])
         changes.append(Change((changeid, commit, title, message)))
         pull = known_changeids.get(changeid)
-        draft = ""
+
+        url: str = ""
+        draft: str = ""
+        action: str
+        commit_info: str
         if pull is None:
-            action = "to create"
-            if create_as_draft:
-                draft = " [yellow](draft)[/]"
-            url = f"<{stack_prefix}/{changeid}>"
             commit_info = commit[-7:]
+
+            if only_update_existing_pulls:
+                action = "nothing (to create, only updating)"
+            else:
+                action = "to create"
+                url = f"<{stack_prefix}/{changeid}>"
+
+                if create_as_draft:
+                    draft = " [yellow](draft)[/]"
+
         else:
             url = pull["html_url"]
             head_commit = commit[-7:]
             commit_info = head_commit
+
             if pull["head"]["sha"][-7:] != head_commit:
                 action = "to update"
                 commit_info = f"{pull['head']['sha'][-7:]} -> {head_commit}"
             else:
                 action = "nothing"
 
-            draft = ""
             if pull["draft"]:
                 draft = " [yellow](draft)[/]"
 
-        console.log(
-            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft} {url} - {changeid}",
+        log_message = (
+            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft}"
         )
+        if url:
+            log_message += f" {url}"
+
+        log_message += f" - {changeid}"
+        console.log(log_message)
 
     return changes
 
@@ -518,6 +535,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
     trunk: tuple[str, str],
     create_as_draft: bool = False,
     keep_pull_request_title_and_body: bool = False,
+    only_update_existing_pulls: bool = False,
 ) -> None:
     os.chdir(await git("rev-parse", "--show-toplevel"))
     dest_branch = await git_get_branch_name()
@@ -614,6 +632,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 stack_prefix,
                 known_changeids,
                 create_as_draft,
+                only_update_existing_pulls,
             )
             changeids_to_delete = get_changeids_to_delete(
                 changes,
@@ -624,14 +643,18 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
             console.log("[orange]Finished (dry-run mode) :tada:[/]")
             sys.exit(0)
 
-        console.log("New stacked pull request:", style="green")
+        console.log("Updating and/or creating stacked pull requests:", style="green")
         stacked_base_branch = base_branch
         pulls: list[PullRequest] = []
         continue_create_or_update = True
         for changeid, commit, title, message in changes:
+            pull: PullRequest | None = None
             depends_on = pulls[-1] if pulls else None
             stacked_dest_branch = f"{stack_prefix}/{changeid}"
-            if continue_create_or_update:
+            if only_update_existing_pulls and changeid not in known_changeids:
+                action = "skipped, only rebasing"
+
+            elif continue_create_or_update:
                 pull, action = await create_or_update_stack(
                     client,
                     remote,
@@ -661,19 +684,25 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                         "head": {"sha": ""},
                     },
                 )
-            draft = ""
-            if pull["draft"]:
-                draft = " [yellow](draft)[/]"
 
-            console.log(
-                f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/] - [b]{pull['title']}[/]{draft} {pull['html_url']} - {changeid}",
-            )
+            log_message = f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/]"
+            if pull is not None:
+                log_message += " - [b]{pull['title']}[/]"
+                if pull["draft"]:
+                    log_message += " [yellow](draft)[/]"
+
+                log_message += f"{pull['html_url']}"
+
+            log_message += f" - {changeid}"
+            console.log(log_message)
+
             stacked_base_branch = stacked_dest_branch
             if continue_create_or_update and next_only:
                 continue_create_or_update = False
 
         with console.status("Updating comments..."):
             await create_or_update_comments(client, pulls)
+
         console.log("[green]Comments updated")
 
         with console.status("Deleting unused branches..."):
@@ -771,6 +800,7 @@ async def _stack_push(args: argparse.Namespace) -> None:
         args.trunk,
         args.draft,
         args.keep_pull_request_title_and_body,
+        args.only_update_existing_pulls,
     )
 
 
@@ -858,6 +888,12 @@ async def register_stack_push_parser(
         help="Branch prefix used to create stacked PR. "
         "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
     )
+    parser.add_argument(
+        "--only-update-existing-pulls",
+        "-u",
+        action="store_true",
+        help="Only update existing pull requests, do not create new ones",
+    )
 
 
 async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
@@ -882,6 +918,7 @@ async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
         action="store_true",
         default=await get_default_github_server(),
     )
+
     sub_parsers = parser.add_subparsers(dest="action")
 
     stack_parser = sub_parsers.add_parser(
