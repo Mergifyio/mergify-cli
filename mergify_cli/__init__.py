@@ -687,7 +687,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
 
             log_message = f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/]"
             if pull is not None:
-                log_message += " - [b]{pull['title']}[/]"
+                log_message += f" - [b]{pull['title']}[/]"
                 if pull["draft"]:
                     log_message += " [yellow](draft)[/]"
 
