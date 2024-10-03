@@ -691,7 +691,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 if pull["draft"]:
                     log_message += " [yellow](draft)[/]"
 
-                log_message += f"{pull['html_url']}"
+                log_message += f" {pull['html_url']}"
 
             log_message += f" - {changeid}"
             console.log(log_message)
