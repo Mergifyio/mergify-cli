@@ -33,6 +33,8 @@ import httpx
 import rich
 import rich.console
 
+from mergify_cli import github_types
+
 
 VERSION = importlib.metadata.version("mergify-cli")
 
@@ -138,46 +140,27 @@ async def stack_setup(_: argparse.Namespace) -> None:
         installed_hook_file.chmod(0o755)
 
 
-class GitRef(typing.TypedDict):
-    ref: str
-
-
-class HeadRef(typing.TypedDict):
-    sha: str
-
-
-class PullRequest(typing.TypedDict):
-    html_url: str
-    number: str
-    title: str
-    body: str | None
-    head: HeadRef
-    state: str
-    draft: bool
-    node_id: str
-
-
-class Comment(typing.TypedDict):
-    body: str
-    url: str
-
-
 ChangeId = typing.NewType("ChangeId", str)
-KnownChangeIDs = typing.NewType("KnownChangeIDs", dict[ChangeId, PullRequest | None])
+KnownChangeIDs = typing.NewType(
+    "KnownChangeIDs",
+    dict[ChangeId, github_types.PullRequest | None],
+)
 
 
 async def get_changeid_and_pull(
     client: httpx.AsyncClient,
     user: str,
     stack_prefix: str,
-    ref: GitRef,
-) -> tuple[ChangeId, PullRequest | None]:
+    ref: github_types.GitRef,
+) -> tuple[ChangeId, github_types.PullRequest | None]:
     branch = ref["ref"][len("refs/heads/") :]
     changeid = ChangeId(branch[len(stack_prefix) + 1 :])
     r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "open"})
     check_for_status(r)
     pulls = [
-        p for p in typing.cast(list[PullRequest], r.json()) if p["state"] == "open"
+        p
+        for p in typing.cast(list[github_types.PullRequest], r.json())
+        if p["state"] == "open"
     ]
     if len(pulls) > 1:
         msg = f"More than 1 pull found with this head: {branch}"
@@ -187,7 +170,7 @@ async def get_changeid_and_pull(
         if pull["body"] is None:
             r = await client.get(f"pulls/{pull['number']}")
             check_for_status(r)
-            pull = typing.cast(PullRequest, r.json())
+            pull = typing.cast(github_types.PullRequest, r.json())
         return changeid, pull
     return changeid, None
 
@@ -285,7 +268,7 @@ def get_changeids_to_delete(
 
 async def create_or_update_comments(
     client: httpx.AsyncClient,
-    pulls: list[PullRequest],
+    pulls: list[github_types.PullRequest],
 ) -> None:
     stack_comment = StackComment(pulls)
 
@@ -295,7 +278,7 @@ async def create_or_update_comments(
         r = await client.get(f"issues/{pull['number']}/comments")
         check_for_status(r)
 
-        comments = typing.cast(list[Comment], r.json())
+        comments = typing.cast(list[github_types.Comment], r.json())
         for comment in comments:
             if StackComment.is_stack_comment(comment):
                 if comment["body"] != new_body:
@@ -315,11 +298,11 @@ async def create_or_update_comments(
 
 @dataclasses.dataclass
 class StackComment:
-    pulls: list[PullRequest]
+    pulls: list[github_types.PullRequest]
 
     STACK_COMMENT_FIRST_LINE = "This pull request is part of a stack:\n"
 
-    def body(self, current_pull: PullRequest) -> str:
+    def body(self, current_pull: github_types.PullRequest) -> str:
         body = self.STACK_COMMENT_FIRST_LINE
 
         for pull in self.pulls:
@@ -331,7 +314,7 @@ class StackComment:
         return body
 
     @staticmethod
-    def is_stack_comment(comment: Comment) -> bool:
+    def is_stack_comment(comment: github_types.Comment) -> bool:
         return comment["body"].startswith(StackComment.STACK_COMMENT_FIRST_LINE)
 
 
@@ -344,11 +327,11 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     commit: str,
     title: str,
     message: str,
-    depends_on: PullRequest | None,
+    depends_on: github_types.PullRequest | None,
     known_changeids: KnownChangeIDs,
     create_as_draft: bool,
     keep_pull_request_title_and_body: bool,
-) -> tuple[PullRequest, str]:
+) -> tuple[github_types.PullRequest, str]:
     if changeid in known_changeids:
         pull = known_changeids.get(changeid)
         status_message = f"* updating stacked branch `{stacked_dest_branch}` ({commit[-7:]}) - {pull['html_url'] if pull else '<stack branch without associated pull>'})"
@@ -414,7 +397,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 },
             )
             check_for_status(r)
-            pull = typing.cast(PullRequest, r.json())
+            pull = typing.cast(github_types.PullRequest, r.json())
     return pull, action
 
 
@@ -610,7 +593,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         with console.status("Retrieving latest pushed stacks"):
             r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
             check_for_status(r)
-            refs = typing.cast(list[GitRef], r.json())
+            refs = typing.cast(list[github_types.GitRef], r.json())
 
             tasks = [
                 asyncio.create_task(
@@ -645,10 +628,10 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
 
         console.log("Updating and/or creating stacked pull requests:", style="green")
         stacked_base_branch = base_branch
-        pulls: list[PullRequest] = []
+        pulls: list[github_types.PullRequest] = []
         continue_create_or_update = True
         for changeid, commit, title, message in changes:
-            pull: PullRequest | None = None
+            pull: github_types.PullRequest | None = None
             depends_on = pulls[-1] if pulls else None
             stacked_dest_branch = f"{stack_prefix}/{changeid}"
             if only_update_existing_pulls and changeid not in known_changeids:
@@ -672,7 +655,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 pulls.append(pull)
             else:
                 action = "skipped"
-                pull = known_changeids.get(changeid) or PullRequest(
+                pull = known_changeids.get(changeid) or github_types.PullRequest(
                     {
                         "title": "<not yet created>",
                         "body": "<not yet created>",
@@ -718,7 +701,10 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         console.log("[green]Finished :tada:[/]")
 
 
-def format_pull_description(message: str, depends_on: PullRequest | None) -> str:
+def format_pull_description(
+    message: str,
+    depends_on: github_types.PullRequest | None,
+) -> str:
     depends_on_header = ""
     if depends_on is not None:
         depends_on_header = f"\n\nDepends-On: #{depends_on['number']}"
