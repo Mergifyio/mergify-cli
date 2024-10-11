@@ -40,8 +40,6 @@ VERSION = importlib.metadata.version("mergify-cli")
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
 DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
-READY_FOR_REVIEW_TEMPLATE = 'mutation { markPullRequestReadyForReview(input: { pullRequestId: "%s" }) { clientMutationId } }'
-DRAFT_TEMPLATE = 'mutation { convertPullRequestToDraft(input: { pullRequestId: "%s" }) { clientMutationId } }'
 console = rich.console.Console(log_path=False, log_time=False)
 
 DEBUG = False
