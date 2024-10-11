@@ -244,7 +244,7 @@ async def get_local_changes(
 
             if pull["head"]["sha"][-7:] != head_commit:
                 action = "to update"
-                commit_info = f"{pull['head']['sha'][-7:]} -> {head_commit}"
+                commit_info = f"{pull['head']['sha'][:7]} -> {head_commit}"
             else:
                 action = "nothing"
 
