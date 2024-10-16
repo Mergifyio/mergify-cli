@@ -45,6 +45,19 @@ console = rich.console.Console(log_path=False, log_time=False)
 DEBUG = False
 TMP_STACK_BRANCH = "mergify-cli-tmp"
 
+PULL_MANNEQUIN = github_types.PullRequest(
+    {
+        "title": "<not yet created>",
+        "body": "<not yet created>",
+        "html_url": "<no-yet-created>",
+        "number": "-1",
+        "node_id": "na",
+        "draft": True,
+        "state": "",
+        "head": {"sha": ""},
+    },
+)
+
 
 def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
@@ -176,17 +189,30 @@ async def get_changeid_and_pull(
 Change = typing.NewType("Change", tuple[ChangeId, str, str, str])
 
 
-async def get_local_changes(
-    commits: list[str],
+async def get_local_changes(  # noqa: PLR0913,PLR0917
+    base_commit_sha: str,
+    dest_branch: str,
     stack_prefix: str,
     known_changeids: KnownChangeIDs,
     create_as_draft: bool,
     only_update_existing_pulls: bool,
 ) -> list[Change]:
+    commits = (
+        commit
+        for commit in reversed(
+            (
+                await git("log", "--format=%H", f"{base_commit_sha}..{dest_branch}")
+            ).split(
+                "\n",
+            ),
+        )
+        if commit
+    )
     changes = []
     for commit in commits:
         message = await git("log", "-1", "--format=%b", commit)
         title = await git("log", "-1", "--format=%s", commit)
+
         changeids = CHANGEID_RE.findall(message)
         if not changeids:
             console.print(
@@ -558,18 +584,6 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         )
         sys.exit(1)
 
-    commits = [
-        commit
-        for commit in reversed(
-            (
-                await git("log", "--format=%H", f"{base_commit_sha}..{dest_branch}")
-            ).split(
-                "\n",
-            ),
-        )
-        if commit
-    ]
-
     known_changeids = KnownChangeIDs({})
 
     if DEBUG:
@@ -609,7 +623,8 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
             changes = await get_local_changes(
-                commits,
+                base_commit_sha,
+                dest_branch,
                 stack_prefix,
                 known_changeids,
                 create_as_draft,
@@ -627,15 +642,21 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         console.log("Updating and/or creating stacked pull requests:", style="green")
         stacked_base_branch = base_branch
         pulls: list[github_types.PullRequest] = []
-        continue_create_or_update = True
-        for changeid, commit, title, message in changes:
+        stop_create_or_update_pull_reason = None
+        for idx, (changeid, commit, title, message) in enumerate(changes):
             pull: github_types.PullRequest | None = None
             depends_on = pulls[-1] if pulls else None
             stacked_dest_branch = f"{stack_prefix}/{changeid}"
-            if only_update_existing_pulls and changeid not in known_changeids:
-                action = "skipped, only rebasing"
 
-            elif continue_create_or_update:
+            if only_update_existing_pulls and changeid not in known_changeids:
+                stop_create_or_update_pull_reason = "skipped, only rebasing"
+            elif next_only and idx > 0:
+                stop_create_or_update_pull_reason = "skipped, next-only set"
+
+            if stop_create_or_update_pull_reason:
+                action = stop_create_or_update_pull_reason
+                pull = known_changeids.get(changeid) or PULL_MANNEQUIN
+            else:
                 pull, action = await create_or_update_stack(
                     client,
                     remote,
@@ -651,20 +672,6 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                     keep_pull_request_title_and_body,
                 )
                 pulls.append(pull)
-            else:
-                action = "skipped"
-                pull = known_changeids.get(changeid) or github_types.PullRequest(
-                    {
-                        "title": "<not yet created>",
-                        "body": "<not yet created>",
-                        "html_url": "<no-yet-created>",
-                        "number": "-1",
-                        "node_id": "na",
-                        "draft": True,
-                        "state": "",
-                        "head": {"sha": ""},
-                    },
-                )
 
             log_message = f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/]"
             if pull is not None:
@@ -678,8 +685,6 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
             console.log(log_message)
 
             stacked_base_branch = stacked_dest_branch
-            if continue_create_or_update and next_only:
-                continue_create_or_update = False
 
         with console.status("Updating comments..."):
             await create_or_update_comments(client, pulls)
