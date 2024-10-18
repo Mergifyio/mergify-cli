@@ -18,6 +18,8 @@ class PullRequest(typing.TypedDict):
     state: str
     draft: bool
     node_id: str
+    merged: bool
+    merge_commit_sha: str | None
 
 
 class Comment(typing.TypedDict):
