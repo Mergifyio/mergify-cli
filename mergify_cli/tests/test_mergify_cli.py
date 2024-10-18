@@ -180,6 +180,7 @@ async def test_stack_create(
             "title": "Title commit 1",
             "head": {"sha": "commit1_sha"},
             "state": "open",
+            "merged_at": None,
             "draft": False,
             "node_id": "",
         },
@@ -195,6 +196,7 @@ async def test_stack_create(
             "title": "Title commit 2",
             "head": {"sha": "commit2_sha"},
             "state": "open",
+            "merged_at": None,
             "draft": False,
             "node_id": "",
         },
@@ -290,6 +292,7 @@ async def test_stack_create_single_pull(
             "title": "Title commit 1",
             "head": {"sha": "commit1_sha"},
             "state": "open",
+            "merged_at": None,
             "draft": False,
             "node_id": "",
         },
@@ -343,7 +346,7 @@ async def test_stack_update_no_rebase(
         ],
     )
     respx_mock.get(
-        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=open",
+        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=all",
     ).respond(
         200,
         json=[
@@ -354,6 +357,7 @@ async def test_stack_update_no_rebase(
                 "head": {"sha": "previous_commit_sha"},
                 "body": "body",
                 "state": "open",
+                "merged_at": None,
                 "draft": False,
                 "node_id": "",
             },
@@ -421,7 +425,7 @@ async def test_stack_update(
         ],
     )
     respx_mock.get(
-        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=open",
+        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=all",
     ).respond(
         200,
         json=[
@@ -432,6 +436,7 @@ async def test_stack_update(
                 "head": {"sha": "previous_commit_sha"},
                 "body": "body",
                 "state": "open",
+                "merged_at": None,
                 "draft": False,
                 "node_id": "",
             },
@@ -499,7 +504,7 @@ async def test_stack_update_keep_title_and_body(
         ],
     )
     respx_mock.get(
-        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=open",
+        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=all",
     ).respond(
         200,
         json=[
@@ -509,6 +514,7 @@ async def test_stack_update_keep_title_and_body(
                 "title": "Title",
                 "head": {"sha": "previous_commit_sha"},
                 "state": "open",
+                "merged_at": None,
                 "draft": False,
                 "node_id": "",
                 "body": "DONT TOUCH ME\n\nDepends-On: #12345\n",

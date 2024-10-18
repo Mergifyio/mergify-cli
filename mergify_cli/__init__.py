@@ -55,6 +55,8 @@ PULL_MANNEQUIN = github_types.PullRequest(
         "draft": True,
         "state": "",
         "head": {"sha": ""},
+        "merged_at": None,
+        "merge_commit_sha": None,
     },
 )
 
@@ -166,24 +168,28 @@ async def get_changeid_and_pull(
 ) -> tuple[ChangeId, github_types.PullRequest | None]:
     branch = ref["ref"][len("refs/heads/") :]
     changeid = ChangeId(branch[len(stack_prefix) + 1 :])
-    r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "open"})
+    r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "all"})
     check_for_status(r)
-    pulls = [
-        p
-        for p in typing.cast(list[github_types.PullRequest], r.json())
-        if p["state"] == "open"
-    ]
-    if len(pulls) > 1:
-        msg = f"More than 1 pull found with this head: {branch}"
-        raise RuntimeError(msg)
-    if pulls:
-        pull = pulls[0]
-        if pull["body"] is None:
-            r = await client.get(f"pulls/{pull['number']}")
-            check_for_status(r)
-            pull = typing.cast(github_types.PullRequest, r.json())
-        return changeid, pull
-    return changeid, None
+    pulls = typing.cast(list[github_types.PullRequest], r.json())
+    opened_pulls = [pull for pull in pulls if pull["state"] == "open"]
+    merged_pulls = [pull for pull in pulls if pull["merged_at"] is not None]
+
+    if opened_pulls:
+        if len(opened_pulls) > 1:
+            msg = f"More than 1 pull found with this head: {branch}"
+            raise RuntimeError(msg)
+
+        pull = opened_pulls[0]
+    elif merged_pulls:
+        pull = merged_pulls[0]
+    else:
+        return changeid, None
+
+    if pull["body"] is None or "merged_at" not in pull:
+        r = await client.get(f"pulls/{pull['number']}")
+        check_for_status(r)
+        pull = typing.cast(github_types.PullRequest, r.json())
+    return changeid, pull
 
 
 Change = typing.NewType("Change", tuple[ChangeId, str, str, str])
@@ -230,11 +236,11 @@ async def get_local_changes(  # noqa: PLR0913,PLR0917
 
         url: str = ""
         draft: str = ""
+        merged: str = ""
         action: str
         commit_info: str
         if pull is None:
             commit_info = commit[-7:]
-
             if only_update_existing_pulls:
                 action = "nothing (to create, only updating)"
             else:
@@ -244,6 +250,10 @@ async def get_local_changes(  # noqa: PLR0913,PLR0917
                 if create_as_draft:
                     draft = " [yellow](draft)[/]"
 
+        elif pull["merged_at"]:
+            merged = " [purple](merged)[/]"
+            action = "nothing"
+            commit_info = f"{pull['merge_commit_sha']}"
         else:
             url = pull["html_url"]
             head_commit = commit[-7:]
@@ -258,9 +268,7 @@ async def get_local_changes(  # noqa: PLR0913,PLR0917
             if pull["draft"]:
                 draft = " [yellow](draft)[/]"
 
-        log_message = (
-            f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft}"
-        )
+        log_message = f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft}{merged}"
         if url:
             log_message += f" {url}"
 
@@ -297,6 +305,9 @@ async def create_or_update_comments(
     stack_comment = StackComment(pulls)
 
     for pull in pulls:
+        if pull["merged_at"]:
+            continue
+
         new_body = stack_comment.body(pull)
 
         r = await client.get(f"issues/{pull['number']}/comments")
@@ -678,6 +689,8 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 log_message += f" - [b]{pull['title']}[/]"
                 if pull["draft"]:
                     log_message += " [yellow](draft)[/]"
+                if pull["merged_at"]:
+                    log_message += " [purple](merged)[/]"
 
                 log_message += f" {pull['html_url']}"
 
