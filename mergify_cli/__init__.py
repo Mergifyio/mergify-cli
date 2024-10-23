@@ -515,10 +515,12 @@ async def log_httpx_request(request: httpx.Request) -> None:  # noqa: RUF029
 
 
 # NOTE: must be async for httpx
-async def log_httpx_response(response: httpx.Response) -> None:  # noqa: RUF029
+async def log_httpx_response(response: httpx.Response) -> None:
+    await response.aread()
     request = response.request
+    elapsed = response.elapsed.total_seconds()
     console.print(
-        f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]",
+        f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code} - Elasped {elapsed}s[/]",
     )
 
 
