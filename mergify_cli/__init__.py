@@ -45,11 +45,25 @@ console = rich.console.Console(log_path=False, log_time=False)
 DEBUG = False
 TMP_STACK_BRANCH = "mergify-cli-tmp"
 
-PULL_MANNEQUIN = github_types.PullRequest(
+PULL_MANNEQUIN_CREATION = github_types.PullRequest(
     {
         "title": "<not yet created>",
         "body": "<not yet created>",
         "html_url": "<no-yet-created>",
+        "number": "-1",
+        "node_id": "na",
+        "draft": True,
+        "state": "",
+        "head": {"sha": ""},
+        "merged_at": None,
+        "merge_commit_sha": None,
+    },
+)
+PULL_MANNEQUIN_DELETION = github_types.PullRequest(
+    {
+        "title": "<deleted>",
+        "body": "<deleted>",
+        "html_url": "<deleted>",
         "number": "-1",
         "node_id": "na",
         "draft": True,
@@ -192,17 +206,45 @@ async def get_changeid_and_pull(
     return changeid, pull
 
 
-Change = typing.NewType("Change", tuple[ChangeId, str, str, str])
+@dataclasses.dataclass
+class Change:
+    id: ChangeId
+    pull: github_types.PullRequest | None
 
 
-async def get_local_changes(  # noqa: PLR0913,PLR0917
+@dataclasses.dataclass
+class LocalChange(Change):
+    commit_sha: str
+    title: str
+    message: str
+
+    @property
+    def pull_for_log(self) -> github_types.PullRequest:
+        if self.pull:
+            return self.pull
+        return PULL_MANNEQUIN_CREATION
+
+
+@dataclasses.dataclass
+class OrphanChange(Change):
+    @property
+    def pull_for_log(self) -> github_types.PullRequest:
+        if self.pull:
+            return self.pull
+        return PULL_MANNEQUIN_DELETION
+
+
+@dataclasses.dataclass
+class Changes:
+    locals: list[LocalChange] = dataclasses.field(default_factory=list)
+    orphans: list[OrphanChange] = dataclasses.field(default_factory=list)
+
+
+async def get_changes(
     base_commit_sha: str,
     dest_branch: str,
-    stack_prefix: str,
     known_changeids: KnownChangeIDs,
-    create_as_draft: bool,
-    only_update_existing_pulls: bool,
-) -> list[Change]:
+) -> Changes:
     commits = (
         commit
         for commit in reversed(
@@ -214,7 +256,9 @@ async def get_local_changes(  # noqa: PLR0913,PLR0917
         )
         if commit
     )
-    changes = []
+    changes = Changes()
+    remaining_changeids = known_changeids.copy()
+
     for commit in commits:
         message = await git("log", "-1", "--format=%b", commit)
         title = await git("log", "-1", "--format=%s", commit)
@@ -231,71 +275,67 @@ async def get_local_changes(  # noqa: PLR0913,PLR0917
             sys.exit(1)
 
         changeid = ChangeId(changeids[-1])
-        changes.append(Change((changeid, commit, title, message)))
-        pull = known_changeids.get(changeid)
+        pull = remaining_changeids.pop(changeid, None)
+        changes.locals.append(LocalChange(changeid, pull, commit, title, message))
 
+    for changeid, pull in remaining_changeids.items():
+        changes.orphans.append(OrphanChange(changeid, pull))
+
+    return changes
+
+
+def display_changes_plan(
+    changes: Changes,
+    stack_prefix: str,
+    create_as_draft: bool,
+    only_update_existing_pulls: bool,
+) -> None:
+    for change in changes.locals:
         url: str = ""
         draft: str = ""
         merged: str = ""
         action: str
         commit_info: str
-        if pull is None:
-            commit_info = commit[-7:]
+        if change.pull is None:
+            commit_info = change.commit_sha[-7:]
             if only_update_existing_pulls:
                 action = "nothing (to create, only updating)"
             else:
                 action = "to create"
-                url = f"<{stack_prefix}/{changeid}>"
+                url = f"<{stack_prefix}/{change.id}>"
 
                 if create_as_draft:
                     draft = " [yellow](draft)[/]"
 
-        elif pull["merged_at"]:
+        elif change.pull["merged_at"]:
             merged = " [purple](merged)[/]"
             action = "nothing"
-            commit_info = f"{pull['merge_commit_sha']}"
+            commit_info = f"{change.pull['merge_commit_sha']}"
         else:
-            url = pull["html_url"]
-            head_commit = commit[-7:]
+            url = change.pull["html_url"]
+            head_commit = change.commit_sha[-7:]
             commit_info = head_commit
 
-            if pull["head"]["sha"][-7:] != head_commit:
+            if change.pull["head"]["sha"][-7:] != head_commit:
                 action = "to update"
-                commit_info = f"{pull['head']['sha'][:7]} -> {head_commit}"
+                commit_info = f"{change.pull['head']['sha'][:7]} -> {head_commit}"
             else:
                 action = "nothing"
 
-            if pull["draft"]:
+            if change.pull["draft"]:
                 draft = " [yellow](draft)[/]"
 
-        log_message = f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{title}[/]{draft}{merged}"
+        log_message = f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{change.title}[/]{draft}{merged}"
         if url:
             log_message += f" {url}"
 
-        log_message += f" - {changeid}"
+        log_message += f" - {change.id}"
         console.log(log_message)
 
-    return changes
-
-
-def get_changeids_to_delete(
-    changes: list[Change],
-    known_changeids: KnownChangeIDs,
-) -> set[ChangeId]:
-    changeids_to_delete = set(known_changeids.keys()) - {
-        changeid for changeid, commit, title, message in changes
-    }
-    for changeid in changeids_to_delete:
-        pull = known_changeids.get(changeid)
-        if pull:
-            console.log(
-                f"* [red]\\[to delete][/] '[red]{pull['head']['sha'][-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}",
-            )
-        else:
-            console.log(
-                f"* [red]\\[to delete][/] '[red].......[/] - [b]<missing pull request>[/] - {changeid}",
-            )
-    return changeids_to_delete
+    for orphan in changes.orphans:
+        console.log(
+            f"* [red]\\[to delete][/] '[red]{orphan.pull_for_log['head']['sha'][-7:]}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
+        )
 
 
 async def create_or_update_comments(
@@ -358,25 +398,18 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     remote: str,
     stacked_base_branch: str,
     stacked_dest_branch: str,
-    changeid: ChangeId,
-    commit: str,
-    title: str,
-    message: str,
+    change: LocalChange,
     depends_on: github_types.PullRequest | None,
-    known_changeids: KnownChangeIDs,
     create_as_draft: bool,
     keep_pull_request_title_and_body: bool,
 ) -> tuple[github_types.PullRequest, str]:
-    if changeid in known_changeids:
-        pull = known_changeids.get(changeid)
-        status_message = f"* updating stacked branch `{stacked_dest_branch}` ({commit[-7:]}) - {pull['html_url'] if pull else '<stack branch without associated pull>'})"
+    if change.pull is None:
+        status_message = f"* creating stacked branch `{stacked_dest_branch}` ({change.commit_sha[-7:]})"
     else:
-        status_message = (
-            f"* creating stacked branch `{stacked_dest_branch}` ({commit[-7:]})"
-        )
+        status_message = f"* updating stacked branch `{stacked_dest_branch}` ({change.commit_sha[-7:]}) - {change.pull['html_url'] if change.pull else '<stack branch without associated pull>'})"
 
     with console.status(status_message):
-        await git("branch", TMP_STACK_BRANCH, commit)
+        await git("branch", TMP_STACK_BRANCH, change.commit_sha)
         try:
             await git(
                 "push",
@@ -387,45 +420,46 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
         finally:
             await git("branch", "-D", TMP_STACK_BRANCH)
 
-    pull = known_changeids.get(changeid)
-    if pull and pull["head"]["sha"] == commit:
+    if change.pull and change.pull["head"]["sha"] == change.commit_sha:
         action = "nothing"
-    elif pull:
+        pull = change.pull
+    elif change.pull:
         action = "updated"
         with console.status(
-            f"* updating pull request `{title}` (#{pull['number']}) ({commit[-7:]})",
+            f"* updating pull request `{change.title}` (#{change.pull['number']}) ({change.commit_sha[-7:]})",
         ):
             pull_changes = {
                 "head": stacked_dest_branch,
                 "base": stacked_base_branch,
             }
             if keep_pull_request_title_and_body:
-                if pull["body"] is None:
+                if change.pull["body"] is None:
                     msg = "GitHub returned a pull request without body set"
                     raise RuntimeError(msg)
                 pull_changes.update(
-                    {"body": format_pull_description(pull["body"], depends_on)},
+                    {"body": format_pull_description(change.pull["body"], depends_on)},
                 )
             else:
                 pull_changes.update(
                     {
-                        "title": title,
-                        "body": format_pull_description(message, depends_on),
+                        "title": change.title,
+                        "body": format_pull_description(change.message, depends_on),
                     },
                 )
 
-            r = await client.patch(f"pulls/{pull['number']}", json=pull_changes)
+            r = await client.patch(f"pulls/{change.pull['number']}", json=pull_changes)
             check_for_status(r)
+        pull = change.pull
     else:
         action = "created"
         with console.status(
-            f"* creating stacked pull request `{title}` ({commit[-7:]})",
+            f"* creating stacked pull request `{change.title}` ({change.commit_sha[-7:]})",
         ):
             r = await client.post(
                 "pulls",
                 json={
-                    "title": title,
-                    "body": format_pull_description(message, depends_on),
+                    "title": change.title,
+                    "body": format_pull_description(change.message, depends_on),
                     "draft": create_as_draft,
                     "head": stacked_dest_branch,
                     "base": stacked_base_branch,
@@ -439,22 +473,15 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
 async def delete_stack(
     client: httpx.AsyncClient,
     stack_prefix: str,
-    changeid: ChangeId,
-    known_changeids: KnownChangeIDs,
+    change: OrphanChange,
 ) -> None:
     r = await client.delete(
-        f"git/refs/heads/{stack_prefix}/{changeid}",
+        f"git/refs/heads/{stack_prefix}/{change.id}",
     )
     check_for_status(r)
-    pull = known_changeids[changeid]
-    if pull:
-        console.log(
-            f"* [red]\\[deleted][/] '[red]{pull['head']['sha'][-7:]}[/] - [b]{pull['title']}[/] {pull['html_url']} - {changeid}",
-        )
-    else:
-        console.log(
-            f"* [red]\\[deleted][/] '[red].......[/] - [b]<branch {stack_prefix}/{changeid}>[/] - {changeid}",
-        )
+    console.log(
+        f"* [red]\\[deleted][/] '[red]{change.pull_for_log['head']['sha'][-7:]}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
+    )
 
 
 def log_httpx_request(request: httpx.Request) -> None:
@@ -633,18 +660,18 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
-            changes = await get_local_changes(
+            changes = await get_changes(
                 base_commit_sha,
                 dest_branch,
-                stack_prefix,
-                known_changeids,
-                create_as_draft,
-                only_update_existing_pulls,
-            )
-            changeids_to_delete = get_changeids_to_delete(
-                changes,
                 known_changeids,
             )
+
+        display_changes_plan(
+            changes,
+            stack_prefix,
+            create_as_draft,
+            only_update_existing_pulls,
+        )
 
         if dry_run:
             console.log("[orange]Finished (dry-run mode) :tada:[/]")
@@ -654,37 +681,33 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         stacked_base_branch = base_branch
         pulls: list[github_types.PullRequest] = []
         stop_create_or_update_pull_reason = None
-        for idx, (changeid, commit, title, message) in enumerate(changes):
+        for idx, change in enumerate(changes.locals):
             pull: github_types.PullRequest | None = None
             depends_on = pulls[-1] if pulls else None
-            stacked_dest_branch = f"{stack_prefix}/{changeid}"
+            stacked_dest_branch = f"{stack_prefix}/{change.id}"
 
-            if only_update_existing_pulls and changeid not in known_changeids:
+            if only_update_existing_pulls and change.pull is None:
                 stop_create_or_update_pull_reason = "skipped, only rebasing"
             elif next_only and idx > 0:
                 stop_create_or_update_pull_reason = "skipped, next-only set"
 
             if stop_create_or_update_pull_reason:
                 action = stop_create_or_update_pull_reason
-                pull = known_changeids.get(changeid) or PULL_MANNEQUIN
+                pull = change.pull or PULL_MANNEQUIN_CREATION
             else:
                 pull, action = await create_or_update_stack(
                     client,
                     remote,
                     stacked_base_branch,
                     stacked_dest_branch,
-                    changeid,
-                    commit,
-                    title,
-                    message,
+                    change,
                     depends_on,
-                    known_changeids,
                     create_as_draft,
                     keep_pull_request_title_and_body,
                 )
                 pulls.append(pull)
 
-            log_message = f"* [blue]\\[{action}][/] '[red]{commit[-7:]}[/]"
+            log_message = f"* [blue]\\[{action}][/] '[red]{change.commit_sha[-7:]}[/]"
             if pull is not None:
                 log_message += f" - [b]{pull['title']}[/]"
                 if pull["draft"]:
@@ -694,7 +717,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
 
                 log_message += f" {pull['html_url']}"
 
-            log_message += f" - {changeid}"
+            log_message += f" - {change.id}"
             console.log(log_message)
 
             stacked_base_branch = stacked_dest_branch
@@ -705,14 +728,13 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         console.log("[green]Comments updated")
 
         with console.status("Deleting unused branches..."):
-            delete_tasks = [
-                asyncio.create_task(
-                    delete_stack(client, stack_prefix, changeid, known_changeids),
+            if changes.orphans:
+                await asyncio.wait(
+                    asyncio.create_task(
+                        delete_stack(client, stack_prefix, change),
+                    )
+                    for change in changes.orphans
                 )
-                for changeid in changeids_to_delete
-            ]
-            if delete_tasks:
-                await asyncio.wait(delete_tasks)
 
         console.log("[green]Finished :tada:[/]")
 
