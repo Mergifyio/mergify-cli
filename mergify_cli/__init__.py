@@ -206,10 +206,24 @@ async def get_change_id_and_pull_from_github(
     return changeid, pull
 
 
+class PullRequestNotExistError(Exception):
+    pass
+
+
 @dataclasses.dataclass
 class Change:
     id: ChangeId
     pull: github_types.PullRequest | None
+
+    @property
+    def pull_head_sha(self) -> str:
+        if self.pull is None:
+            raise PullRequestNotExistError
+        return self.pull["head"]["sha"]
+
+    @property
+    def pull_short_head_sha(self) -> str:
+        return self.pull_head_sha[:7]
 
 
 @dataclasses.dataclass
@@ -219,6 +233,10 @@ class LocalChange(Change):
     message: str
     base_branch: str
     dest_branch: str
+
+    @property
+    def commit_short_sha(self) -> str:
+        return self.commit_sha[:7]
 
     @property
     def pull_for_log(self) -> github_types.PullRequest:
@@ -311,7 +329,7 @@ def display_changes_plan(
         action: str
         commit_info: str
         if change.pull is None:
-            commit_info = change.commit_sha[-7:]
+            commit_info = change.commit_short_sha
             if only_update_existing_pulls:
                 action = "nothing (to create, only updating)"
             else:
@@ -327,12 +345,14 @@ def display_changes_plan(
             commit_info = f"{change.pull['merge_commit_sha']}"
         else:
             url = change.pull["html_url"]
-            head_commit = change.commit_sha[-7:]
+            head_commit = change.commit_short_sha
             commit_info = head_commit
 
-            if change.pull["head"]["sha"][-7:] != head_commit:
+            if change.pull_short_head_sha != change.commit_short_sha:
                 action = "to update"
-                commit_info = f"{change.pull['head']['sha'][:7]} -> {head_commit}"
+                commit_info = (
+                    f"{change.pull_short_head_sha} -> {change.commit_short_sha}"
+                )
             else:
                 action = "nothing"
 
@@ -348,7 +368,7 @@ def display_changes_plan(
 
     for orphan in changes.orphans:
         console.log(
-            f"* [red]\\[to delete][/] '[red]{orphan.pull_for_log['head']['sha'][-7:]}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
+            f"* [red]\\[to delete][/] '[red]{orphan.pull_short_head_sha}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
         )
 
 
@@ -416,9 +436,9 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     keep_pull_request_title_and_body: bool,
 ) -> tuple[github_types.PullRequest, str]:
     if change.pull is None:
-        status_message = f"* creating stacked branch `{change.dest_branch}` ({change.commit_sha[-7:]})"
+        status_message = f"* creating stacked branch `{change.dest_branch}` ({change.commit_short_sha})"
     else:
-        status_message = f"* updating stacked branch `{change.dest_branch}` ({change.commit_sha[-7:]}) - {change.pull['html_url'] if change.pull else '<stack branch without associated pull>'})"
+        status_message = f"* updating stacked branch `{change.dest_branch}` ({change.commit_short_sha}) - {change.pull['html_url'] if change.pull else '<stack branch without associated pull>'})"
 
     with console.status(status_message):
         await git("branch", TMP_STACK_BRANCH, change.commit_sha)
@@ -438,7 +458,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     elif change.pull:
         action = "updated"
         with console.status(
-            f"* updating pull request `{change.title}` (#{change.pull['number']}) ({change.commit_sha[-7:]})",
+            f"* updating pull request `{change.title}` (#{change.pull['number']}) ({change.commit_short_sha})",
         ):
             pull_changes = {
                 "head": change.dest_branch,
@@ -465,7 +485,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     else:
         action = "created"
         with console.status(
-            f"* creating stacked pull request `{change.title}` ({change.commit_sha[-7:]})",
+            f"* creating stacked pull request `{change.title}` ({change.commit_short_sha})",
         ):
             r = await client.post(
                 "pulls",
@@ -492,7 +512,7 @@ async def delete_stack(
     )
     check_for_status(r)
     console.log(
-        f"* [red]\\[deleted][/] '[red]{change.pull_for_log['head']['sha'][-7:]}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
+        f"* [red]\\[deleted][/] '[red]{change.pull_short_head_sha}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
     )
 
 
@@ -724,7 +744,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 )
                 pulls.append(pull)
 
-            log_message = f"* [blue]\\[{action}][/] '[red]{change.commit_sha[-7:]}[/]"
+            log_message = f"* [blue]\\[{action}][/] '[red]{change.commit_short_sha}[/]"
             if pull is not None:
                 log_message += f" - [b]{pull['title']}[/]"
                 if pull["draft"]:
