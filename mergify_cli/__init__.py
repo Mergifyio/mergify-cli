@@ -46,15 +46,15 @@ DEBUG = False
 TMP_STACK_BRANCH = "mergify-cli-tmp"
 
 
-def check_for_status(response: httpx.Response) -> None:
+async def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
 
     if response.status_code < 500:
+        await response.aread()
         data = response.json()
         console.print(f"url: {response.request.url}", style="red")
-        with contextlib.suppress(httpx.RequestNotRead):
-            console.print(f"data: {response.request.content.decode()}", style="red")
+        console.print(f"data: {response.request.content.decode()}", style="red")
         console.print(
             f"HTTPError {response.status_code}: {data['message']}",
             style="red",
@@ -154,7 +154,6 @@ async def get_change_id_and_pull_from_github(
     branch = ref["ref"][len("refs/heads/") :]
     changeid = ChangeId(branch[len(stack_prefix) + 1 :])
     r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "all"})
-    check_for_status(r)
     pulls = typing.cast(list[github_types.PullRequest], r.json())
     opened_pulls = [pull for pull in pulls if pull["state"] == "open"]
     merged_pulls = [pull for pull in pulls if pull["merged_at"] is not None]
@@ -172,7 +171,6 @@ async def get_change_id_and_pull_from_github(
 
     if pull["body"] is None or "merged_at" not in pull:
         r = await client.get(f"pulls/{pull['number']}")
-        check_for_status(r)
         pull = typing.cast(github_types.PullRequest, r.json())
     return changeid, pull
 
@@ -403,8 +401,6 @@ async def create_or_update_comments(
         new_body = stack_comment.body(pull)
 
         r = await client.get(f"issues/{pull['number']}/comments")
-        check_for_status(r)
-
         comments = typing.cast(list[github_types.Comment], r.json())
         for comment in comments:
             if StackComment.is_stack_comment(comment):
@@ -498,7 +494,6 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 )
 
             r = await client.patch(f"pulls/{change.pull['number']}", json=pull_changes)
-            check_for_status(r)
             return change.pull
 
     elif change.action == "create":
@@ -515,7 +510,6 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                     "base": change.base_branch,
                 },
             )
-            check_for_status(r)
             return typing.cast(github_types.PullRequest, r.json())
 
     msg = f"Unhandled action: {change.action}"
@@ -527,8 +521,7 @@ async def delete_stack(
     stack_prefix: str,
     change: OrphanChange,
 ) -> None:
-    r = await client.delete(f"git/refs/heads/{stack_prefix}/{change.id}")
-    check_for_status(r)
+    await client.delete(f"git/refs/heads/{stack_prefix}/{change.id}")
     console.log(get_log_from_orphan_change(change, dry_run=False))
 
 
@@ -627,7 +620,6 @@ async def get_remote_changes(
 ) -> RemoteChanges:
     known_changeids = RemoteChanges({})
     r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
-    check_for_status(r)
     refs = typing.cast(list[github_types.GitRef], r.json())
 
     tasks = [
@@ -647,7 +639,7 @@ async def get_remote_changes(
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917, PLR0912
+async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
     github_server: str,
     token: str,
     skip_rebase: bool,
@@ -699,10 +691,13 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917, PLR0912
         )
         sys.exit(1)
 
+    event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]] = {
+        "request": [],
+        "response": [check_for_status],
+    }
     if DEBUG:
-        event_hooks = {"request": [log_httpx_request], "response": [log_httpx_response]}
-    else:
-        event_hooks = {}
+        event_hooks["request"].insert(0, log_httpx_request)
+        event_hooks["response"].insert(0, log_httpx_response)
 
     async with httpx.AsyncClient(
         base_url=f"{github_server}/repos/{user}/{repo}/",
@@ -711,7 +706,7 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917, PLR0912
             "User-Agent": f"mergify_cli/{VERSION}",
             "Authorization": f"token {token}",
         },
-        event_hooks=event_hooks,  # type: ignore[arg-type]
+        event_hooks=event_hooks,
         follow_redirects=True,
         timeout=5.0,
     ) as client:
