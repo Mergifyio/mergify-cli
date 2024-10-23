@@ -507,13 +507,15 @@ async def delete_stack(
     console.log(get_log_from_orphan_change(change, dry_run=False))
 
 
-def log_httpx_request(request: httpx.Request) -> None:
+# NOTE: must be async for httpx
+async def log_httpx_request(request: httpx.Request) -> None:  # noqa: RUF029
     console.print(
         f"[purple]DEBUG: request: {request.method} {request.url} - Waiting for response[/]",
     )
 
 
-def log_httpx_response(response: httpx.Response) -> None:
+# NOTE: must be async for httpx
+async def log_httpx_response(response: httpx.Response) -> None:  # noqa: RUF029
     request = response.request
     console.print(
         f"[purple]DEBUG: response: {request.method} {request.url} - Status {response.status_code}[/]",
