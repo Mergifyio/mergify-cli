@@ -217,6 +217,8 @@ class LocalChange(Change):
     commit_sha: str
     title: str
     message: str
+    base_branch: str
+    dest_branch: str
 
     @property
     def pull_for_log(self) -> github_types.PullRequest:
@@ -236,12 +238,15 @@ class OrphanChange(Change):
 
 @dataclasses.dataclass
 class Changes:
+    stack_prefix: str
     locals: list[LocalChange] = dataclasses.field(default_factory=list)
     orphans: list[OrphanChange] = dataclasses.field(default_factory=list)
 
 
 async def get_changes(
     base_commit_sha: str,
+    stack_prefix: str,
+    base_branch: str,
     dest_branch: str,
     known_changeids: KnownChangeIDs,
 ) -> Changes:
@@ -256,7 +261,7 @@ async def get_changes(
         )
         if commit
     )
-    changes = Changes()
+    changes = Changes(stack_prefix)
     remaining_changeids = known_changeids.copy()
 
     for commit in commits:
@@ -276,7 +281,17 @@ async def get_changes(
 
         changeid = ChangeId(changeids[-1])
         pull = remaining_changeids.pop(changeid, None)
-        changes.locals.append(LocalChange(changeid, pull, commit, title, message))
+        changes.locals.append(
+            LocalChange(
+                changeid,
+                pull,
+                commit,
+                title,
+                message,
+                changes.locals[-1].dest_branch if changes.locals else base_branch,
+                f"{stack_prefix}/{changeid}",
+            ),
+        )
 
     for changeid, pull in remaining_changeids.items():
         changes.orphans.append(OrphanChange(changeid, pull))
@@ -286,7 +301,6 @@ async def get_changes(
 
 def display_changes_plan(
     changes: Changes,
-    stack_prefix: str,
     create_as_draft: bool,
     only_update_existing_pulls: bool,
 ) -> None:
@@ -302,7 +316,7 @@ def display_changes_plan(
                 action = "nothing (to create, only updating)"
             else:
                 action = "to create"
-                url = f"<{stack_prefix}/{change.id}>"
+                url = f"<{changes.stack_prefix}/{change.id}>"
 
                 if create_as_draft:
                     draft = " [yellow](draft)[/]"
@@ -396,17 +410,15 @@ class StackComment:
 async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     client: httpx.AsyncClient,
     remote: str,
-    stacked_base_branch: str,
-    stacked_dest_branch: str,
     change: LocalChange,
     depends_on: github_types.PullRequest | None,
     create_as_draft: bool,
     keep_pull_request_title_and_body: bool,
 ) -> tuple[github_types.PullRequest, str]:
     if change.pull is None:
-        status_message = f"* creating stacked branch `{stacked_dest_branch}` ({change.commit_sha[-7:]})"
+        status_message = f"* creating stacked branch `{change.dest_branch}` ({change.commit_sha[-7:]})"
     else:
-        status_message = f"* updating stacked branch `{stacked_dest_branch}` ({change.commit_sha[-7:]}) - {change.pull['html_url'] if change.pull else '<stack branch without associated pull>'})"
+        status_message = f"* updating stacked branch `{change.dest_branch}` ({change.commit_sha[-7:]}) - {change.pull['html_url'] if change.pull else '<stack branch without associated pull>'})"
 
     with console.status(status_message):
         await git("branch", TMP_STACK_BRANCH, change.commit_sha)
@@ -415,7 +427,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 "push",
                 "-f",
                 remote,
-                TMP_STACK_BRANCH + ":" + stacked_dest_branch,
+                TMP_STACK_BRANCH + ":" + change.dest_branch,
             )
         finally:
             await git("branch", "-D", TMP_STACK_BRANCH)
@@ -429,8 +441,8 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
             f"* updating pull request `{change.title}` (#{change.pull['number']}) ({change.commit_sha[-7:]})",
         ):
             pull_changes = {
-                "head": stacked_dest_branch,
-                "base": stacked_base_branch,
+                "head": change.dest_branch,
+                "base": change.base_branch,
             }
             if keep_pull_request_title_and_body:
                 if change.pull["body"] is None:
@@ -461,8 +473,8 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                     "title": change.title,
                     "body": format_pull_description(change.message, depends_on),
                     "draft": create_as_draft,
-                    "head": stacked_dest_branch,
-                    "base": stacked_base_branch,
+                    "head": change.dest_branch,
+                    "base": change.base_branch,
                 },
             )
             check_for_status(r)
@@ -662,13 +674,14 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
             console.log("Stacked pull request plan:", style="green")
             changes = await get_changes(
                 base_commit_sha,
+                stack_prefix,
+                base_branch,
                 dest_branch,
                 known_changeids,
             )
 
         display_changes_plan(
             changes,
-            stack_prefix,
             create_as_draft,
             only_update_existing_pulls,
         )
@@ -678,13 +691,11 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
             sys.exit(0)
 
         console.log("Updating and/or creating stacked pull requests:", style="green")
-        stacked_base_branch = base_branch
         pulls: list[github_types.PullRequest] = []
         stop_create_or_update_pull_reason = None
         for idx, change in enumerate(changes.locals):
             pull: github_types.PullRequest | None = None
             depends_on = pulls[-1] if pulls else None
-            stacked_dest_branch = f"{stack_prefix}/{change.id}"
 
             if only_update_existing_pulls and change.pull is None:
                 stop_create_or_update_pull_reason = "skipped, only rebasing"
@@ -698,8 +709,6 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 pull, action = await create_or_update_stack(
                     client,
                     remote,
-                    stacked_base_branch,
-                    stacked_dest_branch,
                     change,
                     depends_on,
                     create_as_draft,
@@ -719,8 +728,6 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
 
             log_message += f" - {change.id}"
             console.log(log_message)
-
-            stacked_base_branch = stacked_dest_branch
 
         with console.status("Updating comments..."):
             await create_or_update_comments(client, pulls)
