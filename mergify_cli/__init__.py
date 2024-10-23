@@ -331,7 +331,7 @@ def get_log_from_local_change(
         msg = f"Unhandled action: {change.action}"  # type: ignore[unreachable]
         raise RuntimeError(msg)
 
-    return f"* [{color}]\\[{action}][/] '[red]{commit_info}[/] - [b]{change.title}[/]{flags} {url} - {change.id}"
+    return f"* [{color}]\\[{action}][/] '[red]{commit_info}[/] - [b]{change.title}[/]{flags} {url}"
 
 
 def get_log_from_orphan_change(change: OrphanChange, dry_run: bool) -> str:
@@ -339,7 +339,7 @@ def get_log_from_orphan_change(change: OrphanChange, dry_run: bool) -> str:
     title = change.pull["title"] if change.pull else "<unknown>"
     url = change.pull["html_url"] if change.pull else "<unknown>"
     sha = change.pull["head"]["sha"] if change.pull else "<unknown>"
-    return f"* [red]\\[{action}][/] '[red]{sha}[/] - [b]{title}[/] {url} - {change.id}"
+    return f"* [red]\\[{action}][/] '[red]{sha}[/] - [b]{title}[/] {url}"
 
 
 def display_changes_plan(
