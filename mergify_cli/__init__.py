@@ -599,12 +599,9 @@ async def get_remote_changes(
     user: str,
     repo: str,
     stack_prefix: str,
+    author: str,
 ) -> RemoteChanges:
-    r_author, r_repo = await asyncio.gather(
-        client.get("/user"),
-        client.get(f"/repos/{user}/{repo}"),
-    )
-    author = r_author.json()["login"]
+    r_repo = await client.get(f"/repos/{user}/{repo}")
     repository = r_repo.json()
 
     r = await client.get(
@@ -649,7 +646,7 @@ async def get_remote_changes(
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
+async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
     github_server: str,
     token: str,
     skip_rebase: bool,
@@ -660,6 +657,7 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
     create_as_draft: bool = False,
     keep_pull_request_title_and_body: bool = False,
     only_update_existing_pulls: bool = False,
+    author: str | None = None,
 ) -> None:
     os.chdir(await git("rev-parse", "--show-toplevel"))
     dest_branch = await git_get_branch_name()
@@ -720,8 +718,18 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
         follow_redirects=True,
         timeout=5.0,
     ) as client:
+        if author is None:
+            r_author = await client.get("/user")
+            author = r_author.json()["login"]
+
         with console.status("Retrieving latest pushed stacks"):
-            remote_changes = await get_remote_changes(client, user, repo, stack_prefix)
+            remote_changes = await get_remote_changes(
+                client,
+                user,
+                repo,
+                stack_prefix,
+                author,
+            )
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
@@ -877,6 +885,7 @@ async def _stack_push(args: argparse.Namespace) -> None:
         args.draft,
         args.keep_pull_request_title_and_body,
         args.only_update_existing_pulls,
+        args.author,
     )
 
 
@@ -951,6 +960,11 @@ async def register_stack_push_parser(
         help="Don't update the title and body of already opened pull requests. "
         "Default fetched from git config if added with `git config --add mergify-cli.stack-keep-pr-title-body true`",
     )
+    parser.add_argument(
+        "--author",
+        help="Set the author of the stack (default: the author of the token)",
+    )
+
     parser.add_argument(
         "--trunk",
         "-t",
