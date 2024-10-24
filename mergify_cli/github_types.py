@@ -1,12 +1,9 @@
 import typing
 
 
-class GitRef(typing.TypedDict):
-    ref: str
-
-
 class HeadRef(typing.TypedDict):
     sha: str
+    ref: str
 
 
 class PullRequest(typing.TypedDict):
