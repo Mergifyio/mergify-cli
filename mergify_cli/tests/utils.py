@@ -82,6 +82,6 @@ class GitMock:
             "push",
             "-f",
             "origin",
-            f"mergify-cli-tmp:/current-branch/{commit['change_id']}",
+            f"mergify-cli-tmp:current-branch/{commit['change_id']}",
             output="",
         )
