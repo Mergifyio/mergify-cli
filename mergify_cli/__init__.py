@@ -45,35 +45,6 @@ console = rich.console.Console(log_path=False, log_time=False)
 DEBUG = False
 TMP_STACK_BRANCH = "mergify-cli-tmp"
 
-PULL_MANNEQUIN_CREATION = github_types.PullRequest(
-    {
-        "title": "<not yet created>",
-        "body": "<not yet created>",
-        "html_url": "<no-yet-created>",
-        "number": "-1",
-        "node_id": "na",
-        "draft": True,
-        "state": "",
-        "head": {"sha": ""},
-        "merged_at": None,
-        "merge_commit_sha": None,
-    },
-)
-PULL_MANNEQUIN_DELETION = github_types.PullRequest(
-    {
-        "title": "<deleted>",
-        "body": "<deleted>",
-        "html_url": "<deleted>",
-        "number": "-1",
-        "node_id": "na",
-        "draft": True,
-        "state": "",
-        "head": {"sha": ""},
-        "merged_at": None,
-        "merge_commit_sha": None,
-    },
-)
-
 
 def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
@@ -226,6 +197,16 @@ class Change:
         return self.pull_head_sha[:7]
 
 
+ActionT = typing.Literal[
+    "skip-merged",
+    "skip-next-only",
+    "skip-create",
+    "skip-up-to-date",
+    "create",
+    "update",
+]
+
+
 @dataclasses.dataclass
 class LocalChange(Change):
     commit_sha: str
@@ -233,25 +214,16 @@ class LocalChange(Change):
     message: str
     base_branch: str
     dest_branch: str
+    action: ActionT
 
     @property
     def commit_short_sha(self) -> str:
         return self.commit_sha[:7]
 
-    @property
-    def pull_for_log(self) -> github_types.PullRequest:
-        if self.pull:
-            return self.pull
-        return PULL_MANNEQUIN_CREATION
-
 
 @dataclasses.dataclass
 class OrphanChange(Change):
-    @property
-    def pull_for_log(self) -> github_types.PullRequest:
-        if self.pull:
-            return self.pull
-        return PULL_MANNEQUIN_DELETION
+    pass
 
 
 @dataclasses.dataclass
@@ -261,12 +233,14 @@ class Changes:
     orphans: list[OrphanChange] = dataclasses.field(default_factory=list)
 
 
-async def get_changes(
+async def get_changes(  # noqa: PLR0913,PLR0917
     base_commit_sha: str,
     stack_prefix: str,
     base_branch: str,
     dest_branch: str,
     remote_changes: RemoteChanges,
+    only_update_existing_pulls: bool,
+    next_only: bool,
 ) -> Changes:
     commits = (
         commit
@@ -282,7 +256,7 @@ async def get_changes(
     changes = Changes(stack_prefix)
     remaining_remote_changes = remote_changes.copy()
 
-    for commit in commits:
+    for idx, commit in enumerate(commits):
         message = await git("log", "-1", "--format=%b", commit)
         title = await git("log", "-1", "--format=%s", commit)
 
@@ -299,6 +273,21 @@ async def get_changes(
 
         changeid = ChangeId(changeids[-1])
         pull = remaining_remote_changes.pop(changeid, None)
+
+        action: ActionT
+        if next_only and idx > 0:
+            action = "skip-next-only"
+        elif pull is None:
+            if only_update_existing_pulls:
+                action = "skip-create"
+            action = "create"
+        elif pull["merged_at"]:
+            action = "skip-merged"
+        elif pull["head"]["sha"] == commit:
+            action = "skip-up-to-date"
+        else:
+            action = "update"
+
         changes.locals.append(
             LocalChange(
                 changeid,
@@ -308,6 +297,7 @@ async def get_changes(
                 message,
                 changes.locals[-1].dest_branch if changes.locals else base_branch,
                 f"{stack_prefix}/{changeid}",
+                action,
             ),
         )
 
@@ -317,59 +307,87 @@ async def get_changes(
     return changes
 
 
+def get_log_from_local_change(
+    change: LocalChange,
+    dry_run: bool,
+    create_as_draft: bool,
+) -> str:
+    url = f"<{change.dest_branch}>" if change.pull is None else change.pull["html_url"]
+
+    flags: str = ""
+    if change.pull and change.pull["draft"]:
+        flags += " [yellow](draft)[/]"
+
+    if change.action == "create":
+        color = "yellow" if dry_run else "blue"
+        action = "to create" if dry_run else "created"
+        commit_info = change.commit_short_sha
+        if create_as_draft:
+            flags += " [yellow](draft)[/]"
+
+    elif change.action == "update":
+        color = "yellow" if dry_run else "blue"
+        action = "to update" if dry_run else "updated"
+        commit_info = f"{change.pull_short_head_sha} -> {change.commit_short_sha}"
+
+    elif change.action == "skip-create":
+        color = "grey"
+        action = "skip, --only-update-existing-pulls"
+        commit_info = change.commit_short_sha
+
+    elif change.action == "skip-merged":
+        color = "purple"
+        action = "merged"
+        flags += " [purple](merged)[/]"
+        commit_info = (
+            f"{change.pull['merge_commit_sha'][7:]}"
+            if change.pull
+            and change.pull["merged_at"]
+            and change.pull["merge_commit_sha"]
+            else change.commit_short_sha
+        )
+
+    elif change.action == "skip-next-only":
+        color = "grey"
+        action = "skip, --next-only"
+        commit_info = change.commit_short_sha
+
+    elif change.action == "skip-up-to-date":
+        color = "grey"
+        action = "up-to-date"
+        commit_info = change.commit_short_sha
+
+    else:
+        # NOTE: we don't want to miss any action
+        msg = f"Unhandled action: {change.action}"  # type: ignore[unreachable]
+        raise RuntimeError(msg)
+
+    return f"* [{color}]\\[{action}][/] '[red]{commit_info}[/] - [b]{change.title}[/]{flags} {url}"
+
+
+def get_log_from_orphan_change(change: OrphanChange, dry_run: bool) -> str:
+    action = "to delete" if dry_run else "deleted"
+    title = change.pull["title"] if change.pull else "<unknown>"
+    url = change.pull["html_url"] if change.pull else "<unknown>"
+    sha = change.pull["head"]["sha"][7:] if change.pull else "<unknown>"
+    return f"* [red]\\[{action}][/] '[red]{sha}[/] - [b]{title}[/] {url}"
+
+
 def display_changes_plan(
     changes: Changes,
     create_as_draft: bool,
-    only_update_existing_pulls: bool,
 ) -> None:
     for change in changes.locals:
-        url: str = ""
-        draft: str = ""
-        merged: str = ""
-        action: str
-        commit_info: str
-        if change.pull is None:
-            commit_info = change.commit_short_sha
-            if only_update_existing_pulls:
-                action = "nothing (to create, only updating)"
-            else:
-                action = "to create"
-                url = f"<{changes.stack_prefix}/{change.id}>"
-
-                if create_as_draft:
-                    draft = " [yellow](draft)[/]"
-
-        elif change.pull["merged_at"]:
-            merged = " [purple](merged)[/]"
-            action = "nothing"
-            commit_info = f"{change.pull['merge_commit_sha']}"
-        else:
-            url = change.pull["html_url"]
-            head_commit = change.commit_short_sha
-            commit_info = head_commit
-
-            if change.pull_short_head_sha != change.commit_short_sha:
-                action = "to update"
-                commit_info = (
-                    f"{change.pull_short_head_sha} -> {change.commit_short_sha}"
-                )
-            else:
-                action = "nothing"
-
-            if change.pull["draft"]:
-                draft = " [yellow](draft)[/]"
-
-        log_message = f"* [yellow]\\[{action}][/] '[red]{commit_info}[/] - [b]{change.title}[/]{draft}{merged}"
-        if url:
-            log_message += f" {url}"
-
-        log_message += f" - {change.id}"
-        console.log(log_message)
+        console.log(
+            get_log_from_local_change(
+                change,
+                dry_run=True,
+                create_as_draft=create_as_draft,
+            ),
+        )
 
     for orphan in changes.orphans:
-        console.log(
-            f"* [red]\\[to delete][/] '[red]{orphan.pull_short_head_sha}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
-        )
+        console.log(get_log_from_orphan_change(orphan, dry_run=True))
 
 
 async def create_or_update_comments(
@@ -434,7 +452,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     depends_on: github_types.PullRequest | None,
     create_as_draft: bool,
     keep_pull_request_title_and_body: bool,
-) -> tuple[github_types.PullRequest, str]:
+) -> github_types.PullRequest:
     if change.pull is None:
         status_message = f"* creating stacked branch `{change.dest_branch}` ({change.commit_short_sha})"
     else:
@@ -452,11 +470,11 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
         finally:
             await git("branch", "-D", TMP_STACK_BRANCH)
 
-    if change.pull and change.pull["head"]["sha"] == change.commit_sha:
-        action = "nothing"
-        pull = change.pull
-    elif change.pull:
-        action = "updated"
+    if change.action == "update":
+        if change.pull is None:
+            msg = "Can't update pull with change.pull unset"
+            raise RuntimeError(msg)
+
         with console.status(
             f"* updating pull request `{change.title}` (#{change.pull['number']}) ({change.commit_short_sha})",
         ):
@@ -481,9 +499,9 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
 
             r = await client.patch(f"pulls/{change.pull['number']}", json=pull_changes)
             check_for_status(r)
-        pull = change.pull
-    else:
-        action = "created"
+            return change.pull
+
+    elif change.action == "create":
         with console.status(
             f"* creating stacked pull request `{change.title}` ({change.commit_short_sha})",
         ):
@@ -498,8 +516,10 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 },
             )
             check_for_status(r)
-            pull = typing.cast(github_types.PullRequest, r.json())
-    return pull, action
+            return typing.cast(github_types.PullRequest, r.json())
+
+    msg = f"Unhandled action: {change.action}"
+    raise RuntimeError(msg)
 
 
 async def delete_stack(
@@ -507,13 +527,9 @@ async def delete_stack(
     stack_prefix: str,
     change: OrphanChange,
 ) -> None:
-    r = await client.delete(
-        f"git/refs/heads/{stack_prefix}/{change.id}",
-    )
+    r = await client.delete(f"git/refs/heads/{stack_prefix}/{change.id}")
     check_for_status(r)
-    console.log(
-        f"* [red]\\[deleted][/] '[red]{change.pull_short_head_sha}[/] - [b]{change.pull_for_log['title']}[/] {change.pull_for_log['html_url']} - {change.id}",
-    )
+    console.log(get_log_from_orphan_change(change, dry_run=False))
 
 
 # NOTE: must be async for httpx
@@ -629,7 +645,7 @@ async def get_remote_changes(
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
+async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917, PLR0912
     github_server: str,
     token: str,
     skip_rebase: bool,
@@ -708,12 +724,13 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 base_branch,
                 dest_branch,
                 remote_changes,
+                only_update_existing_pulls,
+                next_only,
             )
 
         display_changes_plan(
             changes,
             create_as_draft,
-            only_update_existing_pulls,
         )
 
         if dry_run:
@@ -721,22 +738,13 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
             sys.exit(0)
 
         console.log("Updating and/or creating stacked pull requests:", style="green")
-        pulls: list[github_types.PullRequest] = []
-        stop_create_or_update_pull_reason = None
-        for idx, change in enumerate(changes.locals):
-            pull: github_types.PullRequest | None = None
-            depends_on = pulls[-1] if pulls else None
 
-            if only_update_existing_pulls and change.pull is None:
-                stop_create_or_update_pull_reason = "skipped, only rebasing"
-            elif next_only and idx > 0:
-                stop_create_or_update_pull_reason = "skipped, next-only set"
+        pulls_to_comment: list[github_types.PullRequest] = []
+        for change in changes.locals:
+            depends_on = pulls_to_comment[-1] if pulls_to_comment else None
 
-            if stop_create_or_update_pull_reason:
-                action = stop_create_or_update_pull_reason
-                pull = change.pull or PULL_MANNEQUIN_CREATION
-            else:
-                pull, action = await create_or_update_stack(
+            if change.action in {"create", "update"}:
+                pull = await create_or_update_stack(
                     client,
                     remote,
                     change,
@@ -744,23 +752,21 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                     create_as_draft,
                     keep_pull_request_title_and_body,
                 )
-                pulls.append(pull)
+                change.pull = pull
 
-            log_message = f"* [blue]\\[{action}][/] '[red]{change.commit_short_sha}[/]"
-            if pull is not None:
-                log_message += f" - [b]{pull['title']}[/]"
-                if pull["draft"]:
-                    log_message += " [yellow](draft)[/]"
-                if pull["merged_at"]:
-                    log_message += " [purple](merged)[/]"
+            if change.pull:
+                pulls_to_comment.append(change.pull)
 
-                log_message += f" {pull['html_url']}"
-
-            log_message += f" - {change.id}"
-            console.log(log_message)
+            console.log(
+                get_log_from_local_change(
+                    change,
+                    dry_run=False,
+                    create_as_draft=create_as_draft,
+                ),
+            )
 
         with console.status("Updating comments..."):
-            await create_or_update_comments(client, pulls)
+            await create_or_update_comments(client, pulls_to_comment)
 
         console.log("[green]Comments updated")
 
