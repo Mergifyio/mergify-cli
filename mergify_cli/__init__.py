@@ -168,13 +168,13 @@ async def stack_setup(_: argparse.Namespace) -> None:
 
 
 ChangeId = typing.NewType("ChangeId", str)
-KnownChangeIDs = typing.NewType(
-    "KnownChangeIDs",
+RemoteChanges = typing.NewType(
+    "RemoteChanges",
     dict[ChangeId, github_types.PullRequest | None],
 )
 
 
-async def get_changeid_and_pull(
+async def get_change_id_and_pull_from_github(
     client: httpx.AsyncClient,
     user: str,
     stack_prefix: str,
@@ -248,7 +248,7 @@ async def get_changes(
     stack_prefix: str,
     base_branch: str,
     dest_branch: str,
-    known_changeids: KnownChangeIDs,
+    remote_changes: RemoteChanges,
 ) -> Changes:
     commits = (
         commit
@@ -262,7 +262,7 @@ async def get_changes(
         if commit
     )
     changes = Changes(stack_prefix)
-    remaining_changeids = known_changeids.copy()
+    remaining_remote_changes = remote_changes.copy()
 
     for commit in commits:
         message = await git("log", "-1", "--format=%b", commit)
@@ -280,7 +280,7 @@ async def get_changes(
             sys.exit(1)
 
         changeid = ChangeId(changeids[-1])
-        pull = remaining_changeids.pop(changeid, None)
+        pull = remaining_remote_changes.pop(changeid, None)
         changes.locals.append(
             LocalChange(
                 changeid,
@@ -293,7 +293,7 @@ async def get_changes(
             ),
         )
 
-    for changeid, pull in remaining_changeids.items():
+    for changeid, pull in remaining_remote_changes.items():
         changes.orphans.append(OrphanChange(changeid, pull))
 
     return changes
@@ -582,6 +582,31 @@ async def stack_edit(_: argparse.Namespace) -> None:
     os.execvp("git", ("git", "rebase", "-i", f"{base}^"))  # noqa: S606
 
 
+async def get_remote_changes(
+    client: httpx.AsyncClient,
+    user: str,
+    stack_prefix: str,
+) -> RemoteChanges:
+    known_changeids = RemoteChanges({})
+    r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
+    check_for_status(r)
+    refs = typing.cast(list[github_types.GitRef], r.json())
+
+    tasks = [
+        asyncio.create_task(
+            get_change_id_and_pull_from_github(client, user, stack_prefix, ref),
+        )
+        for ref in refs
+        # For backward compat
+        if not ref["ref"].endswith("/aio")
+    ]
+    if tasks:
+        done, _ = await asyncio.wait(tasks)
+        for task in done:
+            known_changeids.update(dict([await task]))
+    return known_changeids
+
+
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
 async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
@@ -636,8 +661,6 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         )
         sys.exit(1)
 
-    known_changeids = KnownChangeIDs({})
-
     if DEBUG:
         event_hooks = {"request": [log_httpx_request], "response": [log_httpx_response]}
     else:
@@ -655,22 +678,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
         timeout=5.0,
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
-            r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
-            check_for_status(r)
-            refs = typing.cast(list[github_types.GitRef], r.json())
-
-            tasks = [
-                asyncio.create_task(
-                    get_changeid_and_pull(client, user, stack_prefix, ref),
-                )
-                for ref in refs
-                # For backward compat
-                if not ref["ref"].endswith("/aio")
-            ]
-            if tasks:
-                done, _ = await asyncio.wait(tasks)
-                for task in done:
-                    known_changeids.update(dict([await task]))
+            remote_changes = await get_remote_changes(client, user, stack_prefix)
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
@@ -679,7 +687,7 @@ async def stack_push(  # noqa: PLR0913, PLR0914, PLR0915, PLR0917, PLR0912
                 stack_prefix,
                 base_branch,
                 dest_branch,
-                known_changeids,
+                remote_changes,
             )
 
         display_changes_plan(
