@@ -6,7 +6,12 @@ class PullRequestRef(typing.TypedDict):
     ref: str
 
 
+class PullRequestAuthor(typing.TypedDict):
+    login: str
+
+
 class PullRequest(typing.TypedDict):
+    user: PullRequestAuthor
     html_url: str
     number: str
     title: str

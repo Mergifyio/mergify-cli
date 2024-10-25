@@ -595,6 +595,20 @@ async def stack_edit(_: argparse.Namespace) -> None:
     os.execvp("git", ("git", "rebase", "-i", f"{base}^"))  # noqa: S606
 
 
+async def fetch_pull(
+    client: httpx.AsyncClient,
+    url: str,
+) -> github_types.PullRequest:
+    for _ in range(5):
+        r = await client.get(url)
+        pull = typing.cast(github_types.PullRequest, r.json())
+        if pull["body"] is not None:
+            return pull
+
+    msg = "Can't fetch the pull request with body set"
+    raise RuntimeError(msg)
+
+
 async def get_remote_changes(
     client: httpx.AsyncClient,
     user: str,
@@ -615,10 +629,12 @@ async def get_remote_changes(
         },
     )
 
-    responses = await asyncio.gather(
-        *(client.get(item["pull_request"]["url"]) for item in r.json()["items"]),
+    pulls = await asyncio.gather(
+        *(
+            fetch_pull(client, item["pull_request"]["url"])
+            for item in r.json()["items"]
+        ),
     )
-    pulls = [typing.cast(github_types.PullRequest, r.json()) for r in responses]
 
     remote_changes = RemoteChanges({})
     for pull in pulls:
@@ -1023,8 +1039,7 @@ async def _stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
             f"/repos/{user}/{repo}/issues/comments/{event['comment']['id']}/reactions",
             json={"content": "+1"},
         )
-        resp = await client.get(event["issue"]["pull_request"]["url"])
-        pull = resp.json()
+        pull = await fetch_pull(client, event["issue"]["pull_request"]["url"])
 
     author = pull["user"]["login"]
     base = pull["base"]["ref"]
