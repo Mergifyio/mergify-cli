@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import dataclasses
 import importlib.metadata
+import json
 import os
 import pathlib
 import re
@@ -973,6 +974,29 @@ async def _stack_checkout(args: argparse.Namespace) -> None:
         await git("branch", f"--set-upstream-to={upstream}")
 
 
+async def _stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
+    if "GITHUB_EVENT_NAME" not in os.environ or "GITHUB_EVENT_PATH" not in os.environ:
+        console.log("This action only works in a GitHub Action", style="red")
+        sys.exit(1)
+
+    event_name = os.environ["GITHUB_EVENT_NAME"]
+    event_path = os.environ["GITHUB_EVENT_PATH"]
+
+    async with aiofiles.open(event_path) as f:
+        event = json.loads(await f.read())
+
+    if event_name != "issue_comment" or not event["issue"]["pull_request"]:
+        console.log(
+            "This action only works with `issue_comment` event for pull request",
+            style="red",
+        )
+        sys.exit(1)
+
+    async with get_github_http_client(args.github_server, args.token) as client:
+        resp = await client.get(event["issue"]["pull_request"]["url"])
+        pull = resp.json()
+
+
 def register_stack_setup_parser(
     sub_parsers: argparse._SubParsersAction[typing.Any],
 ) -> None:
@@ -993,6 +1017,17 @@ def register_stack_edit_parser(
         help="Edit the stack history",
     )
     parser.set_defaults(func=stack_edit)
+
+
+def register_stack_github_action_autorebase(
+    sub_parsers: argparse._SubParsersAction[typing.Any],
+) -> None:
+    parser = sub_parsers.add_parser(
+        "github-action-auto-rebase",
+        description="Autorebase a pull requests stack",
+        help="Checkout a pull requests stack",
+    )
+    parser.set_defaults(func=_stack_github_action_auto_rebase)
 
 
 async def register_stack_checkout_parser(
@@ -1148,6 +1183,7 @@ async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     await register_stack_checkout_parser(stack_sub_parsers)
     register_stack_edit_parser(stack_sub_parsers)
     register_stack_setup_parser(stack_sub_parsers)
+    register_stack_github_action_autorebase(stack_sub_parsers)
 
     known_args, _ = parser.parse_known_args(args)
 
