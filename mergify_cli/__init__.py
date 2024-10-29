@@ -140,38 +140,8 @@ async def stack_setup(_: argparse.Namespace) -> None:
 ChangeId = typing.NewType("ChangeId", str)
 RemoteChanges = typing.NewType(
     "RemoteChanges",
-    dict[ChangeId, github_types.PullRequest | None],
+    dict[ChangeId, github_types.PullRequest],
 )
-
-
-async def get_change_id_and_pull_from_github(
-    client: httpx.AsyncClient,
-    user: str,
-    stack_prefix: str,
-    ref: github_types.GitRef,
-) -> tuple[ChangeId, github_types.PullRequest | None]:
-    branch = ref["ref"][len("refs/heads/") :]
-    changeid = ChangeId(branch[len(stack_prefix) + 1 :])
-    r = await client.get("pulls", params={"head": f"{user}:{branch}", "state": "all"})
-    pulls = typing.cast(list[github_types.PullRequest], r.json())
-    opened_pulls = [pull for pull in pulls if pull["state"] == "open"]
-    merged_pulls = [pull for pull in pulls if pull["merged_at"] is not None]
-
-    if opened_pulls:
-        if len(opened_pulls) > 1:
-            msg = f"More than 1 pull found with this head: {branch}"
-            raise RuntimeError(msg)
-
-        pull = opened_pulls[0]
-    elif merged_pulls:
-        pull = merged_pulls[0]
-    else:
-        return changeid, None
-
-    if pull["body"] is None or "merged_at" not in pull:
-        r = await client.get(f"pulls/{pull['number']}")
-        pull = typing.cast(github_types.PullRequest, r.json())
-    return changeid, pull
 
 
 class PullRequestNotExistError(Exception):
@@ -299,7 +269,8 @@ async def get_changes(  # noqa: PLR0913,PLR0917
         )
 
     for changeid, pull in remaining_remote_changes.items():
-        changes.orphans.append(OrphanChange(changeid, pull))
+        if pull["state"] == "open":
+            changes.orphans.append(OrphanChange(changeid, pull))
 
     return changes
 
@@ -389,6 +360,8 @@ def display_changes_plan(
 
 async def create_or_update_comments(
     client: httpx.AsyncClient,
+    user: str,
+    repo: str,
     pulls: list[github_types.PullRequest],
 ) -> None:
     stack_comment = StackComment(pulls)
@@ -399,7 +372,7 @@ async def create_or_update_comments(
 
         new_body = stack_comment.body(pull)
 
-        r = await client.get(f"issues/{pull['number']}/comments")
+        r = await client.get(f"/repos/{user}/{repo}/issues/{pull['number']}/comments")
         comments = typing.cast(list[github_types.Comment], r.json())
         for comment in comments:
             if StackComment.is_stack_comment(comment):
@@ -413,7 +386,7 @@ async def create_or_update_comments(
                 continue
 
             await client.post(
-                f"issues/{pull['number']}/comments",
+                f"/repos/{user}/{repo}/issues/{pull['number']}/comments",
                 json={"body": new_body},
             )
 
@@ -442,6 +415,8 @@ class StackComment:
 
 async def create_or_update_stack(  # noqa: PLR0913,PLR0917
     client: httpx.AsyncClient,
+    user: str,
+    repo: str,
     remote: str,
     change: LocalChange,
     depends_on: github_types.PullRequest | None,
@@ -492,7 +467,10 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                     },
                 )
 
-            r = await client.patch(f"pulls/{change.pull['number']}", json=pull_changes)
+            r = await client.patch(
+                f"/repos/{user}/{repo}/pulls/{change.pull['number']}",
+                json=pull_changes,
+            )
             return change.pull
 
     elif change.action == "create":
@@ -500,7 +478,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
             f"* creating stacked pull request `{change.title}` ({change.commit_short_sha})",
         ):
             r = await client.post(
-                "pulls",
+                f"/repos/{user}/{repo}/pulls",
                 json={
                     "title": change.title,
                     "body": format_pull_description(change.message, depends_on),
@@ -517,10 +495,14 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
 
 async def delete_stack(
     client: httpx.AsyncClient,
+    user: str,
+    repo: str,
     stack_prefix: str,
     change: OrphanChange,
 ) -> None:
-    await client.delete(f"git/refs/heads/{stack_prefix}/{change.id}")
+    await client.delete(
+        f"/repos/{user}/{repo}/git/refs/heads/{stack_prefix}/{change.id}",
+    )
     console.log(get_log_from_orphan_change(change, dry_run=False))
 
 
@@ -615,25 +597,54 @@ async def stack_edit(_: argparse.Namespace) -> None:
 async def get_remote_changes(
     client: httpx.AsyncClient,
     user: str,
+    repo: str,
     stack_prefix: str,
 ) -> RemoteChanges:
-    known_changeids = RemoteChanges({})
-    r = await client.get(f"git/matching-refs/heads/{stack_prefix}/")
-    refs = typing.cast(list[github_types.GitRef], r.json())
+    r_author, r_repo = await asyncio.gather(
+        client.get("/user"),
+        client.get(f"/repos/{user}/{repo}"),
+    )
+    author = r_author.json()["login"]
+    repository = r_repo.json()
 
-    tasks = [
-        asyncio.create_task(
-            get_change_id_and_pull_from_github(client, user, stack_prefix, ref),
-        )
-        for ref in refs
-        # For backward compat
-        if not ref["ref"].endswith("/aio")
-    ]
-    if tasks:
-        done, _ = await asyncio.wait(tasks)
-        for task in done:
-            known_changeids.update(dict([await task]))
-    return known_changeids
+    r = await client.get(
+        "/search/issues",
+        params={
+            "repository_id": repository["id"],
+            "q": f"author:{author} is:pull-request head:{stack_prefix}",
+            "per_page": 100,
+            "sort": "updated",
+        },
+    )
+
+    responses = await asyncio.gather(
+        *(client.get(item["pull_request"]["url"]) for item in r.json()["items"]),
+    )
+    pulls = [typing.cast(github_types.PullRequest, r.json()) for r in responses]
+
+    remote_changes = RemoteChanges({})
+    for pull in pulls:
+        # Drop closed but not merged PR
+        if pull["state"] == "closed" and pull["merged_at"] is None:
+            continue
+
+        changeid = ChangeId(pull["head"]["ref"].split("/")[-1])
+
+        if changeid in remote_changes:
+            other_pull = remote_changes[changeid]
+            if other_pull["state"] == "closed" and pull["state"] == "closed":
+                # Keep the more recent
+                pass
+            elif other_pull["state"] == "closed" and pull["state"] == "open":
+                remote_changes[changeid] = pull
+            elif other_pull["state"] == "opened":
+                msg = f"More than 1 pull found with this head: {pull['head']['ref']}"
+                raise RuntimeError(msg)
+
+        else:
+            remote_changes[changeid] = pull
+
+    return remote_changes
 
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
@@ -699,7 +710,7 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
         event_hooks["response"].insert(0, log_httpx_response)
 
     async with httpx.AsyncClient(
-        base_url=f"{github_server}/repos/{user}/{repo}/",
+        base_url=github_server,
         headers={
             "Accept": "application/vnd.github.v3+json",
             "User-Agent": f"mergify_cli/{VERSION}",
@@ -710,7 +721,7 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
         timeout=5.0,
     ) as client:
         with console.status("Retrieving latest pushed stacks"):
-            remote_changes = await get_remote_changes(client, user, stack_prefix)
+            remote_changes = await get_remote_changes(client, user, repo, stack_prefix)
 
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
@@ -742,6 +753,8 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
             if change.action in {"create", "update"}:
                 pull = await create_or_update_stack(
                     client,
+                    user,
+                    repo,
                     remote,
                     change,
                     depends_on,
@@ -762,7 +775,7 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
             )
 
         with console.status("Updating comments..."):
-            await create_or_update_comments(client, pulls_to_comment)
+            await create_or_update_comments(client, user, repo, pulls_to_comment)
 
         console.log("[green]Comments updated")
 
@@ -770,7 +783,7 @@ async def stack_push(  # noqa: PLR0913, PLR0915, PLR0917
             if changes.orphans:
                 await asyncio.wait(
                     asyncio.create_task(
-                        delete_stack(client, stack_prefix, change),
+                        delete_stack(client, user, repo, stack_prefix, change),
                     )
                     for change in changes.orphans
                 )

@@ -165,10 +165,12 @@ async def test_stack_create(
     )
 
     # Mock HTTP calls
-    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/repos/user/repo").respond(
         200,
-        json=[],
+        json={"id": 123456},
     )
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
     post_pull1_mock = respx_mock.post(
         "/repos/user/repo/pulls",
         json__title="Title commit 1",
@@ -277,10 +279,13 @@ async def test_stack_create_single_pull(
     )
 
     # Mock HTTP calls
-    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/repos/user/repo").respond(
         200,
-        json=[],
+        json={"id": 123456},
     )
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+
     post_pull_mock = respx_mock.post(
         "/repos/user/repo/pulls",
         json__title="Title commit 1",
@@ -337,31 +342,42 @@ async def test_stack_update_no_rebase(
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
-    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/repos/user/repo").respond(
         200,
-        json=[
-            {
-                "ref": "refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
-            },
-        ],
+        json={"id": 123456},
     )
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+
     respx_mock.get(
-        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=all",
+        "/repos/user/repo/pulls/123",
     ).respond(
         200,
-        json=[
-            {
-                "html_url": "",
-                "number": "123",
-                "title": "Title",
-                "head": {"sha": "previous_commit_sha"},
-                "body": "body",
-                "state": "open",
-                "merged_at": None,
-                "draft": False,
-                "node_id": "",
+        json={
+            "html_url": "",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "previous_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
             },
-        ],
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
     )
     patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
         200,
@@ -416,31 +432,42 @@ async def test_stack_update(
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
-    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/repos/user/repo").respond(
         200,
-        json=[
-            {
-                "ref": "refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
-            },
-        ],
+        json={"id": 123456},
     )
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+
     respx_mock.get(
-        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=all",
+        "/repos/user/repo/pulls/123",
     ).respond(
         200,
-        json=[
-            {
-                "html_url": "",
-                "number": "123",
-                "title": "Title",
-                "head": {"sha": "previous_commit_sha"},
-                "body": "body",
-                "state": "open",
-                "merged_at": None,
-                "draft": False,
-                "node_id": "",
+        json={
+            "html_url": "",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "previous_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
             },
-        ],
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
     )
     patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
         200,
@@ -495,31 +522,41 @@ async def test_stack_update_keep_title_and_body(
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
-    respx_mock.get("/repos/user/repo/git/matching-refs/heads//current-branch/").respond(
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/repos/user/repo").respond(
         200,
-        json=[
-            {
-                "ref": "refs/heads//current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
-            },
-        ],
+        json={"id": 123456},
+    )
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
     )
     respx_mock.get(
-        "/repos/user/repo/pulls?head=user:/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50&state=all",
+        "/repos/user/repo/pulls/123",
     ).respond(
         200,
-        json=[
-            {
-                "html_url": "",
-                "number": "123",
-                "title": "Title",
-                "head": {"sha": "previous_commit_sha"},
-                "state": "open",
-                "merged_at": None,
-                "draft": False,
-                "node_id": "",
-                "body": "DONT TOUCH ME\n\nDepends-On: #12345\n",
+        json={
+            "html_url": "",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "previous_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
             },
-        ],
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "body": "DONT TOUCH ME\n\nDepends-On: #12345\n",
+        },
     )
     patch_pull_mock = respx_mock.patch("/repos/user/repo/pulls/123").respond(
         200,
