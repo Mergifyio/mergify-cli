@@ -453,11 +453,13 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                 "base": change.base_branch,
             }
             if keep_pull_request_title_and_body:
-                if change.pull["body"] is None:
-                    msg = "GitHub returned a pull request without body set"
-                    raise RuntimeError(msg)
                 pull_changes.update(
-                    {"body": format_pull_description(change.pull["body"], depends_on)},
+                    {
+                        "body": format_pull_description(
+                            change.pull["body"] or "",
+                            depends_on,
+                        ),
+                    },
                 )
             else:
                 pull_changes.update(
