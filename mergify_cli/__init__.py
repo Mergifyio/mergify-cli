@@ -671,12 +671,12 @@ def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
+async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917, PLR0914
     github_server: str,
     token: str,
     skip_rebase: bool,
     next_only: bool,
-    branch_prefix: str,
+    branch_prefix: str | None,
     dry_run: bool,
     trunk: tuple[str, str],
     create_as_draft: bool = False,
@@ -686,6 +686,14 @@ async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
 ) -> None:
     os.chdir(await git("rev-parse", "--show-toplevel"))
     dest_branch = await git_get_branch_name()
+
+    if author is None:
+        async with get_github_http_client(github_server, token) as client:
+            r_author = await client.get("/user")
+            author = r_author.json()["login"]
+
+    if branch_prefix is None:
+        branch_prefix = await get_default_branch_prefix(author)
 
     try:
         check_local_branch(branch_name=dest_branch, branch_prefix=branch_prefix)
@@ -733,10 +741,6 @@ async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         event_hooks["response"].insert(0, log_httpx_response)
 
     async with get_github_http_client(github_server, token) as client:
-        if author is None:
-            r_author = await client.get("/user")
-            author = r_author.json()["login"]
-
         with console.status("Retrieving latest pushed stacks"):
             remote_changes = await get_remote_changes(
                 client,
@@ -850,13 +854,13 @@ async def get_default_github_server() -> str:
     return url.geturl()
 
 
-async def get_default_branch_prefix() -> str:
+async def get_default_branch_prefix(author: str) -> str:
     try:
         result = await git("config", "--get", "mergify-cli.stack-branch-prefix")
     except CommandError:
         result = ""
 
-    return result or "mergify_cli"
+    return result or f"stack/{author}"
 
 
 async def get_default_keep_pr_title_body() -> bool:
@@ -931,12 +935,15 @@ async def stack_checkout(  # noqa: PLR0913, PLR0917
     token: str,
     user: str,
     repo: str,
-    branch_prefix: str,
+    branch_prefix: str | None,
     branch: str,
     author: str,
     trunk: tuple[str, str],
     dry_run: bool,
 ) -> None:
+    if branch_prefix is None:
+        branch_prefix = await get_default_branch_prefix(author)
+
     stack_branch = f"{branch_prefix}/{branch}" if branch_prefix else branch
 
     async with get_github_http_client(github_server, token) as client:
@@ -1136,7 +1143,7 @@ async def register_stack_checkout_parser(
     )
     parser.add_argument(
         "--branch-prefix",
-        default=await get_default_branch_prefix(),
+        default=None,
         help="Branch prefix used to create stacked PR. "
         "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
     )
@@ -1218,7 +1225,7 @@ async def register_stack_push_parser(
     )
     parser.add_argument(
         "--branch-prefix",
-        default=await get_default_branch_prefix(),
+        default=None,
         help="Branch prefix used to create stacked PR. "
         "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
     )
