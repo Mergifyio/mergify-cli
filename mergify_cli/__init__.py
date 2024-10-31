@@ -646,6 +646,28 @@ async def get_remote_changes(
     return remote_changes
 
 
+def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
+    event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]] = {
+        "request": [],
+        "response": [check_for_status],
+    }
+    if DEBUG:
+        event_hooks["request"].insert(0, log_httpx_request)
+        event_hooks["response"].insert(0, log_httpx_response)
+
+    return httpx.AsyncClient(
+        base_url=github_server,
+        headers={
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": f"mergify_cli/{VERSION}",
+            "Authorization": f"token {token}",
+        },
+        event_hooks=event_hooks,
+        follow_redirects=True,
+        timeout=5.0,
+    )
+
+
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
 async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
@@ -681,7 +703,7 @@ async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         console.log("[red] base branch and destination branch are the same [/]")
         sys.exit(1)
 
-    stack_prefix = f"{branch_prefix}/{dest_branch}"
+    stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
 
     if not dry_run:
         if skip_rebase:
@@ -709,17 +731,7 @@ async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         event_hooks["request"].insert(0, log_httpx_request)
         event_hooks["response"].insert(0, log_httpx_response)
 
-    async with httpx.AsyncClient(
-        base_url=github_server,
-        headers={
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": f"mergify_cli/{VERSION}",
-            "Authorization": f"token {token}",
-        },
-        event_hooks=event_hooks,
-        follow_redirects=True,
-        timeout=5.0,
-    ) as client:
+    async with get_github_http_client(github_server, token) as client:
         if author is None:
             r_author = await client.get("/user")
             author = r_author.json()["login"]
@@ -891,6 +903,80 @@ async def _stack_push(args: argparse.Namespace) -> None:
     )
 
 
+@dataclasses.dataclass
+class ChangeNode:
+    pull: github_types.PullRequest
+    up: ChangeNode | None = None
+
+
+async def _stack_checkout(args: argparse.Namespace) -> None:
+    user, repo = args.repository.split("/")
+
+    stack_branch = (
+        f"{args.branch_prefix}/{args.dest_branch}"
+        if args.branch_prefix
+        else args.dest_branch
+    )
+
+    async with get_github_http_client(args.github_server, args.token) as client:
+        with console.status("Retrieving latest pushed stacks"):
+            remote_changes = await get_remote_changes(
+                client,
+                user,
+                repo,
+                stack_branch,
+                args.author,
+            )
+
+        root_node: ChangeNode | None = None
+
+        nodes = {
+            pull["base"]["ref"]: ChangeNode(pull)
+            for pull in remote_changes.values()
+            if pull["state"] == "open"
+        }
+
+        # Linking nodes and finding the base
+        for node in nodes.values():
+            node.up = nodes.get(node.pull["head"]["ref"])
+
+            if not node.pull["base"]["ref"].startswith(stack_branch):
+                if root_node is not None:
+                    console.print(
+                        "Unexpected stack layout, two root commits found",
+                        style="red",
+                    )
+                    sys.exit(1)
+                root_node = node
+
+        if root_node is None:
+            console.print("No stacked pull requests found")
+            sys.exit(0)
+
+        console.log("Stacked pull requests:")
+        node = root_node
+        while True:
+            pull = node.pull
+            console.log(
+                f"* [b][white]#{pull['number']}[/] {pull['title']}[/]  {pull['html_url']}",
+            )
+            console.log(f"  [grey42]{pull['base']['ref']} -> {pull['head']['ref']}[/]")
+
+            if node.up is None:
+                break
+            node = node.up
+
+        if args.dry_run:
+            return
+
+        remote = args.trunk[0]
+        upstream = f"{remote}/{root_node.pull['base']['ref']}"
+        head_ref = f"{remote}/{node.pull['head']['ref']}"
+        await git("fetch", remote, node.pull["head"]["ref"])
+        await git("checkout", "-b", args.branch, head_ref)
+        await git("branch", f"--set-upstream-to={upstream}")
+
+
 def register_stack_setup_parser(
     sub_parsers: argparse._SubParsersAction[typing.Any],
 ) -> None:
@@ -911,6 +997,49 @@ def register_stack_edit_parser(
         help="Edit the stack history",
     )
     parser.set_defaults(func=stack_edit)
+
+
+async def register_stack_checkout_parser(
+    sub_parsers: argparse._SubParsersAction[typing.Any],
+) -> None:
+    parser = sub_parsers.add_parser(
+        "checkout",
+        description="Checkout a pull requests stack",
+        help="Checkout a pull requests stack",
+    )
+    parser.set_defaults(func=_stack_checkout)
+    parser.add_argument(
+        "--author",
+        help="Set the author of the stack (default: the author of the token)",
+    )
+    parser.add_argument(
+        "--repository",
+        "--repo",
+        help="Set the repository where the stack is located (eg: owner/repo)",
+    )
+    parser.add_argument(
+        "--branch",
+        help="Branch used to create stacked PR.",
+    )
+    parser.add_argument(
+        "--branch-prefix",
+        default=await get_default_branch_prefix(),
+        help="Branch prefix used to create stacked PR. "
+        "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
+    )
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Only show what is going to be done",
+    )
+    parser.add_argument(
+        "--trunk",
+        "-t",
+        type=trunk_type,
+        default=await get_trunk(),
+        help="Change the target branch of the stack.",
+    )
 
 
 async def register_stack_push_parser(
@@ -1020,6 +1149,7 @@ async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     )
     stack_sub_parsers = stack_parser.add_subparsers(dest="stack_action")
     await register_stack_push_parser(stack_sub_parsers)
+    await register_stack_checkout_parser(stack_sub_parsers)
     register_stack_edit_parser(stack_sub_parsers)
     register_stack_setup_parser(stack_sub_parsers)
 

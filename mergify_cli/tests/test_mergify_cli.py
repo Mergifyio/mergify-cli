@@ -75,7 +75,7 @@ def git_mock(
         "push",
         "-f",
         "origin",
-        "current-branch:/current-branch/aio",
+        "current-branch:current-branch/aio",
         output="",
     )
 
@@ -225,7 +225,7 @@ async def test_stack_create(
     # First pull request is created
     assert len(post_pull1_mock.calls) == 1
     assert json.loads(post_pull1_mock.calls.last.request.content) == {
-        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "title": "Title commit 1",
         "body": "Message commit 1",
@@ -235,8 +235,8 @@ async def test_stack_create(
     # Second pull request is created
     assert len(post_pull2_mock.calls) == 1
     assert json.loads(post_pull2_mock.calls.last.request.content) == {
-        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf51",
-        "base": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf51",
+        "base": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "title": "Title commit 2",
         "body": "Message commit 2\n\nDepends-On: #1",
         "draft": False,
@@ -317,7 +317,7 @@ async def test_stack_create_single_pull(
     # Pull request is created without stack comment
     assert len(post_pull_mock.calls) == 1
     assert json.loads(post_pull_mock.calls.last.request.content) == {
-        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "title": "Title commit 1",
         "body": "Message commit 1",
@@ -408,7 +408,7 @@ async def test_stack_update_no_rebase(
     # The pull request is updated
     assert len(patch_pull_mock.calls) == 1
     assert json.loads(patch_pull_mock.calls.last.request.content) == {
-        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "title": "Title",
         "body": "Message",
@@ -498,7 +498,7 @@ async def test_stack_update(
     # The pull request is updated
     assert len(patch_pull_mock.calls) == 1
     assert json.loads(patch_pull_mock.calls.last.request.content) == {
-        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "title": "Title",
         "body": "Message",
@@ -587,7 +587,7 @@ async def test_stack_update_keep_title_and_body(
     # The pull request is updated
     assert len(patch_pull_mock.calls) == 1
     assert json.loads(patch_pull_mock.calls.last.request.content) == {
-        "head": "/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         "base": "main",
         "body": "DONT TOUCH ME",
     }

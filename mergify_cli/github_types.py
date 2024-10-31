@@ -1,7 +1,7 @@
 import typing
 
 
-class HeadRef(typing.TypedDict):
+class PullRequestRef(typing.TypedDict):
     sha: str
     ref: str
 
@@ -11,7 +11,8 @@ class PullRequest(typing.TypedDict):
     number: str
     title: str
     body: str | None
-    head: HeadRef
+    base: PullRequestRef
+    head: PullRequestRef
     state: str
     draft: bool
     node_id: str
