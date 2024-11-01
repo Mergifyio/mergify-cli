@@ -22,7 +22,6 @@ from unittest import mock
 import pytest
 import respx
 
-from mergify_cli import cli
 from mergify_cli import utils
 from mergify_cli.stack import push
 from mergify_cli.tests import utils as test_utils
@@ -83,17 +82,6 @@ def git_mock(
 
     with mock.patch("mergify_cli.utils.git", git_mock_object):
         yield git_mock_object
-
-
-@pytest.mark.usefixtures("_git_repo")
-async def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit, match="0"):
-        await cli.parse_args(["--help"])
-
-    stdout = capsys.readouterr().out
-    assert "usage: " in stdout
-    assert "positional arguments:" in stdout
-    assert "options:" in stdout
 
 
 @pytest.mark.usefixtures("_git_repo")
@@ -638,7 +626,7 @@ async def test_stack_without_common_commit_raises_an_error(
 @pytest.mark.parametrize(
     ("default_arg_fct", "config_get_result", "expected_default"),
     [
-        (cli.get_default_keep_pr_title_body, "true", True),
+        (utils.get_default_keep_pr_title_body, "true", True),
         (
             lambda: utils.get_default_branch_prefix("author"),
             "dummy-prefix",
@@ -656,31 +644,3 @@ async def test_defaults_config_args_set(
 ) -> None:
     with mock.patch.object(utils, "run_command", return_value=config_get_result):
         assert (await default_arg_fct()) == expected_default
-
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        ["-R"],
-        ["stack", "-R"],
-        ["stack", "push", "-R"],
-    ],
-)
-async def test_default(
-    git_mock: test_utils.GitMock,
-    args: list[str],
-) -> None:
-    git_mock.default_cli_args()
-    parsed = await cli.parse_args(args)
-    assert parsed.action == "stack"
-    assert parsed.stack_action == "push"
-    assert parsed.skip_rebase
-
-
-async def test_parse_edit(
-    git_mock: test_utils.GitMock,
-) -> None:
-    git_mock.default_cli_args()
-    parsed = await cli.parse_args(["stack", "edit"])
-    assert parsed.action == "stack"
-    assert parsed.stack_action == "edit"

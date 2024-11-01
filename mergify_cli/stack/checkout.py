@@ -22,10 +22,15 @@ async def stack_checkout(  # noqa: PLR0913, PLR0917
     repo: str,
     branch_prefix: str | None,
     branch: str,
-    author: str,
+    author: str | None,
     trunk: tuple[str, str],
     dry_run: bool,
 ) -> None:
+    if author is None:
+        async with utils.get_github_http_client(github_server, token) as client:
+            r_author = await client.get("/user")
+            author = r_author.json()["login"]
+
     if branch_prefix is None:
         branch_prefix = await utils.get_default_branch_prefix(author)
 

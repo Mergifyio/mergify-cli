@@ -11,6 +11,8 @@ python = ">=3.10"
 httpx = ">=0.20.0"
 rich = ">=10.11.0"
 aiofiles = ">=23.2.1,<25.0.0"
+click = "^8.1.7"
+click-default-group = "^1.2.4"
 
 [tool.poetry-version-plugin]
 source = "git-tag"
@@ -24,6 +26,8 @@ poethepoet = ">=0.21,<0.31"
 pytest-asyncio = ">=0.23.2,<0.25.0"
 respx = ">=0.20.2,<0.22.0"
 types-aiofiles = ">=23.2.0.20240106,<25.0.0.0"
+types-click = "^7.1.8"
+types-click-default-group = "^1.2.0.0"
 
 [tool.poetry.scripts]
 mergify = 'mergify_cli.cli:main'
