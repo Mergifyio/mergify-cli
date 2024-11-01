@@ -19,7 +19,6 @@ import importlib.metadata
 import pathlib
 import shutil
 import sys
-import typing
 
 import aiofiles
 
@@ -27,11 +26,7 @@ from mergify_cli import console
 from mergify_cli import utils
 
 
-if typing.TYPE_CHECKING:
-    import argparse
-
-
-async def stack_setup(_: argparse.Namespace) -> None:
+async def stack_setup() -> None:
     hooks_dir = pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
     installed_hook_file = hooks_dir / "commit-msg"
 
