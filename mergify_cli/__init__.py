@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import dataclasses
 import importlib.metadata
+import json
 import os
 import pathlib
 import re
@@ -912,20 +913,40 @@ class ChangeNode:
 async def _stack_checkout(args: argparse.Namespace) -> None:
     user, repo = args.repository.split("/")
 
-    stack_branch = (
-        f"{args.branch_prefix}/{args.dest_branch}"
-        if args.branch_prefix
-        else args.dest_branch
+    await stack_checkout(
+        args.github_server,
+        args.token,
+        user,
+        repo,
+        args.branch_prefix,
+        args.branch,
+        args.author,
+        args.trunk,
+        args.dry_run,
     )
 
-    async with get_github_http_client(args.github_server, args.token) as client:
+
+async def stack_checkout(  # noqa: PLR0913, PLR0917
+    github_server: str,
+    token: str,
+    user: str,
+    repo: str,
+    branch_prefix: str,
+    branch: str,
+    author: str,
+    trunk: tuple[str, str],
+    dry_run: bool,
+) -> None:
+    stack_branch = f"{branch_prefix}/{branch}" if branch_prefix else branch
+
+    async with get_github_http_client(github_server, token) as client:
         with console.status("Retrieving latest pushed stacks"):
             remote_changes = await get_remote_changes(
                 client,
                 user,
                 repo,
                 stack_branch,
-                args.author,
+                author,
             )
 
         root_node: ChangeNode | None = None
@@ -966,15 +987,96 @@ async def _stack_checkout(args: argparse.Namespace) -> None:
                 break
             node = node.up
 
-        if args.dry_run:
+        if dry_run:
             return
 
-        remote = args.trunk[0]
+        remote = trunk[0]
         upstream = f"{remote}/{root_node.pull['base']['ref']}"
         head_ref = f"{remote}/{node.pull['head']['ref']}"
         await git("fetch", remote, node.pull["head"]["ref"])
-        await git("checkout", "-b", args.branch, head_ref)
+        await git("checkout", "-b", branch, head_ref)
         await git("branch", f"--set-upstream-to={upstream}")
+
+
+async def _stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
+    for env in ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_REPOSITORY"):
+        if env not in os.environ:
+            console.log("This action only works in a GitHub Action", style="red")
+            sys.exit(1)
+
+    event_name = os.environ["GITHUB_EVENT_NAME"]
+    event_path = os.environ["GITHUB_EVENT_PATH"]
+    user, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+
+    async with aiofiles.open(event_path) as f:
+        event = json.loads(await f.read())
+
+    if event_name != "issue_comment" or not event["issue"]["pull_request"]:
+        console.log(
+            "This action only works with `issue_comment` event for pull request",
+            style="red",
+        )
+        sys.exit(1)
+
+    async with get_github_http_client(args.github_server, args.token) as client:
+        await client.post(
+            f"/repos/{user}/{repo}/issues/comments/{event['comment']['id']}/reactions",
+            json={"content": "+1"},
+        )
+        resp = await client.get(event["issue"]["pull_request"]["url"])
+        pull = resp.json()
+
+    author = pull["user"]["login"]
+    base = pull["base"]["ref"]
+    head = pull["head"]["ref"]
+
+    head_changeid = head.split("/")[-1]
+    if not head_changeid.startswith("I") or len(head_changeid) != 41:
+        console.log("This pull request is not part of a stack", style="red")
+        sys.exit(1)
+
+    base_changeid = base.split("/")[-1]
+    if base_changeid.startswith("I") and len(base_changeid) == 41:
+        console.log("This pull request is not the bottom of the stack", style="red")
+        sys.exit(1)
+
+    stack_branch = head.removesuffix(f"/{head_changeid}")
+
+    await git("config", "--global", "user.name", f"{author}")
+    await git("config", "--global", "user.email", f"{author}@users.noreply.github.com")
+    await git("branch", "--set-upstream-to", f"origin/{base}")
+
+    await stack_checkout(
+        args.github_server,
+        args.token,
+        user=user,
+        repo=repo,
+        branch_prefix="",
+        branch=stack_branch,
+        author=author,
+        trunk=("origin", base),
+        dry_run=False,
+    )
+    await stack_push(
+        args.github_server,
+        args.token,
+        skip_rebase=False,
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", base),
+        create_as_draft=False,
+        keep_pull_request_title_and_body=True,
+        only_update_existing_pulls=False,
+        author=author,
+    )
+
+    async with get_github_http_client(args.github_server, args.token) as client:
+        body_quote = "> " + "\n> ".join(event["comment"]["body"].split("\n"))
+        await client.post(
+            f"/repos/{user}/{repo}/issues/{pull['number']}/comments",
+            json={"body": f"{body_quote}\n\nThe stack has been rebased"},
+        )
 
 
 def register_stack_setup_parser(
@@ -997,6 +1099,17 @@ def register_stack_edit_parser(
         help="Edit the stack history",
     )
     parser.set_defaults(func=stack_edit)
+
+
+def register_stack_github_action_autorebase(
+    sub_parsers: argparse._SubParsersAction[typing.Any],
+) -> None:
+    parser = sub_parsers.add_parser(
+        "github-action-auto-rebase",
+        description="Autorebase a pull requests stack",
+        help="Checkout a pull requests stack",
+    )
+    parser.set_defaults(func=_stack_github_action_auto_rebase)
 
 
 async def register_stack_checkout_parser(
@@ -1152,6 +1265,7 @@ async def parse_args(args: typing.MutableSequence[str]) -> argparse.Namespace:
     await register_stack_checkout_parser(stack_sub_parsers)
     register_stack_edit_parser(stack_sub_parsers)
     register_stack_setup_parser(stack_sub_parsers)
+    register_stack_github_action_autorebase(stack_sub_parsers)
 
     known_args, _ = parser.parse_known_args(args)
 
