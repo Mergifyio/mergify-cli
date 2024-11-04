@@ -73,10 +73,6 @@ async def test_stack_create(
 
     # Mock HTTP calls
     respx_mock.get("/user").respond(200, json={"login": "author"})
-    respx_mock.get("/repos/user/repo").respond(
-        200,
-        json={"id": 123456},
-    )
     respx_mock.get("/search/issues").respond(200, json={"items": []})
     post_pull1_mock = respx_mock.post(
         "/repos/user/repo/pulls",
@@ -187,10 +183,6 @@ async def test_stack_create_single_pull(
 
     # Mock HTTP calls
     respx_mock.get("/user").respond(200, json={"login": "author"})
-    respx_mock.get("/repos/user/repo").respond(
-        200,
-        json={"id": 123456},
-    )
     respx_mock.get("/search/issues").respond(200, json={"items": []})
 
     post_pull_mock = respx_mock.post(
@@ -250,10 +242,6 @@ async def test_stack_update_no_rebase(
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
     respx_mock.get("/user").respond(200, json={"login": "author"})
-    respx_mock.get("/repos/user/repo").respond(
-        200,
-        json={"id": 123456},
-    )
     respx_mock.get("/search/issues").respond(
         200,
         json={
@@ -340,10 +328,6 @@ async def test_stack_update(
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
     respx_mock.get("/user").respond(200, json={"login": "author"})
-    respx_mock.get("/repos/user/repo").respond(
-        200,
-        json={"id": 123456},
-    )
     respx_mock.get("/search/issues").respond(
         200,
         json={
@@ -430,10 +414,6 @@ async def test_stack_update_keep_title_and_body(
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
     respx_mock.get("/user").respond(200, json={"login": "author"})
-    respx_mock.get("/repos/user/repo").respond(
-        200,
-        json={"id": 123456},
-    )
     respx_mock.get("/search/issues").respond(
         200,
         json={
