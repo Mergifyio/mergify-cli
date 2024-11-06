@@ -26,7 +26,7 @@ respx = ">=0.20.2,<0.22.0"
 types-aiofiles = ">=23.2.0.20240106,<25.0.0.0"
 
 [tool.poetry.scripts]
-mergify = 'mergify_cli:cli'
+mergify = 'mergify_cli.cli:main'
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
