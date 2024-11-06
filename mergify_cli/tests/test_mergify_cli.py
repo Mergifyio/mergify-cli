@@ -596,7 +596,9 @@ async def test_stack_update_keep_title_and_body(
 @pytest.mark.respx(base_url="https://api.github.com/")
 async def test_stack_on_destination_branch_raises_an_error(
     git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
 ) -> None:
+    respx_mock.get("/user").respond(200, json={"login": "author"})
     git_mock.mock("rev-parse", "--abbrev-ref", "HEAD", output="main")
 
     with pytest.raises(SystemExit, match="1"):
@@ -614,7 +616,9 @@ async def test_stack_on_destination_branch_raises_an_error(
 @pytest.mark.respx(base_url="https://api.github.com/")
 async def test_stack_without_common_commit_raises_an_error(
     git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
 ) -> None:
+    respx_mock.get("/user").respond(200, json={"login": "author"})
     git_mock.mock("merge-base", "--fork-point", "origin/main", output="")
 
     with pytest.raises(SystemExit, match="1"):
@@ -633,7 +637,11 @@ async def test_stack_without_common_commit_raises_an_error(
     ("default_arg_fct", "config_get_result", "expected_default"),
     [
         (mergify_cli.get_default_keep_pr_title_body, "true", True),
-        (mergify_cli.get_default_branch_prefix, "dummy-prefix", "dummy-prefix"),
+        (
+            lambda: mergify_cli.get_default_branch_prefix("author"),
+            "dummy-prefix",
+            "dummy-prefix",
+        ),
     ],
 )
 async def test_defaults_config_args_set(
