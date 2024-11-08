@@ -10,7 +10,6 @@ queue_rules:
       - "#changes-requested-reviews-by=0"
       - "#review-threads-unresolved=0"
       - "#review-requested=0"
-    speculative_checks: 5
     commit_message_template: |
       {{ title }} (#{{ number }})
 
@@ -26,7 +25,7 @@ queue_rules:
     merge_method: merge
     batch_size: 7
     batch_max_wait_time: 5min
-    commit_message_template: null
+    commit_message_template:
     queue_branch_merge_method: fast-forward
     disallow_checks_interruption_from_queues:
       - default
@@ -52,3 +51,6 @@ pull_request_rules:
       request_reviews:
         teams:
           - devs
+
+merge_queue:
+  max_parallel_checks: 5
