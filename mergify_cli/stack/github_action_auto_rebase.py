@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import typing
 
 import aiofiles
 
@@ -13,11 +12,7 @@ from mergify_cli.stack import checkout
 from mergify_cli.stack import push
 
 
-if typing.TYPE_CHECKING:
-    import argparse
-
-
-async def stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
+async def stack_github_action_auto_rebase(github_server: str, token: str) -> None:
     for env in ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_REPOSITORY"):
         if env not in os.environ:
             console.log("This action only works in a GitHub Action", style="red")
@@ -37,7 +32,7 @@ async def stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    async with utils.get_github_http_client(args.github_server, args.token) as client:
+    async with utils.get_github_http_client(github_server, token) as client:
         await client.post(
             f"/repos/{user}/{repo}/issues/comments/{event['comment']['id']}/reactions",
             json={"content": "+1"},
@@ -71,8 +66,8 @@ async def stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
     await utils.git("branch", "--set-upstream-to", f"origin/{base}")
 
     await checkout.stack_checkout(
-        args.github_server,
-        args.token,
+        github_server,
+        token,
         user=user,
         repo=repo,
         branch_prefix="",
@@ -82,8 +77,8 @@ async def stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
         dry_run=False,
     )
     await push.stack_push(
-        args.github_server,
-        args.token,
+        github_server,
+        token,
         skip_rebase=False,
         next_only=False,
         branch_prefix="",
@@ -95,7 +90,7 @@ async def stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
         author=author,
     )
 
-    async with utils.get_github_http_client(args.github_server, args.token) as client:
+    async with utils.get_github_http_client(github_server, token) as client:
         body_quote = "> " + "\n> ".join(event["comment"]["body"].split("\n"))
         await client.post(
             f"/repos/{user}/{repo}/issues/{pull['number']}/comments",
