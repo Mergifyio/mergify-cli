@@ -93,7 +93,7 @@ async def get_default_token() -> str:
 async def _stack_push(args: argparse.Namespace) -> None:
     if args.setup:
         # backward compat
-        await setup.stack_setup(args)
+        await setup.stack_setup()
         return
 
     await push.stack_push(
@@ -135,7 +135,7 @@ def register_stack_setup_parser(
         description="Configure the git hooks",
         help="Initial installation of the required git commit-msg hook",
     )
-    parser.set_defaults(func=setup.stack_setup)
+    parser.set_defaults(func=lambda _: setup.stack_setup)
 
 
 def register_stack_edit_parser(
@@ -146,7 +146,14 @@ def register_stack_edit_parser(
         description="Edit the stack history",
         help="Edit the stack history",
     )
-    parser.set_defaults(func=edit.stack_edit)
+    parser.set_defaults(func=lambda _: edit.stack_edit)
+
+
+async def _stack_github_action_auto_rebase(args: argparse.Namespace) -> None:
+    await github_action_auto_rebase.stack_github_action_auto_rebase(
+        args.github_server,
+        args.token,
+    )
 
 
 def register_stack_github_action_autorebase(
@@ -157,7 +164,7 @@ def register_stack_github_action_autorebase(
         description="Autorebase a pull requests stack",
         help="Checkout a pull requests stack",
     )
-    parser.set_defaults(func=github_action_auto_rebase.stack_github_action_auto_rebase)
+    parser.set_defaults(func=_stack_github_action_auto_rebase)
 
 
 async def register_stack_checkout_parser(
