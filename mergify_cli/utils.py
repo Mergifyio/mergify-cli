@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import sys
 import typing
 from urllib import parse
@@ -113,6 +114,19 @@ async def get_default_branch_prefix(author: str) -> str:
     return result or f"stack/{author}"
 
 
+async def get_default_keep_pr_title_body() -> bool:
+    try:
+        result = await git(
+            "config",
+            "--get",
+            "mergify-cli.stack-keep-pr-title-body",
+        )
+    except CommandError:
+        return False
+
+    return result == "true"
+
+
 async def get_trunk() -> str:
     try:
         branch_name = await git_get_branch_name()
@@ -191,3 +205,26 @@ def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
         follow_redirects=True,
         timeout=5.0,
     )
+
+
+P = typing.ParamSpec("P")
+R = typing.TypeVar("R")
+
+
+def run_with_asyncio(
+    func: typing.Callable[
+        P,
+        typing.Coroutine[typing.Any, typing.Any, R],
+    ],
+) -> functools._Wrapped[
+    P,
+    typing.Coroutine[typing.Any, typing.Any, R],
+    P,
+    R,
+]:
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        result = func(*args, **kwargs)
+        return asyncio.run(result)
+
+    return wrapper
