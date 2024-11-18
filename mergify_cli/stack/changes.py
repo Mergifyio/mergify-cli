@@ -72,14 +72,10 @@ async def get_remote_changes(
     stack_prefix: str,
     author: str,
 ) -> RemoteChanges:
-    r_repo = await client.get(f"/repos/{user}/{repo}")
-    repository = r_repo.json()
-
     r = await client.get(
         "/search/issues",
         params={
-            "repository_id": repository["id"],
-            "q": f"author:{author} is:pull-request head:{stack_prefix}",
+            "q": f"repo:{user}/{repo} author:{author} is:pull-request head:{stack_prefix}",
             "per_page": 100,
             "sort": "updated",
         },
