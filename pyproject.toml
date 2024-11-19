@@ -6,6 +6,16 @@ authors = ["Mehdi Abaakouk <sileht@mergify.com>"]
 readme = "README.md"
 license = "Apache License"
 
+[build-system]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry_dynamic_versioning.backend"
+
+[tool.poetry-dynamic-versioning]
+enable = true
+vcs = "git"
+dirty = true
+pattern = "default-unprefixed"
+
 [tool.poetry.dependencies]
 python = ">=3.10"
 httpx = ">=0.20.0"
@@ -14,8 +24,6 @@ aiofiles = ">=23.2.1,<25.0.0"
 click = "^8.1.7"
 click-default-group = "^1.2.4"
 
-[tool.poetry-version-plugin]
-source = "git-tag"
 
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}

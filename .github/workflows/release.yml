@@ -22,7 +22,7 @@ jobs:
           git tag $version
           git push origin $version
           pip install poetry
-          poetry self add poetry-version-plugin
+          poetry self add poetry-dynamic-versioning[plugin]
           poetry install --sync
           poetry build
       - name: Publish package distributions to PyPI
