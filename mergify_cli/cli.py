@@ -26,6 +26,7 @@ import click_default_group
 from mergify_cli import VERSION
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.stack import cli as stack_cli_mod
 
 
@@ -91,6 +92,7 @@ def cli(
 
 
 cli.add_command(stack_cli_mod.stack)
+cli.add_command(ci_cli_mod.ci)
 
 
 def main() -> None:
