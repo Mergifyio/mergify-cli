@@ -76,7 +76,7 @@ async def edit() -> None:
     "--keep-pull-request-title-and-body",
     "-k",
     is_flag=True,
-    default=lambda: asyncio.run(utils.get_default_keep_pr_title_body()),
+    default=asyncio.run(utils.get_default_keep_pr_title_body()),
     help="Don't update the title and body of already opened pull requests. "
     "Default fetched from git config if added with `git config --add mergify-cli.stack-keep-pr-title-body true`",
 )
@@ -88,7 +88,7 @@ async def edit() -> None:
     "--trunk",
     "-t",
     type=click.UNPROCESSED,
-    default=lambda: asyncio.run(utils.get_trunk()),
+    default=asyncio.run(utils.get_trunk()),
     callback=trunk_type,
     help="Change the target branch of the stack.",
 )
@@ -169,7 +169,7 @@ async def push(  # noqa: PLR0913, PLR0917
     "--trunk",
     "-t",
     type=click.UNPROCESSED,
-    default=lambda: asyncio.run(utils.get_trunk()),
+    default=asyncio.run(utils.get_trunk()),
     callback=trunk_type,
     help="Change the target branch of the stack.",
 )
