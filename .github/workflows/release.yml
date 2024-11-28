@@ -18,13 +18,16 @@ jobs:
       - name: Get version
         run: |
           echo "version=$(date +'%Y.%m.%d.%H.%M')" >> "$GITHUB_ENV"
-      - run: |
-          git tag $version
-          git push origin $version
-          pip install poetry
-          poetry self add poetry-dynamic-versioning[plugin]
-          poetry install --sync
-          poetry build
-          gh release create --generate-notes $version ./dist/*
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+            git tag $version
+            git push origin $version
+            pip install poetry
+            poetry self add poetry-dynamic-versioning[plugin]
+            poetry install --sync
+            poetry build
+            gh release create --generate-notes $version ./dist/*
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
