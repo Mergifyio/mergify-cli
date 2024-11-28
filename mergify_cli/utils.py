@@ -185,6 +185,37 @@ async def log_httpx_response(response: httpx.Response) -> None:
     )
 
 
+def get_http_client(
+    server: str,
+    headers: dict[str, typing.Any] | None = None,
+    event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]]
+    | None = None,
+    follow_redirects: bool = False,
+) -> httpx.AsyncClient:
+    default_headers = {"User-Agent": f"mergify_cli/{VERSION}"}
+    if headers is not None:
+        default_headers |= headers
+
+    default_event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]] = {
+        "request": [],
+        "response": [],
+    }
+    if event_hooks is not None:
+        default_event_hooks["request"] += event_hooks["request"]
+        default_event_hooks["response"] += event_hooks["response"]
+    if is_debug():
+        default_event_hooks["request"].insert(0, log_httpx_request)
+        default_event_hooks["response"].insert(0, log_httpx_response)
+
+    return httpx.AsyncClient(
+        base_url=server,
+        headers=default_headers,
+        event_hooks=default_event_hooks,
+        follow_redirects=follow_redirects,
+        timeout=5.0,
+    )
+
+
 def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
     event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]] = {
         "request": [],
@@ -194,16 +225,14 @@ def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
         event_hooks["request"].insert(0, log_httpx_request)
         event_hooks["response"].insert(0, log_httpx_response)
 
-    return httpx.AsyncClient(
-        base_url=github_server,
+    return get_http_client(
+        github_server,
         headers={
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": f"mergify_cli/{VERSION}",
             "Authorization": f"token {token}",
         },
         event_hooks=event_hooks,
         follow_redirects=True,
-        timeout=5.0,
     )
 
 

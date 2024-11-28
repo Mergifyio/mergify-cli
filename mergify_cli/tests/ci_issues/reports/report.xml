@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="0.026"
+               timestamp="2024-08-14T12:25:18.210796+02:00" hostname="mergify-MBP">
+        <testcase classname="mergify.tests.test_junit" name="test_success" time="0.000"/>
+        <testcase classname="mergify.tests.test_junit" name="test_failed" time="0.000">
+            <failure message="assert 1 == 0">def test_failed() -&gt; None:
+                &gt; assert 1 == 0
+                E assert 1 == 0
+
+                mergify/tests/test_junit.py:6: AssertionError
+            </failure>
+        </testcase>
+    </testsuite>
+</testsuites>
