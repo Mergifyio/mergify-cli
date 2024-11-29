@@ -50,7 +50,6 @@ async def edit() -> None:
 @click.option(
     "--setup",
     is_flag=True,
-    default=False,
     hidden=True,
 )
 @click.option("--dry-run", "-n", is_flag=True, default=False, help="dry run")
