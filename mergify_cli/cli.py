@@ -70,11 +70,11 @@ async def get_default_token() -> str:
 @click.version_option(VERSION)
 @click.option(
     "--github-server",
-    default=asyncio.run(get_default_github_server()),
+    default=lambda: asyncio.run(get_default_github_server()),
 )
 @click.option(
     "--token",
-    default=asyncio.run(get_default_token()),
+    default=lambda: asyncio.run(get_default_token()),
     help="GitHub personal access token",
 )
 @click.pass_context
