@@ -15,50 +15,13 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
-from urllib import parse
-
 import click
 import click.decorators
 import click_default_group
 
 from mergify_cli import VERSION
-from mergify_cli import console
-from mergify_cli import utils
 from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.stack import cli as stack_cli_mod
-
-
-async def get_default_github_server() -> str:
-    try:
-        result = await utils.git("config", "--get", "mergify-cli.github-server")
-    except utils.CommandError:
-        result = ""
-
-    url = parse.urlparse(result or "https://api.github.com/")
-    url = url._replace(scheme="https")
-
-    if url.hostname == "api.github.com":
-        url = url._replace(path="")
-    else:
-        url = url._replace(path="/api/v3")
-    return url.geturl()
-
-
-async def get_default_token() -> str:
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if not token:
-        try:
-            token = await utils.run_command("gh", "auth", "token")
-        except utils.CommandError:
-            console.print(
-                "error: please make sure that gh client is installed and you are authenticated, or set the "
-                "'GITHUB_TOKEN' environment variable",
-            )
-    if utils.is_debug():
-        console.print(f"[purple]DEBUG: token: {token}[/]")
-    return token
 
 
 @click.group(
@@ -68,27 +31,12 @@ async def get_default_token() -> str:
 )
 @click.option("--debug", is_flag=True, default=False, help="debug mode")
 @click.version_option(VERSION)
-@click.option(
-    "--github-server",
-    default=lambda: asyncio.run(get_default_github_server()),
-)
-@click.option(
-    "--token",
-    default=lambda: asyncio.run(get_default_token()),
-    help="GitHub personal access token",
-)
 @click.pass_context
 def cli(
     ctx: click.Context,
     debug: bool,
-    github_server: str,
-    token: str,
 ) -> None:
-    ctx.obj = {
-        "debug": debug,
-        "github_server": github_server,
-        "token": token,
-    }
+    ctx.obj = {"debug": debug}
 
 
 cli.add_command(stack_cli_mod.stack)
