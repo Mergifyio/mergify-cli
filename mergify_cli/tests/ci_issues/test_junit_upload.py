@@ -131,12 +131,16 @@ def test_get_files_to_upload() -> None:
     assert files_to_upload[0][1][1].closed
 
 
-async def test_junit_upload(respx_mock: respx.MockRouter) -> None:
+async def test_junit_upload(
+    respx_mock: respx.MockRouter,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    gigid = "eyJjaV9qb2JfaWQiOjcwNzQyLCJzaWduYXR1cmUiOiI2NjcxN2QwZDdiZjZkMzAxMmFmNGE4NWQ1YTFlZDhmYjNkNDBjYmM4MmZjZjgxZTVmNzEzNzEyZjRlZjIxOTFmIn0="
     respx_mock.post(
         "/v1/repos/user/repo/ci_issues_upload",
     ).respond(
         200,
-        json={"gigid": "1234azertyuiop"},
+        json={"gigid": gigid},
     )
 
     await junit_upload_mod.upload(
@@ -147,6 +151,12 @@ async def test_junit_upload(respx_mock: respx.MockRouter) -> None:
         "ci-test-job",
         "circleci",
         (str(REPORT_XML),),
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        captured.out.split("\n")[0]
+        == f"::notice title=CI Issues report::CI_ISSUE_GIGID={gigid}"
     )
 
 
