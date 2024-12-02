@@ -78,5 +78,8 @@ async def upload(  # noqa: PLR0913, PLR0917
             )
 
     gigid = response.json()["gigid"]
-    console.log(f"::notice title=CI Issues report::CI_ISSUE_GIGID={gigid}")
+    console.print(
+        f"::notice title=CI Issues report::CI_ISSUE_GIGID={gigid}",
+        soft_wrap=True,
+    )
     console.log("[green]:tada: File(s) uploaded[/]")
