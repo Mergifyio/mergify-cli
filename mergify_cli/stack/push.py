@@ -105,7 +105,14 @@ async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
     )
 
     if base_branch == dest_branch:
-        console.log("[red] base branch and destination branch are the same [/]")
+        remote_url = await utils.git("remote", "get-url", remote)
+        console.print(
+            f"Your local branch `{dest_branch}` target itself `{remote}/{base_branch}` (to {remote_url}@{base_branch}).\n"
+            f"You should either, fix the target remote and branch, or rename your local branch.\n\n"
+            f"* To fix the target branch: `git branch {dest_branch} --set-upstream-to={remote}/main>\n",
+            f"* To rename your local branch: `git branch -M {dest_branch} new-branch-name`",
+            style="red",
+        )
         sys.exit(1)
 
     stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
@@ -246,7 +253,7 @@ async def create_or_update_comments(
         new_body = stack_comment.body(pull)
 
         r = await client.get(f"/repos/{user}/{repo}/issues/{pull['number']}/comments")
-        comments = typing.cast(list[github_types.Comment], r.json())
+        comments = typing.cast("list[github_types.Comment]", r.json())
         for comment in comments:
             if StackComment.is_stack_comment(comment):
                 if comment["body"] != new_body:
@@ -353,7 +360,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                     "base": change.base_branch,
                 },
             )
-            return typing.cast(github_types.PullRequest, r.json())
+            return typing.cast("github_types.PullRequest", r.json())
 
     msg = f"Unhandled action: {change.action}"
     raise RuntimeError(msg)
