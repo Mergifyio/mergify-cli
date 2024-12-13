@@ -253,7 +253,7 @@ async def create_or_update_comments(
         new_body = stack_comment.body(pull)
 
         r = await client.get(f"/repos/{user}/{repo}/issues/{pull['number']}/comments")
-        comments = typing.cast(list[github_types.Comment], r.json())
+        comments = typing.cast("list[github_types.Comment]", r.json())
         for comment in comments:
             if StackComment.is_stack_comment(comment):
                 if comment["body"] != new_body:
@@ -360,7 +360,7 @@ async def create_or_update_stack(  # noqa: PLR0913,PLR0917
                     "base": change.base_branch,
                 },
             )
-            return typing.cast(github_types.PullRequest, r.json())
+            return typing.cast("github_types.PullRequest", r.json())
 
     msg = f"Unhandled action: {change.action}"
     raise RuntimeError(msg)
