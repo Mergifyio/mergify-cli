@@ -487,6 +487,12 @@ async def test_stack_on_destination_branch_raises_an_error(
 ) -> None:
     respx_mock.get("/user").respond(200, json={"login": "author"})
     git_mock.mock("rev-parse", "--abbrev-ref", "HEAD", output="main")
+    git_mock.mock(
+        "remote",
+        "get-url",
+        "origin",
+        output="https://github.com/foo/bar.git",
+    )
 
     with pytest.raises(SystemExit, match="1"):
         await push.stack_push(
