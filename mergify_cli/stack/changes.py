@@ -84,7 +84,7 @@ async def get_remote_changes(
     responses = await asyncio.gather(
         *(client.get(item["pull_request"]["url"]) for item in r.json()["items"]),
     )
-    pulls = [typing.cast(github_types.PullRequest, r.json()) for r in responses]
+    pulls = [typing.cast("github_types.PullRequest", r.json()) for r in responses]
 
     remote_changes = RemoteChanges({})
     for pull in pulls:
