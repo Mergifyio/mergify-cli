@@ -28,6 +28,12 @@ from mergify_cli import VERSION
 from mergify_cli import console
 
 
+if typing.TYPE_CHECKING:
+    from collections.abc import Callable
+    from collections.abc import Coroutine
+    from collections.abc import Mapping
+
+
 _DEBUG = False
 
 
@@ -188,15 +194,14 @@ async def log_httpx_response(response: httpx.Response) -> None:
 def get_http_client(
     server: str,
     headers: dict[str, typing.Any] | None = None,
-    event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]]
-    | None = None,
+    event_hooks: Mapping[str, list[Callable[..., typing.Any]]] | None = None,
     follow_redirects: bool = False,
 ) -> httpx.AsyncClient:
     default_headers = {"User-Agent": f"mergify_cli/{VERSION}"}
     if headers is not None:
         default_headers |= headers
 
-    default_event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]] = {
+    default_event_hooks: Mapping[str, list[Callable[..., typing.Any]]] = {
         "request": [],
         "response": [],
     }
@@ -217,7 +222,7 @@ def get_http_client(
 
 
 def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
-    event_hooks: typing.Mapping[str, list[typing.Callable[..., typing.Any]]] = {
+    event_hooks: Mapping[str, list[Callable[..., typing.Any]]] = {
         "request": [],
         "response": [check_for_status],
     }
@@ -241,13 +246,13 @@ R = typing.TypeVar("R")
 
 
 def run_with_asyncio(
-    func: typing.Callable[
+    func: Callable[
         P,
-        typing.Coroutine[typing.Any, typing.Any, R],
+        Coroutine[typing.Any, typing.Any, R],
     ],
 ) -> functools._Wrapped[
     P,
-    typing.Coroutine[typing.Any, typing.Any, R],
+    Coroutine[typing.Any, typing.Any, R],
     P,
     R,
 ]:
