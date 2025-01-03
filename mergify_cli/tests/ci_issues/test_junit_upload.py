@@ -27,7 +27,7 @@ PULL_REQUEST_EVENT = pathlib.Path(__file__).parent / "events" / "pull_request.js
                 "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
                 "GITHUB_WORKFLOW": "JOB",
             },
-            "github_action",
+            "github_actions",
         ),
         (
             {
