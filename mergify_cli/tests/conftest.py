@@ -12,9 +12,9 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+from collections.abc import Generator
 import pathlib
 import subprocess
-import typing
 from unittest import mock
 
 import pytest
@@ -52,7 +52,7 @@ def _git_repo() -> None:
 @pytest.fixture
 def git_mock(
     tmp_path: pathlib.Path,
-) -> typing.Generator[test_utils.GitMock, None, None]:
+) -> Generator[test_utils.GitMock, None, None]:
     git_mock_object = test_utils.GitMock()
     # Top level directory is a temporary path
     git_mock_object.mock("rev-parse", "--show-toplevel", output=str(tmp_path))
