@@ -19,19 +19,19 @@ ci = click.Group(
 )
 
 
-CIProviderT = typing.Literal["github_action", "circleci"]
+CIProviderT = typing.Literal["github_actions", "circleci"]
 
 
 def get_ci_provider() -> CIProviderT | None:
     if os.getenv("GITHUB_ACTIONS") == "true":
-        return "github_action"
+        return "github_actions"
     if os.getenv("CIRCLECI") == "true":
         return "circleci"
     return None
 
 
 def get_job_name() -> str | None:
-    if get_ci_provider() == "github_action":
+    if get_ci_provider() == "github_actions":
         return os.getenv("GITHUB_WORKFLOW")
     if get_ci_provider() == "circleci":
         return os.getenv("CIRCLE_JOB")
@@ -77,7 +77,7 @@ async def get_circle_ci_head_sha() -> str | None:
 
 
 async def get_head_sha() -> str | None:
-    if get_ci_provider() == "github_action":
+    if get_ci_provider() == "github_actions":
         return get_github_actions_head_sha()
     if get_ci_provider() == "circleci":
         return await get_circle_ci_head_sha()
@@ -87,7 +87,7 @@ async def get_head_sha() -> str | None:
 
 
 def get_github_repository() -> str | None:
-    if get_ci_provider() == "github_action":
+    if get_ci_provider() == "github_actions":
         return os.getenv("GITHUB_REPOSITORY")
     if get_ci_provider() == "circleci":
         repository_url = os.getenv("CIRCLE_REPOSITORY_URL")
