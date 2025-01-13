@@ -28,7 +28,7 @@ click-default-group = "^1.2.4"
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
 mypy-extensions = "^1.0.0"
-ruff = "0.9.0"
+ruff = "0.9.1"
 pytest = {version = ">=6.2.5"}
 poethepoet = ">=0.21,<0.33"
 pytest-asyncio = ">=0.23.2,<0.26.0"
