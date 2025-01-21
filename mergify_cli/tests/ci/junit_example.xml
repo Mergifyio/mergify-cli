@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites time="15.682687">
+    <testsuite name="Tests.Registration" time="6.605871">
+        <testcase name="testCase1" classname="Tests.Registration" time="2.113871" />
+        <testcase name="testCase2" classname="Tests.Registration" time="1.051">
+            <skipped message="Test was skipped." />
+        </testcase>
+        <testcase name="testCase3" classname="Tests.Registration" time="3.441">
+            <error message="invalid literal for int() with base 10: 'foobar'" type="ValueError">
+                bip, bip, bip, error!
+            </error>
+        </testcase>
+    </testsuite>
+    <testsuite name="Tests.Authentication" time="9.076816">
+        <testsuite name="Tests.Authentication.Login" time="4.356">
+            <testcase name="testCase4" classname="Tests.Authentication.Login" time="2.244" />
+            <testcase name="testCase5" classname="Tests.Authentication.Login" time="0.781">
+                <error message="invalid syntax" type="SyntaxError">
+                    bad syntax, bad!
+                </error>
+            </testcase>
+            <testcase name="testCase6" classname="Tests.Authentication.Login" time="1.331" />
+        </testsuite>
+        <testcase name="testCase7" classname="Tests.Authentication" time="2.508" >
+            <system-out>This is a standard system output.</system-out>
+        </testcase>
+        <testcase name="testCase8" classname="Tests.Authentication" time="1.230816">
+            <system-out>This is a standard system output.</system-out>
+        </testcase>
+        <testcase name="testCase9" classname="Tests.Authentication" time="0.982">
+            <failure message="Assertion error message" type="AssertionError">
+                Such a mess, the failure is unrecoverable
+            </failure>
+            <failure message="Second failure" type="AssertionError">
+                Twice in row. What a mess!
+            </failure>
+            <system-err>This is a standard system error.</system-err>
+        </testcase>
+        <testcase name="testCase10" classname="Tests.Permission" time="0.423">
+            <error message="division by zero" type="ZeroDivisionError">
+Everything is broken, meh!
+With a second line!
+            </error>
+            <system-err>This is a standard system error.</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>

@@ -65,7 +65,7 @@ def format_pull_description(
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack_push(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917, PLR0914
+async def stack_push(  # noqa: PLR0913, PLR0917
     github_server: str,
     token: str,
     skip_rebase: bool,
