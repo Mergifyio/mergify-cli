@@ -73,10 +73,14 @@ async def upload(  # noqa: PLR0913, PLR0917
     test_framework: str | None = None,
 ) -> None:
     spans = []
+
+    trace_id = junit.ID_GENERATOR.generate_trace_id()
+
     for filename in files:
         try:
             spans.extend(
                 await junit.junit_to_spans(
+                    trace_id,
                     pathlib.Path(filename).read_bytes(),
                     test_language=test_language,
                     test_framework=test_framework,
