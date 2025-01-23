@@ -16,7 +16,7 @@ import opentelemetry.trace.span
 from mergify_cli.ci import detector
 
 
-id_generator = RandomIdGenerator()
+ID_GENERATOR = RandomIdGenerator()
 
 
 @dataclasses.dataclass
@@ -34,6 +34,7 @@ SpanTestStatusT = typing.Literal[
 
 
 async def junit_to_spans(
+    trace_id: int,
     xml_content: bytes,
     test_language: str | None = None,
     test_framework: str | None = None,
@@ -57,7 +58,6 @@ async def junit_to_spans(
         raise InvalidJunitXMLError(msg)
 
     spans = []
-    trace_id = id_generator.generate_trace_id()
 
     now = time.time_ns()
 
@@ -88,7 +88,7 @@ async def junit_to_spans(
 
         testsuite_context = opentelemetry.trace.span.SpanContext(
             trace_id=trace_id,
-            span_id=id_generator.generate_span_id(),
+            span_id=ID_GENERATOR.generate_span_id(),
             is_remote=False,
         )
 
@@ -168,7 +168,7 @@ async def junit_to_spans(
                 end_time=now,
                 context=opentelemetry.trace.span.SpanContext(
                     trace_id=trace_id,
-                    span_id=id_generator.generate_span_id(),
+                    span_id=ID_GENERATOR.generate_span_id(),
                     is_remote=False,
                 ),
                 parent=testsuite_context,
