@@ -73,6 +73,25 @@ async def get_head_sha() -> str | None:
     return None
 
 
+def get_cicd_pipeline_run_id() -> int | None:
+    if get_ci_provider() == "github_actions" and "GITHUB_RUN_ID" in os.environ:
+        return int(os.environ["GITHUB_RUN_ID"])
+
+    if get_ci_provider() == "circleci" and "CIRCLE_WORKFLOW_ID" in os.environ:
+        return int(os.environ["CIRCLE_WORKFLOW_ID"])
+
+    return None
+
+
+def get_cicd_pipeline_run_attempt() -> int | None:
+    if get_ci_provider() == "github_actions" and "GITHUB_RUN_ATTEMPT" in os.environ:
+        return int(os.environ["GITHUB_RUN_ATTEMPT"])
+    if get_ci_provider() == "circleci" and "CIRCLE_BUILD_NUM" in os.environ:
+        return int(os.environ["CIRCLE_BUILD_NUM"])
+
+    return None
+
+
 def get_github_repository() -> str | None:
     if get_ci_provider() == "github_actions":
         return os.getenv("GITHUB_REPOSITORY")
