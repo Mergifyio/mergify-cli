@@ -23,7 +23,6 @@ async def test_parse(
 ) -> None:
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
     spans = await junit.junit_to_spans(
-        123,
         filename.read_bytes(),
         "python",
         "unittest",

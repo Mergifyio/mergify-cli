@@ -34,7 +34,6 @@ SpanTestStatusT = typing.Literal[
 
 
 async def junit_to_spans(
-    trace_id: int,
     xml_content: bytes,
     test_language: str | None = None,
     test_framework: str | None = None,
@@ -81,6 +80,8 @@ async def junit_to_spans(
         resource_attributes["cicd.provider.name"] = provider
 
     resource = resources.Resource.create(resource_attributes)
+
+    trace_id = ID_GENERATOR.generate_trace_id()
 
     for testsuite in testsuites:
         min_start_time = now
