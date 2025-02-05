@@ -66,8 +66,8 @@ async def test_junit_upload(
             captured.out,
             re.MULTILINE,
         )
-    else:
-        assert "🎉 File(s) uploaded" in captured.out
+
+    assert "🎉 File(s) uploaded" in captured.out
 
 
 @responses.activate(assert_all_requests_are_fired=True)
