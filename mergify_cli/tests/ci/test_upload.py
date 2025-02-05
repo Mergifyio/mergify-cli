@@ -1,6 +1,8 @@
 import pathlib
 import re
 
+from opentelemetry.sdk.trace import ReadableSpan
+import opentelemetry.trace.span
 import pytest
 import responses
 
@@ -71,7 +73,7 @@ async def test_junit_upload(
 
 
 @responses.activate(assert_all_requests_are_fired=True)
-async def test_junit_upload_http_error() -> None:
+def test_junit_upload_http_error() -> None:
     responses.post(
         "https://api.mergify.com/v1/repos/user/repo/ci/traces",
         status=422,
@@ -79,9 +81,41 @@ async def test_junit_upload_http_error() -> None:
     )
 
     with pytest.raises(upload.UploadError):
-        await upload.upload(
+        upload.upload_spans(
             "https://api.mergify.com",
             "token",
             "user/repo",
-            (str(REPORT_XML),),
+            [
+                ReadableSpan(
+                    name="hello",
+                    context=opentelemetry.trace.span.SpanContext(
+                        trace_id=1234,
+                        span_id=324,
+                        is_remote=False,
+                    ),
+                ),
+            ],
         )
+
+
+@responses.activate(assert_all_requests_are_fired=True)
+async def test_junit_upload_http_error_console(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    responses.post(
+        "https://api.mergify.com/v1/repos/user/repo/ci/traces",
+        status=422,
+        json={"detail": "Not enabled on this repository"},
+    )
+
+    await upload.upload(
+        "https://api.mergify.com",
+        "token",
+        "user/repo",
+        (str(REPORT_XML),),
+    )
+    captured = capsys.readouterr()
+    assert (
+        'Error uploading spans: Failed to export batch code: 422, reason: {"detail": "Not\nenabled on this repository"}'
+        in captured.out
+    )
