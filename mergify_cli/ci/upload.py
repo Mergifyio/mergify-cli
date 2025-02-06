@@ -35,7 +35,7 @@ def capture_log(logger: logging.Logger) -> typing.Generator[io.StringIO, None, N
     stream_handler.close()
 
 
-def _upload(
+def upload_spans(
     api_url: str,
     token: str,
     repository: str,
@@ -93,8 +93,12 @@ async def upload(  # noqa: PLR0913, PLR0917
             )
 
     if spans:
-        _upload(api_url, token, repository, spans)
-        connect_traces(spans)
-        console.log("[green]:tada: File(s) uploaded[/]")
+        try:
+            upload_spans(api_url, token, repository, spans)
+        except UploadError as e:
+            console.log(f"Error uploading spans: {e}", style="red")
+        else:
+            connect_traces(spans)
+            console.log("[green]:tada: File(s) uploaded[/]")
     else:
         console.log("[orange]No tests were detected in the JUnit file(s)[/]")
