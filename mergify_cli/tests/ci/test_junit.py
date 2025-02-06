@@ -11,6 +11,8 @@ from mergify_cli.ci import junit
 
 @mock.patch.object(detector, "get_ci_provider", return_value="github_actions")
 @mock.patch.object(detector, "get_job_name", return_value="JOB")
+@mock.patch.object(detector, "get_cicd_pipeline_run_id", return_value=123)
+@mock.patch.object(detector, "get_cicd_pipeline_run_attempt", return_value=1)
 @mock.patch.object(
     detector,
     "get_head_sha",
@@ -20,6 +22,8 @@ async def test_parse(
     _get_ci_provider: mock.Mock,
     _get_job_name: mock.Mock,
     _get_head_sha: mock.Mock,
+    _get_cicd_pipeline_run_id: mock.Mock,
+    _get_cicd_pipeline_run_attempt: mock.Mock,
 ) -> None:
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
     spans = await junit.junit_to_spans(
@@ -32,6 +36,17 @@ async def test_parse(
     trace_id = "0x" + opentelemetry.trace.span.format_trace_id(
         spans[1].context.trace_id,
     )
+    resource_attributes = {
+        "cicd.pipeline.name": "JOB",
+        "cicd.pipeline.run.id": 123,
+        "cicd.pipeline.run.attempt": 1,
+        "cicd.provider.name": "github_actions",
+        "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+        "service.name": "unknown_service",
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": anys.ANY_STR,
+    }
     assert dictified_spans == [
         {
             "attributes": {
@@ -52,15 +67,7 @@ async def test_parse(
             "name": "Tests.Registration",
             "parent_id": None,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -88,15 +95,7 @@ async def test_parse(
             "name": "Tests.Registration.testCase1",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -124,15 +123,7 @@ async def test_parse(
             "name": "Tests.Registration.testCase2",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -163,15 +154,7 @@ async def test_parse(
             "name": "Tests.Registration.testCase3",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -198,15 +181,7 @@ async def test_parse(
             "name": "Tests.Authentication",
             "parent_id": None,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -234,15 +209,7 @@ async def test_parse(
             "name": "Tests.Authentication.testCase7",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -270,15 +237,7 @@ async def test_parse(
             "name": "Tests.Authentication.testCase8",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -309,15 +268,7 @@ async def test_parse(
             "name": "Tests.Authentication.testCase9",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -349,15 +300,7 @@ async def test_parse(
             "name": "Tests.Permission.testCase10",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -384,15 +327,7 @@ async def test_parse(
             "name": "Tests.Authentication.Login",
             "parent_id": None,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -420,15 +355,7 @@ async def test_parse(
             "name": "Tests.Authentication.Login.testCase4",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -459,15 +386,7 @@ async def test_parse(
             "name": "Tests.Authentication.Login.testCase5",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,
@@ -495,15 +414,7 @@ async def test_parse(
             "name": "Tests.Authentication.Login.testCase6",
             "parent_id": anys.ANY_STR,
             "resource": {
-                "attributes": {
-                    "cicd.pipeline.name": "JOB",
-                    "cicd.provider.name": "github_actions",
-                    "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                    "service.name": "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": anys.ANY_STR,
-                },
+                "attributes": resource_attributes,
                 "schema_url": "",
             },
             "start_time": anys.ANY_DATETIME_STR,

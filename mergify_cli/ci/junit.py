@@ -69,10 +69,16 @@ async def junit_to_spans(
     if test_language is not None:
         common_attributes["test.language"] = test_language
 
-    resource_attributes = {}
+    resource_attributes: dict[str, typing.Any] = {}
 
     if (job_name := detector.get_job_name()) is not None:
         resource_attributes[cicd_attributes.CICD_PIPELINE_NAME] = job_name
+
+    if (run_id := detector.get_cicd_pipeline_run_id()) is not None:
+        resource_attributes[cicd_attributes.CICD_PIPELINE_RUN_ID] = run_id
+
+    if (run_attempt := detector.get_cicd_pipeline_run_attempt()) is not None:
+        resource_attributes["cicd.pipeline.run.attempt"] = run_attempt
 
     if (head_revision := (await detector.get_head_sha())) is not None:
         resource_attributes[vcs_attributes.VCS_REF_HEAD_REVISION] = head_revision
