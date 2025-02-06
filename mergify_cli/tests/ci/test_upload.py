@@ -63,11 +63,13 @@ async def test_junit_upload(
 
     captured = capsys.readouterr()
     if env["GITHUB_ACTIONS"] == "true":
-        assert re.search(
-            r"^::notice title=Mergify CI::MERGIFY_TRACE_ID=\d+",
+        matched = re.search(
+            r"^::notice title=Mergify CI::MERGIFY_TEST_ROOT_SPAN_ID=(\d+)",
             captured.out,
             re.MULTILINE,
         )
+        assert matched is not None
+        assert int(matched.group(1)) > 0
 
     assert "🎉 File(s) uploaded" in captured.out
 

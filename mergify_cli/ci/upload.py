@@ -57,9 +57,9 @@ def upload_spans(
 
 def connect_traces(spans: list[ReadableSpan]) -> None:
     if detector.get_ci_provider() == "github_actions" and spans:
-        trace_id = spans[0].context.trace_id
+        root_span_id = spans[0].context.span_id
         console.print(
-            f"::notice title=Mergify CI::MERGIFY_TRACE_ID={trace_id}",
+            f"::notice title=Mergify CI::MERGIFY_TEST_ROOT_SPAN_ID={root_span_id}",
             soft_wrap=True,
         )
 
@@ -74,13 +74,10 @@ async def upload(  # noqa: PLR0913, PLR0917
 ) -> None:
     spans = []
 
-    trace_id = junit.ID_GENERATOR.generate_trace_id()
-
     for filename in files:
         try:
             spans.extend(
                 await junit.junit_to_spans(
-                    trace_id,
                     pathlib.Path(filename).read_bytes(),
                     test_language=test_language,
                     test_framework=test_framework,
