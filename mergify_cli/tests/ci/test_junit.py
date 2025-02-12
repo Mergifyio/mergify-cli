@@ -50,7 +50,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Registration",
-                "test.type": "suite",
+                "test.scope": "suite",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -78,7 +78,7 @@ async def test_parse(
             "attributes": {
                 "test.case.name": "Tests.Registration.testCase1",
                 "test.case.result.status": "success",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -106,7 +106,7 @@ async def test_parse(
             "attributes": {
                 "test.case.name": "Tests.Registration.testCase2",
                 "test.case.result.status": "skipped",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -137,7 +137,7 @@ async def test_parse(
                 "exception.type": "ValueError",
                 "test.case.name": "Tests.Registration.testCase3",
                 "test.case.result.status": "failure",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -164,7 +164,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Authentication",
-                "test.type": "suite",
+                "test.scope": "suite",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -192,7 +192,7 @@ async def test_parse(
             "attributes": {
                 "test.case.name": "Tests.Authentication.testCase7",
                 "test.case.result.status": "success",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -220,7 +220,7 @@ async def test_parse(
             "attributes": {
                 "test.case.name": "Tests.Authentication.testCase8",
                 "test.case.result.status": "success",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -251,7 +251,7 @@ async def test_parse(
                 "exception.type": "AssertionError",
                 "test.case.name": "Tests.Authentication.testCase9",
                 "test.case.result.status": "failure",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -283,7 +283,7 @@ async def test_parse(
                 "exception.type": "ZeroDivisionError",
                 "test.case.name": "Tests.Permission.testCase10",
                 "test.case.result.status": "failure",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -310,7 +310,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Authentication.Login",
-                "test.type": "suite",
+                "test.scope": "suite",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -338,7 +338,7 @@ async def test_parse(
             "attributes": {
                 "test.case.name": "Tests.Authentication.Login.testCase4",
                 "test.case.result.status": "success",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -369,7 +369,7 @@ async def test_parse(
                 "exception.type": "SyntaxError",
                 "test.case.name": "Tests.Authentication.Login.testCase5",
                 "test.case.result.status": "failure",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
@@ -397,7 +397,7 @@ async def test_parse(
             "attributes": {
                 "test.case.name": "Tests.Authentication.Login.testCase6",
                 "test.case.result.status": "success",
-                "test.type": "case",
+                "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
             },
