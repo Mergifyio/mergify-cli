@@ -24,15 +24,6 @@ class InvalidJunitXMLError(Exception):
     details: str
 
 
-SpanTestStatusT = typing.Literal[
-    "success",
-    "failure",
-    "skipped",
-    "aborted",
-    "timed_out",
-]
-
-
 async def junit_to_spans(
     xml_content: bytes,
     test_language: str | None = None,
