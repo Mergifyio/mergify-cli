@@ -26,7 +26,9 @@ async def test_parse(
     _get_cicd_pipeline_run_attempt: mock.Mock,
 ) -> None:
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
+    run_id = 32312
     spans = await junit.junit_to_spans(
+        run_id,
         filename.read_bytes(),
         "python",
         "unittest",
@@ -36,6 +38,7 @@ async def test_parse(
         spans[1].context.trace_id,
     )
     resource_attributes = {
+        "test.run.id": run_id,
         "cicd.pipeline.name": "JOB",
         "cicd.pipeline.run.id": 123,
         "cicd.pipeline.run.attempt": 1,

@@ -55,11 +55,10 @@ def upload_spans(
             raise UploadError(logstr.getvalue())
 
 
-def connect_traces(spans: list[ReadableSpan]) -> None:
-    if detector.get_ci_provider() == "github_actions" and spans:
-        root_span_id = spans[0].context.span_id
+def connect_traces(run_id: int) -> None:
+    if detector.get_ci_provider() == "github_actions":
         console.print(
-            f"::notice title=Mergify CI::MERGIFY_TEST_ROOT_SPAN_ID={root_span_id}",
+            f"::notice title=Mergify CI::MERGIFY_TEST_RUN_ID={run_id.to_bytes(8, 'big').hex()}",
             soft_wrap=True,
         )
 
@@ -74,10 +73,13 @@ async def upload(  # noqa: PLR0913, PLR0917
 ) -> None:
     spans = []
 
+    run_id = junit.ID_GENERATOR.generate_span_id()
+
     for filename in files:
         try:
             spans.extend(
                 await junit.junit_to_spans(
+                    run_id,
                     pathlib.Path(filename).read_bytes(),
                     test_language=test_language,
                     test_framework=test_framework,
@@ -95,7 +97,7 @@ async def upload(  # noqa: PLR0913, PLR0917
         except UploadError as e:
             console.log(f"Error uploading spans: {e}", style="red")
         else:
-            connect_traces(spans)
+            connect_traces(run_id)
             console.log("[green]:tada: File(s) uploaded[/]")
     else:
         console.log("[orange]No tests were detected in the JUnit file(s)[/]")
