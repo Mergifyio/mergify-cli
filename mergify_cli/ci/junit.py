@@ -99,7 +99,7 @@ async def junit_to_spans(
             resource=resource,
             attributes={
                 "test.case.name": suite_name,
-                "test.type": "suite",
+                "test.scope": "suite",
             }
             | common_attributes,
         )
@@ -116,7 +116,7 @@ async def junit_to_spans(
             min_start_time = min(min_start_time, start_time)
 
             attributes = {
-                "test.type": "case",
+                "test.scope": "case",
                 "test.case.name": test_name,
             }
 
