@@ -25,6 +25,7 @@ class InvalidJunitXMLError(Exception):
 
 
 async def junit_to_spans(
+    run_id: int,
     xml_content: bytes,
     test_language: str | None = None,
     test_framework: str | None = None,
@@ -59,13 +60,15 @@ async def junit_to_spans(
     if test_language is not None:
         common_attributes["test.language"] = test_language
 
-    resource_attributes: dict[str, typing.Any] = {}
+    resource_attributes: dict[str, typing.Any] = {
+        "test.run.id": run_id,
+    }
 
     if (job_name := detector.get_job_name()) is not None:
         resource_attributes[cicd_attributes.CICD_PIPELINE_NAME] = job_name
 
-    if (run_id := detector.get_cicd_pipeline_run_id()) is not None:
-        resource_attributes[cicd_attributes.CICD_PIPELINE_RUN_ID] = run_id
+    if (cicd_run_id := detector.get_cicd_pipeline_run_id()) is not None:
+        resource_attributes[cicd_attributes.CICD_PIPELINE_RUN_ID] = cicd_run_id
 
     if (run_attempt := detector.get_cicd_pipeline_run_attempt()) is not None:
         resource_attributes["cicd.pipeline.run.attempt"] = run_attempt
