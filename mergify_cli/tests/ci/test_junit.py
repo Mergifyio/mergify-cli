@@ -26,7 +26,7 @@ async def test_parse(
     _get_cicd_pipeline_run_attempt: mock.Mock,
 ) -> None:
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
-    run_id = 32312
+    run_id = (32312).to_bytes(8, "big").hex()
     spans = await junit.junit_to_spans(
         run_id,
         filename.read_bytes(),
