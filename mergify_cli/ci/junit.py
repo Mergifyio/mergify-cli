@@ -25,7 +25,7 @@ class InvalidJunitXMLError(Exception):
 
 
 async def junit_to_spans(
-    run_id: int,
+    run_id: str,
     xml_content: bytes,
     test_language: str | None = None,
     test_framework: str | None = None,

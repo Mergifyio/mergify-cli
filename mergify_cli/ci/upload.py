@@ -55,10 +55,10 @@ def upload_spans(
             raise UploadError(logstr.getvalue())
 
 
-def connect_traces(run_id: int) -> None:
+def connect_traces(run_id: str) -> None:
     if detector.get_ci_provider() == "github_actions":
         console.print(
-            f"::notice title=Mergify CI::MERGIFY_TEST_RUN_ID={run_id.to_bytes(8, 'big').hex()}",
+            f"::notice title=Mergify CI::MERGIFY_TEST_RUN_ID={run_id}",
             soft_wrap=True,
         )
 
@@ -73,7 +73,7 @@ async def upload(  # noqa: PLR0913, PLR0917
 ) -> None:
     spans = []
 
-    run_id = junit.ID_GENERATOR.generate_span_id()
+    run_id = junit.ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
 
     for filename in files:
         try:
