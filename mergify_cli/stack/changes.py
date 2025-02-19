@@ -265,9 +265,7 @@ async def get_changes(  # noqa: PLR0913,PLR0917
         if next_only and idx > 0:
             action = "skip-next-only"
         elif pull is None:
-            if only_update_existing_pulls:
-                action = "skip-create"
-            action = "create"
+            action = "skip-create" if only_update_existing_pulls else "create"
         elif pull["merged_at"]:
             action = "skip-merged"
         elif pull["head"]["sha"] == commit:
