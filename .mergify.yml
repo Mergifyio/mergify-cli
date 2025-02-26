@@ -27,9 +27,6 @@ queue_rules:
     batch_max_wait_time: 5min
     commit_message_template:
     queue_branch_merge_method: fast-forward
-    disallow_checks_interruption_from_queues:
-      - default
-
 pull_request_rules:
   - name: automatic merge
     conditions:
