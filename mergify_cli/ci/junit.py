@@ -76,6 +76,9 @@ async def junit_to_spans(
     if (head_revision := (await detector.get_head_sha())) is not None:
         resource_attributes[vcs_attributes.VCS_REF_HEAD_REVISION] = head_revision
 
+    if (head_ref_name := detector.get_head_ref_name()) is not None:
+        resource_attributes[vcs_attributes.VCS_REF_HEAD_NAME] = head_ref_name
+
     if (provider := detector.get_ci_provider()) is not None:
         resource_attributes["cicd.provider.name"] = provider
 
