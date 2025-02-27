@@ -220,7 +220,9 @@ async def stack_push(  # noqa: PLR0913, PLR0917
 class StackComment:
     pulls: list[github_types.PullRequest]
 
-    STACK_COMMENT_FIRST_LINE = "This pull request is part of a stack:\n"
+    STACK_COMMENT_FIRST_LINE: typing.ClassVar[str] = (
+        "This pull request is part of a stack:\n"
+    )
 
     def body(self, current_pull: github_types.PullRequest) -> str:
         body = self.STACK_COMMENT_FIRST_LINE
