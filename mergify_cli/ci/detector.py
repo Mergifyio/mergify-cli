@@ -21,7 +21,7 @@ def get_ci_provider() -> CIProviderT | None:
 
 def get_job_name() -> str | None:
     if get_ci_provider() == "github_actions":
-        return os.getenv("GITHUB_WORKFLOW")
+        return os.getenv("GITHUB_JOB")
     if get_ci_provider() == "circleci":
         return os.getenv("CIRCLE_JOB")
 
