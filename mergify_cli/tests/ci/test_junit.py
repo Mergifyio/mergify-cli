@@ -18,12 +18,18 @@ from mergify_cli.ci import junit
     "get_head_sha",
     return_value="3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
 )
+@mock.patch.object(
+    detector,
+    "get_head_ref_name",
+    return_value="refs/heads/main",
+)
 async def test_parse(
     _get_ci_provider: mock.Mock,
     _get_job_name: mock.Mock,
-    _get_head_sha: mock.Mock,
     _get_cicd_pipeline_run_id: mock.Mock,
     _get_cicd_pipeline_run_attempt: mock.Mock,
+    _get_head_sha: mock.Mock,
+    _get_head_ref_name: mock.Mock,
 ) -> None:
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
     run_id = (32312).to_bytes(8, "big").hex()
@@ -44,6 +50,7 @@ async def test_parse(
         "cicd.pipeline.run.attempt": 1,
         "cicd.provider.name": "github_actions",
         "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+        "vcs.ref.head.name": "refs/heads/main",
         "service.name": "unknown_service",
         "telemetry.sdk.language": "python",
         "telemetry.sdk.name": "opentelemetry",
