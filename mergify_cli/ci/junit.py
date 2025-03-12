@@ -141,7 +141,7 @@ async def junit_to_spans(
                 testcase.find("failure") is not None
                 or testcase.find("error") is not None
             ):
-                attributes["test.case.result.status"] = "failure"
+                attributes["test.case.result.status"] = "failed"
                 span_status = opentelemetry.trace.Status(
                     status_code=opentelemetry.trace.StatusCode.ERROR,
                 )
@@ -161,7 +161,7 @@ async def junit_to_spans(
                         # We only care about the first failure/error
                         break
             else:
-                attributes["test.case.result.status"] = "success"
+                attributes["test.case.result.status"] = "passed"
                 span_status = opentelemetry.trace.Status(
                     status_code=opentelemetry.trace.StatusCode.OK,
                 )
