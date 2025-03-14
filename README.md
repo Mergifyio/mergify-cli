@@ -4,7 +4,7 @@
 
 Mergify CLI is a powerful tool designed to simplify and automate the creation and management of stacked pull requests on GitHub. 
 
-Before diving into its functionalities, let's grasp the concept of stacked pull requests and why they matter in the [documentation](https://docs.mergify.com/stacked_prs/#understanding-stacked-pull-requests).
+Before diving into its functionalities, let's grasp the concept of stacked pull requests and why they matter in the [documentation](https://docs.mergify.com/stacks/).
 
 ## Documentation
 
