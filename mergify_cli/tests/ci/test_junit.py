@@ -59,6 +59,32 @@ async def test_parse(
     assert dictified_spans == [
         {
             "attributes": {
+                "test.framework": "unittest",
+                "test.language": "python",
+                "test.scope": "session",
+            },
+            "context": {
+                "span_id": anys.ANY_STR,
+                "trace_id": trace_id,
+                "trace_state": "[]",
+            },
+            "end_time": anys.ANY_DATETIME_STR,
+            "events": [],
+            "kind": "SpanKind.INTERNAL",
+            "links": [],
+            "name": "test session",
+            "parent_id": None,
+            "resource": {
+                "attributes": resource_attributes,
+                "schema_url": "",
+            },
+            "start_time": anys.ANY_DATETIME_STR,
+            "status": {
+                "status_code": "UNSET",
+            },
+        },
+        {
+            "attributes": {
                 "test.case.name": "Tests.Registration",
                 "test.scope": "suite",
                 "test.framework": "unittest",
@@ -74,7 +100,7 @@ async def test_parse(
             "kind": "SpanKind.INTERNAL",
             "links": [],
             "name": "Tests.Registration",
-            "parent_id": None,
+            "parent_id": anys.ANY_STR,
             "resource": {
                 "attributes": resource_attributes,
                 "schema_url": "",
@@ -188,7 +214,7 @@ async def test_parse(
             "kind": "SpanKind.INTERNAL",
             "links": [],
             "name": "Tests.Authentication",
-            "parent_id": None,
+            "parent_id": anys.ANY_STR,
             "resource": {
                 "attributes": resource_attributes,
                 "schema_url": "",
@@ -334,7 +360,7 @@ async def test_parse(
             "kind": "SpanKind.INTERNAL",
             "links": [],
             "name": "Tests.Authentication.Login",
-            "parent_id": None,
+            "parent_id": anys.ANY_STR,
             "resource": {
                 "attributes": resource_attributes,
                 "schema_url": "",

@@ -48,8 +48,6 @@ async def junit_to_spans(
         msg = "no testsuite tag found"
         raise InvalidJunitXMLError(msg)
 
-    spans = []
-
     now = time.time_ns()
 
     common_attributes = {}
@@ -86,6 +84,29 @@ async def junit_to_spans(
 
     trace_id = ID_GENERATOR.generate_trace_id()
 
+    session_context = opentelemetry.trace.span.SpanContext(
+        trace_id=trace_id,
+        span_id=ID_GENERATOR.generate_span_id(),
+        is_remote=False,
+    )
+
+    session_span = ReadableSpan(
+        name="test session",
+        context=session_context,
+        parent=None,
+        # We'll compute start_time later
+        end_time=now,
+        resource=resource,
+        attributes={
+            "test.scope": "session",
+        }
+        | common_attributes,
+    )
+
+    session_start_time = now
+
+    spans = [session_span]
+
     for testsuite in testsuites:
         min_start_time = now
         suite_name = testsuite.get("name", "unnamed testsuite")
@@ -99,7 +120,7 @@ async def junit_to_spans(
         testsuite_span = ReadableSpan(
             name=suite_name,
             context=testsuite_context,
-            parent=None,
+            parent=session_context,
             # We'll compute start_time later
             end_time=now,
             resource=resource,
@@ -184,5 +205,8 @@ async def junit_to_spans(
             spans.append(span)
 
         testsuite_span._start_time = min_start_time  # noqa: SLF001
+        session_start_time = min(session_start_time, min_start_time)
+
+    session_span._start_time = session_start_time  # noqa: SLF001
 
     return spans
