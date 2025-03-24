@@ -11,6 +11,11 @@ from mergify_cli.ci import junit
 
 @mock.patch.object(detector, "get_ci_provider", return_value="github_actions")
 @mock.patch.object(detector, "get_job_name", return_value="JOB")
+@mock.patch.object(
+    detector,
+    "get_cicd_pipeline_runner_name",
+    return_value="self-hosted",
+)
 @mock.patch.object(detector, "get_cicd_pipeline_run_id", return_value=123)
 @mock.patch.object(detector, "get_cicd_pipeline_run_attempt", return_value=1)
 @mock.patch.object(
@@ -26,6 +31,7 @@ from mergify_cli.ci import junit
 async def test_parse(
     _get_ci_provider: mock.Mock,
     _get_job_name: mock.Mock,
+    _get_cicd_pipeline_runner_name: mock.Mock,
     _get_cicd_pipeline_run_id: mock.Mock,
     _get_cicd_pipeline_run_attempt: mock.Mock,
     _get_head_sha: mock.Mock,
@@ -48,6 +54,7 @@ async def test_parse(
         "cicd.pipeline.name": "JOB",
         "cicd.pipeline.run.id": 123,
         "cicd.pipeline.run.attempt": 1,
+        "cicd.pipeline.runner.name": "self-hosted",
         "cicd.provider.name": "github_actions",
         "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
         "vcs.ref.head.name": "refs/heads/main",
