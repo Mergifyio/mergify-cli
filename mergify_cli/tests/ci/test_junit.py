@@ -30,14 +30,14 @@ from mergify_cli.ci import junit
     return_value="refs/heads/main",
 )
 async def test_parse(
-    _get_ci_provider: mock.Mock,
-    _get_job_name: mock.Mock,
-    _get_cicd_pipeline_runner_id: mock.Mock,
-    _get_cicd_pipeline_runner_name: mock.Mock,
-    _get_cicd_pipeline_run_id: mock.Mock,
-    _get_cicd_pipeline_run_attempt: mock.Mock,
-    _get_head_sha: mock.Mock,
     _get_head_ref_name: mock.Mock,
+    _get_head_sha: mock.Mock,
+    _get_cicd_pipeline_run_attempt: mock.Mock,
+    _get_cicd_pipeline_run_id: mock.Mock,
+    _get_cicd_pipeline_runner_name: mock.Mock,
+    _get_cicd_pipeline_runner_id: mock.Mock,
+    _get_job_name: mock.Mock,
+    _get_ci_provider: mock.Mock,
 ) -> None:
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
     run_id = (32312).to_bytes(8, "big").hex()
