@@ -83,6 +83,18 @@ async def get_head_sha() -> str | None:
     return None
 
 
+def get_cicd_pipeline_runner_name() -> str | None:
+    if get_ci_provider() == "github_actions" and "RUNNER_NAME" in os.environ:
+        return os.environ["RUNNER_NAME"]
+    return None
+
+
+def get_cicd_pipeline_runner_id() -> int | None:
+    if get_ci_provider() == "github_actions" and "RUNNER_ID" in os.environ:
+        return int(os.environ["RUNNER_ID"])
+    return None
+
+
 def get_cicd_pipeline_run_id() -> int | None:
     if get_ci_provider() == "github_actions" and "GITHUB_RUN_ID" in os.environ:
         return int(os.environ["GITHUB_RUN_ID"])
