@@ -4,6 +4,7 @@ from unittest import mock
 
 import anys
 import opentelemetry.trace.span
+import pytest
 
 from mergify_cli.ci import detector
 from mergify_cli.ci import junit
@@ -36,7 +37,9 @@ async def test_parse(
     _get_cicd_pipeline_run_attempt: mock.Mock,
     _get_head_sha: mock.Mock,
     _get_head_ref_name: mock.Mock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("MERGIFY_TEST_JOB_NAME", "foobar")
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
     run_id = (32312).to_bytes(8, "big").hex()
     spans = await junit.junit_to_spans(
@@ -62,6 +65,7 @@ async def test_parse(
         "telemetry.sdk.language": "python",
         "telemetry.sdk.name": "opentelemetry",
         "telemetry.sdk.version": anys.ANY_STR,
+        "mergify.test.job.name": "foobar",
     }
     assert dictified_spans == [
         {
