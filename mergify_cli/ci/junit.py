@@ -63,7 +63,7 @@ async def junit_to_spans(
     }
 
     if (job_name := detector.get_job_name()) is not None:
-        resource_attributes[cicd_attributes.CICD_PIPELINE_NAME] = job_name
+        resource_attributes[cicd_attributes.CICD_PIPELINE_TASK_NAME] = job_name
 
     if (cicd_run_id := detector.get_cicd_pipeline_run_id()) is not None:
         resource_attributes[cicd_attributes.CICD_PIPELINE_RUN_ID] = cicd_run_id
