@@ -54,7 +54,7 @@ async def test_parse(
     )
     resource_attributes = {
         "test.run.id": run_id,
-        "cicd.pipeline.name": "JOB",
+        "cicd.pipeline.task.name": "JOB",
         "cicd.pipeline.run.id": 123,
         "cicd.pipeline.run.attempt": 1,
         "cicd.pipeline.runner.name": "self-hosted",
