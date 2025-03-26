@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import time
 import typing
 from xml.etree import ElementTree as ET  # noqa: S405
@@ -61,6 +62,11 @@ async def junit_to_spans(
     resource_attributes: dict[str, typing.Any] = {
         "test.run.id": run_id,
     }
+
+    if "MERGIFY_TEST_JOB_NAME" in os.environ:
+        resource_attributes["mergify.test.job.name"] = os.environ[
+            "MERGIFY_TEST_JOB_NAME"
+        ]
 
     if (job_name := detector.get_job_name()) is not None:
         resource_attributes[cicd_attributes.CICD_PIPELINE_TASK_NAME] = job_name
