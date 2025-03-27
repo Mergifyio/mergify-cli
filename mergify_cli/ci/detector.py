@@ -31,7 +31,7 @@ def get_job_name() -> str | None:
 def get_head_ref_name() -> str | None:
     match get_ci_provider():
         case "github_actions":
-            return os.getenv("GITHUB_HEAD_REF") or os.getenv("GITHUB_REF")
+            return os.getenv("GITHUB_REF_NAME")
         case "circleci":
             return os.getenv("CIRCLE_BRANCH")
         case _:
