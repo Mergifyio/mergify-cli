@@ -10,7 +10,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace import export
 
 from mergify_cli import console
-from mergify_cli.ci import detector
 from mergify_cli.ci import junit
 
 
@@ -55,14 +54,6 @@ def upload_spans(
             raise UploadError(logstr.getvalue())
 
 
-def connect_traces(run_id: str) -> None:
-    if detector.get_ci_provider() == "github_actions":
-        console.print(
-            f"::notice title=Mergify CI::MERGIFY_TEST_RUN_ID={run_id}",
-            soft_wrap=True,
-        )
-
-
 async def upload(  # noqa: PLR0913, PLR0917
     api_url: str,
     token: str,
@@ -97,7 +88,9 @@ async def upload(  # noqa: PLR0913, PLR0917
         except UploadError as e:
             console.log(f"Error uploading spans: {e}", style="red")
         else:
-            connect_traces(run_id)
+            console.print(
+                f"MERGIFY_TEST_RUN_ID={run_id}",
+            )
             console.log("[green]:tada: File(s) uploaded[/]")
     else:
         console.log("[orange]No tests were detected in the JUnit file(s)[/]")
