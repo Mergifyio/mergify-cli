@@ -82,11 +82,14 @@ class CommandError(Exception):
 async def run_command(*args: str) -> str:
     if is_debug():
         console.print(f"[purple]DEBUG: running: git {' '.join(args)} [/]")
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError as e:
+        raise CommandError(args, -1, str(e).encode()) from e
     stdout, _ = await proc.communicate()
     if proc.returncode != 0:
         raise CommandError(args, proc.returncode, stdout)
