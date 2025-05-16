@@ -58,11 +58,17 @@ async def junit_upload(  # noqa: PLR0913, PLR0917
     test_language: str | None,
     files: tuple[str, ...],
 ) -> None:
-    await upload.upload(
-        api_url=api_url,
-        token=token,
-        repository=repository,
-        test_framework=test_framework,
-        test_language=test_language,
-        files=files,
-    )
+    try:
+        await upload.upload(
+            api_url=api_url,
+            token=token,
+            repository=repository,
+            test_framework=test_framework,
+            test_language=test_language,
+            files=files,
+        )
+    except Exception as e:  # noqa: BLE001
+        click.echo(
+            click.style(f"Error uploading JUnit XML reports: {e}", fg="red"),
+            err=True,
+        )
