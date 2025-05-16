@@ -51,3 +51,11 @@ pull_request_rules:
 
 merge_queue:
   max_parallel_checks: 5
+priority_rules:
+  - name: priority for queue `default`
+    conditions:
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+      - "#review-threads-unresolved=0"
+      - "#review-requested=0"
+    priority: 2250
