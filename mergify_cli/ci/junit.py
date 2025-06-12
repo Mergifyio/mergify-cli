@@ -68,6 +68,9 @@ async def junit_to_spans(
             "MERGIFY_TEST_JOB_NAME"
         ]
 
+    if (pipeline_name := detector.get_pipeline_name()) is not None:
+        resource_attributes[cicd_attributes.CICD_PIPELINE_NAME] = pipeline_name
+
     if (job_name := detector.get_job_name()) is not None:
         resource_attributes[cicd_attributes.CICD_PIPELINE_TASK_NAME] = job_name
 
