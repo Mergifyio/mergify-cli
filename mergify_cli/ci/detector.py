@@ -19,6 +19,13 @@ def get_ci_provider() -> CIProviderT | None:
     return None
 
 
+def get_pipeline_name() -> str | None:
+    if get_ci_provider() == "github_actions":
+        return os.getenv("GITHUB_WORKFLOW")
+
+    return None
+
+
 def get_job_name() -> str | None:
     if get_ci_provider() == "github_actions":
         return os.getenv("GITHUB_JOB")

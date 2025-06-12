@@ -11,6 +11,7 @@ from mergify_cli.ci import junit
 
 
 @mock.patch.object(detector, "get_ci_provider", return_value="github_actions")
+@mock.patch.object(detector, "get_pipeline_name", return_value="PIPELINE")
 @mock.patch.object(detector, "get_job_name", return_value="JOB")
 @mock.patch.object(
     detector,
@@ -31,6 +32,7 @@ from mergify_cli.ci import junit
 )
 async def test_parse(
     _get_ci_provider: mock.Mock,
+    _get_pipeline_name: mock.Mock,
     _get_job_name: mock.Mock,
     _get_cicd_pipeline_runner_name: mock.Mock,
     _get_cicd_pipeline_run_id: mock.Mock,
@@ -54,6 +56,7 @@ async def test_parse(
     )
     resource_attributes = {
         "test.run.id": run_id,
+        "cicd.pipeline.name": "PIPELINE",
         "cicd.pipeline.task.name": "JOB",
         "cicd.pipeline.run.id": 123,
         "cicd.pipeline.run.attempt": 1,
