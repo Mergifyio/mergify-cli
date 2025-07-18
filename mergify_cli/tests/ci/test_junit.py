@@ -127,6 +127,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Registration.testCase1",
+                "code.function.name": "Tests.Registration.testCase1",
                 "test.case.result.status": "passed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -155,6 +156,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Registration.testCase2",
+                "code.function.name": "Tests.Registration.testCase2",
                 "test.case.result.status": "skipped",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -186,6 +188,7 @@ async def test_parse(
                 "exception.stacktrace": "bip, bip, bip, error!",
                 "exception.type": "ValueError",
                 "test.case.name": "Tests.Registration.testCase3",
+                "code.function.name": "Tests.Registration.testCase3",
                 "test.case.result.status": "failed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -241,6 +244,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Authentication.testCase7",
+                "code.function.name": "Tests.Authentication.testCase7",
                 "test.case.result.status": "passed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -269,6 +273,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Authentication.testCase8",
+                "code.function.name": "Tests.Authentication.testCase8",
                 "test.case.result.status": "passed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -300,6 +305,7 @@ async def test_parse(
                 "exception.stacktrace": "Such a mess, the failure is unrecoverable",
                 "exception.type": "AssertionError",
                 "test.case.name": "Tests.Authentication.testCase9",
+                "code.function.name": "Tests.Authentication.testCase9",
                 "test.case.result.status": "failed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -332,6 +338,7 @@ async def test_parse(
                 "With a second line!",
                 "exception.type": "ZeroDivisionError",
                 "test.case.name": "Tests.Permission.testCase10",
+                "code.function.name": "Tests.Permission.testCase10",
                 "test.case.result.status": "failed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -387,6 +394,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Authentication.Login.testCase4",
+                "code.function.name": "Tests.Authentication.Login.testCase4",
                 "test.case.result.status": "passed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -418,6 +426,7 @@ async def test_parse(
                 "exception.stacktrace": "bad syntax, bad!",
                 "exception.type": "SyntaxError",
                 "test.case.name": "Tests.Authentication.Login.testCase5",
+                "code.function.name": "Tests.Authentication.Login.testCase5",
                 "test.case.result.status": "failed",
                 "test.scope": "case",
                 "test.framework": "unittest",
@@ -446,6 +455,7 @@ async def test_parse(
         {
             "attributes": {
                 "test.case.name": "Tests.Authentication.Login.testCase6",
+                "code.function.name": "Tests.Authentication.Login.testCase6",
                 "test.case.result.status": "passed",
                 "test.scope": "case",
                 "test.framework": "unittest",

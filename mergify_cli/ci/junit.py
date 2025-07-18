@@ -159,6 +159,7 @@ async def junit_to_spans(
             attributes = {
                 "test.scope": "case",
                 "test.case.name": test_name,
+                "code.function.name": test_name,
             }
 
             if (filename := testcase.get("file")) is not None:
