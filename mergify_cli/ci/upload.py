@@ -61,7 +61,7 @@ async def upload(  # noqa: PLR0913, PLR0917
     files: tuple[str, ...],
     test_language: str | None = None,
     test_framework: str | None = None,
-) -> None:
+) -> list[ReadableSpan]:
     spans = []
 
     run_id = junit.ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
@@ -94,3 +94,5 @@ async def upload(  # noqa: PLR0913, PLR0917
             console.log("[green]:tada: File(s) uploaded[/]")
     else:
         console.log("[orange]No tests were detected in the JUnit file(s)[/]")
+
+    return spans
