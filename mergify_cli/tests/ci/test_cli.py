@@ -93,7 +93,7 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
     ):
         mocked_upload.side_effect = Exception("Upload failed")
         result = runner.invoke(
-            cli_junit_upload.junit_upload,
+            cli_junit_upload.junit_process,
             [str(REPORT_XML)],
         )
     assert result.exit_code == 0, (result.stdout, result.stderr)
