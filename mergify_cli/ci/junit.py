@@ -35,26 +35,17 @@ async def files_to_spans(
     spans = []
 
     run_id = ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
-
-    console.print(
-        f"MERGIFY_TEST_RUN_ID={run_id}",
-    )
+    console.print(f"MERGIFY_TEST_RUN_ID={run_id}")
 
     for filename in files:
-        try:
-            spans.extend(
-                await junit_to_spans(
-                    run_id,
-                    pathlib.Path(filename).read_bytes(),
-                    test_language=test_language,
-                    test_framework=test_framework,
-                ),
-            )
-        except InvalidJunitXMLError as e:
-            console.log(
-                f"Error converting JUnit XML file to spans: {e.details}",
-                style="red",
-            )
+        spans.extend(
+            await junit_to_spans(
+                run_id,
+                pathlib.Path(filename).read_bytes(),
+                test_language=test_language,
+                test_framework=test_framework,
+            ),
+        )
 
     return spans
 

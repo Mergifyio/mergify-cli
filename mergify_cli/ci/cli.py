@@ -1,4 +1,9 @@
+import sys
+
 import click
+import httpx
+import opentelemetry.trace
+import tenacity
 
 from mergify_cli import utils
 from mergify_cli.ci import detector
@@ -51,7 +56,8 @@ ci = click.Group(
     type=click.Path(exists=True, dir_okay=False),
 )
 @utils.run_with_asyncio
-async def junit_upload(  # noqa: PLR0913, PLR0917
+async def junit_upload(  # noqa: PLR0913
+    *,
     api_url: str,
     token: str,
     repository: str,
@@ -78,11 +84,29 @@ async def _process_junit_files(  # noqa: PLR0913
     test_language: str | None,
     files: tuple[str, ...],
 ) -> None:
-    spans = await junit.files_to_spans(
-        files,
-        test_language=test_language,
-        test_framework=test_framework,
-    )
+    try:
+        spans = await junit.files_to_spans(
+            files,
+            test_language=test_language,
+            test_framework=test_framework,
+        )
+    except junit.InvalidJunitXMLError as e:
+        click.echo(
+            click.style(
+                f"Error converting JUnit XML file to spans: {e.details}",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)
+
+    if not spans:
+        click.echo(
+            click.style("No spans found in the JUnit files", fg="red"),
+            err=True,
+        )
+        sys.exit(1)
+
     try:
         upload.upload(
             api_url=api_url,
@@ -95,3 +119,83 @@ async def _process_junit_files(  # noqa: PLR0913
             click.style(f"Error uploading JUnit XML reports: {e}", fg="red"),
             err=True,
         )
+
+    failing_spans = [
+        span
+        for span in spans
+        if span.status.status_code == opentelemetry.trace.StatusCode.ERROR
+        and span.attributes is not None
+        and span.attributes.get("test.scope") == "case"
+    ]
+    if not failing_spans:
+        return
+
+    await check_failing_spans_with_quarantine(
+        api_url,
+        token,
+        repository,
+        [fspan.name for fspan in failing_spans],
+    )
+
+
+@tenacity.retry(
+    wait=tenacity.wait_exponential(multiplier=0.2),
+    stop=tenacity.stop_after_attempt(5),
+    retry=tenacity.retry_if_exception_type(httpx.TransportError),
+    reraise=True,
+)
+async def check_failing_spans_with_quarantine(
+    api_url: str,
+    token: str,
+    repository: str,
+    failing_spans_names: list[str],
+) -> None:
+    fspans_str = "\n".join(failing_spans_names)
+    click.echo(
+        f"Checking the following failing tests for quarantine:\n{fspans_str}",
+        err=False,
+    )
+
+    async with utils.get_http_client(
+        server=f"{api_url}/v1/ci/{repository}/quarantine",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        response = await client.post(
+            "/check",
+            json={"tests_names": failing_spans_names},
+        )
+
+        if response.status_code != 200:
+            click.echo(
+                click.style(
+                    f"HTTP error {response.status_code} while checking quarantined tests: {response.text}",
+                    fg="red",
+                ),
+                err=True,
+            )
+            sys.exit(1)
+
+        resp_json = response.json()
+        if resp_json["quarantined_tests_names"]:
+            quarantined_test_names_str = "\n".join(
+                resp_json["quarantined_tests_names"],
+            )
+            click.echo(
+                f"The following failing tests are quarantined and will be ignored:\n{quarantined_test_names_str}",
+                err=False,
+            )
+
+        if not resp_json["non_quarantined_tests_names"]:
+            return
+
+        non_quarantined_test_names_str = "\n".join(
+            resp_json["non_quarantined_tests_names"],
+        )
+        click.echo(
+            click.style(
+                f"The following failing tests are not quarantined:\n{non_quarantined_test_names_str}",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)

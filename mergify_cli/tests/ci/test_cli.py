@@ -47,11 +47,14 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
 
     runner = testing.CliRunner()
 
-    with mock.patch.object(
-        upload,
-        "upload",
-        mock.Mock(),
-    ) as mocked_upload:
+    with (
+        mock.patch.object(
+            upload,
+            "upload",
+            mock.Mock(),
+        ) as mocked_upload,
+        mock.patch.object(cli_junit_upload, "check_failing_spans_with_quarantine"),
+    ):
         result = runner.invoke(
             cli_junit_upload.junit_upload,
             [str(REPORT_XML)],
@@ -80,11 +83,14 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     runner = testing.CliRunner()
 
-    with mock.patch.object(
-        upload,
-        "upload",
-        mock.Mock(),
-    ) as mocked_upload:
+    with (
+        mock.patch.object(
+            upload,
+            "upload",
+            mock.Mock(),
+        ) as mocked_upload,
+        mock.patch.object(cli_junit_upload, "check_failing_spans_with_quarantine"),
+    ):
         mocked_upload.side_effect = Exception("Upload failed")
         result = runner.invoke(
             cli_junit_upload.junit_upload,
