@@ -6,6 +6,7 @@ import opentelemetry.trace.span
 import pytest
 import responses
 
+from mergify_cli.ci import junit
 from mergify_cli.ci import upload
 
 
@@ -47,6 +48,7 @@ async def test_junit_upload(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    spans = await junit.files_to_spans(files=(str(REPORT_XML),))
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -54,11 +56,11 @@ async def test_junit_upload(
         "https://api.mergify.com/v1/repos/user/repo/ci/traces",
     )
 
-    await upload.upload(
+    upload.upload(
         "https://api.mergify.com",
         "token",
         "user/repo",
-        files=(str(REPORT_XML),),
+        spans,
     )
 
     captured = capsys.readouterr()
@@ -109,11 +111,12 @@ async def test_junit_upload_http_error_console(
         json={"detail": "Not enabled on this repository"},
     )
 
-    await upload.upload(
+    spans = await junit.files_to_spans(files=(str(REPORT_XML),))
+    upload.upload(
         "https://api.mergify.com",
         "token",
         "user/repo",
-        (str(REPORT_XML),),
+        spans,
     )
     captured = capsys.readouterr()
     assert (

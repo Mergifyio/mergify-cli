@@ -2,6 +2,7 @@ import click
 
 from mergify_cli import utils
 from mergify_cli.ci import detector
+from mergify_cli.ci import junit
 from mergify_cli.ci import upload
 
 
@@ -58,14 +59,17 @@ async def junit_upload(  # noqa: PLR0913, PLR0917
     test_language: str | None,
     files: tuple[str, ...],
 ) -> None:
+    spans = await junit.files_to_spans(
+        files,
+        test_language=test_language,
+        test_framework=test_framework,
+    )
     try:
-        await upload.upload(
+        upload.upload(
             api_url=api_url,
             token=token,
             repository=repository,
-            test_framework=test_framework,
-            test_language=test_language,
-            files=files,
+            spans=spans,
         )
     except Exception as e:  # noqa: BLE001
         click.echo(

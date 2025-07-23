@@ -1,6 +1,7 @@
 import pathlib
 from unittest import mock
 
+import anys
 from click import testing
 import pytest
 
@@ -49,7 +50,7 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     with mock.patch.object(
         upload,
         "upload",
-        mock.AsyncMock(),
+        mock.Mock(),
     ) as mocked_upload:
         result = runner.invoke(
             cli_junit_upload.junit_upload,
@@ -61,9 +62,7 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         "api_url": "https://api.mergify.com",
         "token": "abc",
         "repository": "user/repo",
-        "test_framework": None,
-        "test_language": None,
-        "files": (str(REPORT_XML),),
+        "spans": anys.ANY_LIST,
     }
 
 
@@ -84,7 +83,7 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
     with mock.patch.object(
         upload,
         "upload",
-        mock.AsyncMock(),
+        mock.Mock(),
     ) as mocked_upload:
         mocked_upload.side_effect = Exception("Upload failed")
         result = runner.invoke(
@@ -93,13 +92,11 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     assert result.exit_code == 0, (result.stdout, result.stderr)
     assert result.stderr == "Error uploading JUnit XML reports: Upload failed\n"
-    assert not result.stdout
+    assert result.stdout.startswith("MERGIFY_TEST_RUN_ID=")
     assert mocked_upload.call_count == 1
     assert mocked_upload.call_args.kwargs == {
         "api_url": "https://api.mergify.com",
         "token": "abc",
         "repository": "user/repo",
-        "test_framework": None,
-        "test_language": None,
-        "files": (str(REPORT_XML),),
+        "spans": anys.ANY_LIST,
     }
