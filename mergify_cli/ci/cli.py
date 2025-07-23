@@ -59,6 +59,25 @@ async def junit_upload(  # noqa: PLR0913, PLR0917
     test_language: str | None,
     files: tuple[str, ...],
 ) -> None:
+    await _process_junit_files(
+        api_url=api_url,
+        token=token,
+        repository=repository,
+        test_framework=test_framework,
+        test_language=test_language,
+        files=files,
+    )
+
+
+async def _process_junit_files(  # noqa: PLR0913
+    *,
+    api_url: str,
+    token: str,
+    repository: str,
+    test_framework: str | None,
+    test_language: str | None,
+    files: tuple[str, ...],
+) -> None:
     spans = await junit.files_to_spans(
         files,
         test_language=test_language,
