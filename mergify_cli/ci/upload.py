@@ -1,7 +1,6 @@
 import contextlib
 import io
 import logging
-import pathlib
 import typing
 
 from opentelemetry.exporter.otlp.proto.http import Compression
@@ -10,7 +9,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace import export
 
 from mergify_cli import console
-from mergify_cli.ci import junit
 
 
 class UploadError(Exception):
@@ -54,43 +52,18 @@ def upload_spans(
             raise UploadError(logstr.getvalue())
 
 
-async def upload(  # noqa: PLR0913, PLR0917
+def upload(
     api_url: str,
     token: str,
     repository: str,
-    files: tuple[str, ...],
-    test_language: str | None = None,
-    test_framework: str | None = None,
+    spans: list[ReadableSpan],
 ) -> None:
-    spans = []
-
-    run_id = junit.ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
-
-    for filename in files:
-        try:
-            spans.extend(
-                await junit.junit_to_spans(
-                    run_id,
-                    pathlib.Path(filename).read_bytes(),
-                    test_language=test_language,
-                    test_framework=test_framework,
-                ),
-            )
-        except junit.InvalidJunitXMLError as e:
-            console.log(
-                f"Error converting JUnit XML file to spans: {e.details}",
-                style="red",
-            )
-
     if spans:
         try:
             upload_spans(api_url, token, repository, spans)
         except UploadError as e:
             console.log(f"Error uploading spans: {e}", style="red")
         else:
-            console.print(
-                f"MERGIFY_TEST_RUN_ID={run_id}",
-            )
             console.log("[green]:tada: File(s) uploaded[/]")
     else:
         console.log("[orange]No tests were detected in the JUnit file(s)[/]")

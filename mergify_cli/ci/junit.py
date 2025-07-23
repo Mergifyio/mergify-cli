@@ -1,5 +1,6 @@
 import dataclasses
 import os
+import pathlib
 import time
 import typing
 from xml.etree import ElementTree as ET  # noqa: S405
@@ -14,6 +15,7 @@ from opentelemetry.semconv._incubating.attributes import vcs_attributes  # noqa:
 from opentelemetry.semconv.trace import SpanAttributes
 import opentelemetry.trace.span
 
+from mergify_cli import console
 from mergify_cli.ci import detector
 
 
@@ -23,6 +25,38 @@ ID_GENERATOR = RandomIdGenerator()
 @dataclasses.dataclass
 class InvalidJunitXMLError(Exception):
     details: str
+
+
+async def files_to_spans(
+    files: tuple[str, ...],
+    test_language: str | None = None,
+    test_framework: str | None = None,
+) -> list[ReadableSpan]:
+    spans = []
+
+    run_id = ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
+
+    console.print(
+        f"MERGIFY_TEST_RUN_ID={run_id}",
+    )
+
+    for filename in files:
+        try:
+            spans.extend(
+                await junit_to_spans(
+                    run_id,
+                    pathlib.Path(filename).read_bytes(),
+                    test_language=test_language,
+                    test_framework=test_framework,
+                ),
+            )
+        except InvalidJunitXMLError as e:
+            console.log(
+                f"Error converting JUnit XML file to spans: {e.details}",
+                style="red",
+            )
+
+    return spans
 
 
 async def junit_to_spans(
