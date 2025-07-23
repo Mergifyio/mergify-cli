@@ -17,7 +17,7 @@ ci = click.Group(
 )
 
 
-@ci.command(help="Upload JUnit XML reports")
+@ci.command(help="Upload JUnit XML reports", deprecated="Use `junit-process` instead")
 @click.option(
     "--api-url",
     "-u",
@@ -57,6 +57,67 @@ ci = click.Group(
 )
 @utils.run_with_asyncio
 async def junit_upload(  # noqa: PLR0913
+    *,
+    api_url: str,
+    token: str,
+    repository: str,
+    test_framework: str | None,
+    test_language: str | None,
+    files: tuple[str, ...],
+) -> None:
+    await _process_junit_files(
+        api_url=api_url,
+        token=token,
+        repository=repository,
+        test_framework=test_framework,
+        test_language=test_language,
+        files=files,
+    )
+
+
+@ci.command(
+    help="""Upload JUnit XML reports and ignore failed tests with Mergify's CI Insights Quarantine""",
+    short_help="""Upload JUnit XML reports and ignore failed tests with Mergify's CI Insights Quarantine""",
+)
+@click.option(
+    "--api-url",
+    "-u",
+    help="URL of the Mergify API",
+    required=True,
+    envvar="MERGIFY_API_URL",
+    default="https://api.mergify.com",
+    show_default=True,
+)
+@click.option(
+    "--token",
+    "-t",
+    help="CI Issues Application Key",
+    required=True,
+    envvar="MERGIFY_TOKEN",
+)
+@click.option(
+    "--repository",
+    "-r",
+    help="Repository full name (owner/repo)",
+    required=True,
+    default=detector.get_github_repository,
+)
+@click.option(
+    "--test-framework",
+    help="Test framework",
+)
+@click.option(
+    "--test-language",
+    help="Test language",
+)
+@click.argument(
+    "files",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+)
+@utils.run_with_asyncio
+async def junit_process(  # noqa: PLR0913
     *,
     api_url: str,
     token: str,
