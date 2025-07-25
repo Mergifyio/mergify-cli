@@ -49,6 +49,13 @@ ci = click.Group(
     "--test-language",
     help="Test language",
 )
+@click.option(
+    "--tests-target-branch",
+    "-ttb",
+    help="The branch used to check if failing tests can be ignored with Mergify's Quarantine.",
+    required=True,
+    envvar=["GITHUB_BASE_REF", "MERGIFY_TESTS_TARGET_BRANCH"],
+)
 @click.argument(
     "files",
     nargs=-1,
@@ -63,6 +70,7 @@ async def junit_upload(  # noqa: PLR0913
     repository: str,
     test_framework: str | None,
     test_language: str | None,
+    tests_target_branch: str,
     files: tuple[str, ...],
 ) -> None:
     await _process_junit_files(
@@ -71,6 +79,7 @@ async def junit_upload(  # noqa: PLR0913
         repository=repository,
         test_framework=test_framework,
         test_language=test_language,
+        tests_target_branch=tests_target_branch,
         files=files,
     )
 
@@ -110,6 +119,13 @@ async def junit_upload(  # noqa: PLR0913
     "--test-language",
     help="Test language",
 )
+@click.option(
+    "--tests-target-branch",
+    "-ttb",
+    help="The branch used to check if failing tests can be ignored with Mergify's Quarantine.",
+    required=True,
+    envvar=["GITHUB_BASE_REF", "MERGIFY_TESTS_TARGET_BRANCH"],
+)
 @click.argument(
     "files",
     nargs=-1,
@@ -124,6 +140,7 @@ async def junit_process(  # noqa: PLR0913
     repository: str,
     test_framework: str | None,
     test_language: str | None,
+    tests_target_branch: str,
     files: tuple[str, ...],
 ) -> None:
     await _process_junit_files(
@@ -132,6 +149,7 @@ async def junit_process(  # noqa: PLR0913
         repository=repository,
         test_framework=test_framework,
         test_language=test_language,
+        tests_target_branch=tests_target_branch,
         files=files,
     )
 
@@ -143,6 +161,7 @@ async def _process_junit_files(  # noqa: PLR0913
     repository: str,
     test_framework: str | None,
     test_language: str | None,
+    tests_target_branch: str,
     files: tuple[str, ...],
 ) -> None:
     try:
@@ -195,6 +214,7 @@ async def _process_junit_files(  # noqa: PLR0913
         api_url,
         token,
         repository,
+        tests_target_branch,
         [fspan.name for fspan in failing_spans],
     )
 
@@ -209,6 +229,7 @@ async def check_failing_spans_with_quarantine(
     api_url: str,
     token: str,
     repository: str,
+    tests_target_branch: str,
     failing_spans_names: list[str],
 ) -> None:
     fspans_str = "\n".join(failing_spans_names)
@@ -217,13 +238,25 @@ async def check_failing_spans_with_quarantine(
         err=False,
     )
 
+    try:
+        repo_owner, repo_name = repository.split("/")
+    except ValueError:
+        click.echo(
+            click.style(
+                f"Unable to extract repository owner and name from {repository}",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)
+
     async with utils.get_http_client(
-        server=f"{api_url}/v1/ci/{repository}/quarantine",
+        server=f"{api_url}/v1/ci/{repo_owner}/repositories/{repo_name}/quarantines",
         headers={"Authorization": f"Bearer {token}"},
     ) as client:
         response = await client.post(
             "/check",
-            json={"tests_names": failing_spans_names},
+            json={"tests_names": failing_spans_names, "branch": tests_target_branch},
         )
 
         if response.status_code != 200:
