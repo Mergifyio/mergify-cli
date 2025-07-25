@@ -11,7 +11,7 @@ API_MERGIFY_BASE_URL = "https://api.mergify.com"
 async def test_status_code_resp_not_200(
     respx_mock: respx.MockRouter,
 ) -> None:
-    respx_mock.post("/v1/ci/foo/bar/quarantine/check").respond(
+    respx_mock.post("/v1/ci/foo/repositories/bar/quarantines/check").respond(
         422,
         json={"detail": "No subscription"},
     )
@@ -21,6 +21,7 @@ async def test_status_code_resp_not_200(
             API_MERGIFY_BASE_URL,
             "token",
             "foo/bar",
+            "main",
             ["test_stuff.py::foo"],
         )
 
@@ -31,7 +32,7 @@ async def test_status_code_resp_not_200(
 async def test_no_failing_tests_quarantined(
     respx_mock: respx.MockRouter,
 ) -> None:
-    respx_mock.post("/v1/ci/foo/bar/quarantine/check").respond(
+    respx_mock.post("/v1/ci/foo/repositories/bar/quarantines/check").respond(
         200,
         json={
             "quarantined_tests_names": [],
@@ -44,6 +45,7 @@ async def test_no_failing_tests_quarantined(
             API_MERGIFY_BASE_URL,
             "token",
             "foo/bar",
+            "main",
             ["test_me.py::test_mee"],
         )
 
@@ -54,7 +56,7 @@ async def test_no_failing_tests_quarantined(
 async def test_some_failing_tests_quarantined(
     respx_mock: respx.MockRouter,
 ) -> None:
-    respx_mock.post("/v1/ci/foo/bar/quarantine/check").respond(
+    respx_mock.post("/v1/ci/foo/repositories/bar/quarantines/check").respond(
         200,
         json={
             "quarantined_tests_names": ["test_me.py::test_me2"],
@@ -67,6 +69,7 @@ async def test_some_failing_tests_quarantined(
             API_MERGIFY_BASE_URL,
             "token",
             "foo/bar",
+            "main",
             [
                 "test_me.py::test_me1",
                 "test_me.py::test_me2",
@@ -80,7 +83,7 @@ async def test_some_failing_tests_quarantined(
 async def test_all_failing_tests_quarantined(
     respx_mock: respx.MockRouter,
 ) -> None:
-    respx_mock.post("/v1/ci/foo/bar/quarantine/check").respond(
+    respx_mock.post("/v1/ci/foo/repositories/bar/quarantines/check").respond(
         200,
         json={
             "quarantined_tests_names": [
@@ -95,6 +98,7 @@ async def test_all_failing_tests_quarantined(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",
+        "main",
         [
             "test_me.py::test_me1",
             "test_me.py::test_me2",
