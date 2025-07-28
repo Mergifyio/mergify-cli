@@ -24,6 +24,7 @@ REPORT_XML = pathlib.Path(__file__).parent / "report.xml"
                 "GITHUB_REPOSITORY": "user/repo",
                 "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
                 "GITHUB_WORKFLOW": "JOB",
+                "GITHUB_BASE_REF": "main",
             },
             id="GitHub",
         ),
@@ -36,6 +37,7 @@ REPORT_XML = pathlib.Path(__file__).parent / "report.xml"
                 "CIRCLE_REPOSITORY_URL": "https://github.com/user/repo",
                 "CIRCLE_SHA1": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
                 "CIRCLE_JOB": "JOB",
+                "MERGIFY_TESTS_TARGET_BRANCH": "main",
             },
             id="CircleCI",
         ),
@@ -55,12 +57,17 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         ) as mocked_upload,
         mock.patch.object(cli_junit_upload, "check_failing_spans_with_quarantine"),
     ):
-        result = runner.invoke(
+        result_process = runner.invoke(
+            cli_junit_upload.junit_process,
+            [str(REPORT_XML)],
+        )
+        result_upload = runner.invoke(
             cli_junit_upload.junit_upload,
             [str(REPORT_XML)],
         )
-    assert result.exit_code == 0, result.stdout
-    assert mocked_upload.call_count == 1
+    assert result_process.exit_code == 0, result_process.stdout
+    assert result_upload.exit_code == 0, result_upload.stdout
+    assert mocked_upload.call_count == 2
     assert mocked_upload.call_args.kwargs == {
         "api_url": "https://api.mergify.com",
         "token": "abc",
@@ -78,6 +85,7 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
         "GITHUB_REPOSITORY": "user/repo",
         "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
         "GITHUB_WORKFLOW": "JOB",
+        "GITHUB_BASE_REF": "main",
     }.items():
         monkeypatch.setenv(key, value)
 
