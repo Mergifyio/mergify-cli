@@ -11,6 +11,15 @@ from mergify_cli.ci import junit
 from mergify_cli.ci import upload
 
 
+def _process_tests_target_branch(
+    _ctx: click.Context,
+    _param: click.Parameter,
+    value: str | None,
+) -> str | None:
+    """Process the tests_target_branch parameter to strip refs/heads/ prefix from GITHUB_REF."""
+    return value.removeprefix("refs/heads/") if value else value
+
+
 ci = click.Group(
     "ci",
     help="Mergify's CI related commands",
@@ -54,7 +63,8 @@ ci = click.Group(
     "-ttb",
     help="The branch used to check if failing tests can be ignored with Mergify's Quarantine.",
     required=True,
-    envvar=["GITHUB_BASE_REF", "MERGIFY_TESTS_TARGET_BRANCH"],
+    envvar=["GITHUB_BASE_REF", "MERGIFY_TESTS_TARGET_BRANCH", "GITHUB_REF"],
+    callback=_process_tests_target_branch,
 )
 @click.argument(
     "files",
@@ -124,7 +134,8 @@ async def junit_upload(  # noqa: PLR0913
     "-ttb",
     help="The branch used to check if failing tests can be ignored with Mergify's Quarantine.",
     required=True,
-    envvar=["GITHUB_BASE_REF", "MERGIFY_TESTS_TARGET_BRANCH"],
+    envvar=["GITHUB_BASE_REF", "MERGIFY_TESTS_TARGET_BRANCH", "GITHUB_REF"],
+    callback=_process_tests_target_branch,
 )
 @click.argument(
     "files",
