@@ -185,17 +185,17 @@ async def push(  # noqa: PLR0913, PLR0917
         return
 
     await stack_push_mod.stack_push(
-        ctx.obj["github_server"],
-        ctx.obj["token"],
-        skip_rebase,
-        next_only,
-        branch_prefix,
-        dry_run,
-        trunk,
-        draft,
-        keep_pull_request_title_and_body,
-        only_update_existing_pulls,
-        author,
+        github_server=ctx.obj["github_server"],
+        token=ctx.obj["token"],
+        skip_rebase=skip_rebase,
+        next_only=next_only,
+        branch_prefix=branch_prefix,
+        dry_run=dry_run,
+        trunk=trunk,
+        create_as_draft=draft,
+        keep_pull_request_title_and_body=keep_pull_request_title_and_body,
+        only_update_existing_pulls=only_update_existing_pulls,
+        author=author,
     )
 
 
