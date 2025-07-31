@@ -8,10 +8,12 @@ from urllib import parse
 from mergify_cli import utils
 
 
-CIProviderT = typing.Literal["github_actions", "circleci"]
+CIProviderT = typing.Literal["github_actions", "circleci", "jenkins"]
 
 
 def get_ci_provider() -> CIProviderT | None:
+    if os.getenv("JENKINS_URL"):
+        return "jenkins"
     if os.getenv("GITHUB_ACTIONS") == "true":
         return "github_actions"
     if os.getenv("CIRCLECI") == "true":
@@ -27,12 +29,15 @@ def get_pipeline_name() -> str | None:
 
 
 def get_job_name() -> str | None:
-    if get_ci_provider() == "github_actions":
-        return os.getenv("GITHUB_JOB")
-    if get_ci_provider() == "circleci":
-        return os.getenv("CIRCLE_JOB")
-
-    return None
+    match get_ci_provider():
+        case "github_actions":
+            return os.getenv("GITHUB_JOB")
+        case "circleci":
+            return os.getenv("CIRCLE_JOB")
+        case "jenkins":
+            return os.getenv("JOB_NAME")
+        case _:
+            return None
 
 
 def get_head_ref_name() -> str | None:
@@ -41,6 +46,8 @@ def get_head_ref_name() -> str | None:
             return os.getenv("GITHUB_REF_NAME")
         case "circleci":
             return os.getenv("CIRCLE_BRANCH")
+        case "jenkins":
+            return os.getenv("GIT_BRANCH")
         case _:
             return None
 
@@ -82,26 +89,37 @@ async def get_circle_ci_head_sha() -> str | None:
 
 
 async def get_head_sha() -> str | None:
-    if get_ci_provider() == "github_actions":
-        return get_github_actions_head_sha()
-    if get_ci_provider() == "circleci":
-        return await get_circle_ci_head_sha()
-
-    return None
+    match get_ci_provider():
+        case "github_actions":
+            return get_github_actions_head_sha()
+        case "circleci":
+            return await get_circle_ci_head_sha()
+        case "jenkins":
+            return os.getenv("GIT_COMMIT")
+        case _:
+            return None
 
 
 def get_cicd_pipeline_runner_name() -> str | None:
-    if get_ci_provider() == "github_actions" and "RUNNER_NAME" in os.environ:
-        return os.environ["RUNNER_NAME"]
-    return None
+    match get_ci_provider():
+        case "github_actions":
+            return os.getenv("RUNNER_NAME")
+        case "jenkins":
+            return os.getenv("NODE_NAME")
+        case _:
+            return None
 
 
-def get_cicd_pipeline_run_id() -> int | None:
-    if get_ci_provider() == "github_actions" and "GITHUB_RUN_ID" in os.environ:
-        return int(os.environ["GITHUB_RUN_ID"])
-
-    if get_ci_provider() == "circleci" and "CIRCLE_WORKFLOW_ID" in os.environ:
-        return int(os.environ["CIRCLE_WORKFLOW_ID"])
+def get_cicd_pipeline_run_id() -> int | str | None:
+    match get_ci_provider():
+        case "github_actions":
+            if "GITHUB_RUN_ID" in os.environ:
+                return int(os.environ["GITHUB_RUN_ID"])
+        case "circleci":
+            if "CIRCLE_WORKFLOW_ID" in os.environ:
+                return int(os.environ["CIRCLE_WORKFLOW_ID"])
+        case "jenkins":
+            return os.getenv("BUILD_ID")
 
     return None
 
@@ -115,17 +133,25 @@ def get_cicd_pipeline_run_attempt() -> int | None:
     return None
 
 
-def get_github_repository() -> str | None:
-    if get_ci_provider() == "github_actions":
-        return os.getenv("GITHUB_REPOSITORY")
-    if get_ci_provider() == "circleci":
-        repository_url = os.getenv("CIRCLE_REPOSITORY_URL")
-        if repository_url and (
-            match := re.match(
-                r"(https?://[\w.-]+/)?(?P<full_name>[\w.-]+/[\w.-]+)/?$",
-                repository_url,
-            )
-        ):
-            return match.group("full_name")
-
+def _get_github_repository_from_env(env: str) -> str | None:
+    repository_url = os.getenv(env)
+    if repository_url and (
+        match := re.match(
+            r"(https?://[\w.-]+/)?(?P<full_name>[\w.-]+/[\w.-]+)/?$",
+            repository_url,
+        )
+    ):
+        return match.group("full_name")
     return None
+
+
+def get_github_repository() -> str | None:
+    match get_ci_provider():
+        case "github_actions":
+            return os.getenv("GITHUB_REPOSITORY")
+        case "circleci":
+            return _get_github_repository_from_env("CIRCLE_REPOSITORY_URL")
+        case "jenkins":
+            return _get_github_repository_from_env("GIT_URL")
+        case _:
+            return None
