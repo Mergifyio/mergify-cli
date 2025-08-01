@@ -13,11 +13,15 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.attributes import vcs_attributes  # noqa: PLC2701
 from opentelemetry.semconv.trace import SpanAttributes
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 import opentelemetry.trace.span
 
 from mergify_cli import console
 from mergify_cli.ci import detector
 
+
+if typing.TYPE_CHECKING:
+    from opentelemetry.trace import NonRecordingSpan
 
 ID_GENERATOR = RandomIdGenerator()
 
@@ -121,7 +125,20 @@ async def junit_to_spans(
 
     resource = resources.Resource.create(resource_attributes)
 
-    trace_id = ID_GENERATOR.generate_trace_id()
+    traceparent = os.environ.get("MERGIFY_TRACEPARENT")
+    if traceparent:
+        parent_context = TraceContextTextMapPropagator().extract(
+            carrier={"traceparent": traceparent},
+        )
+        parent_span = typing.cast(
+            "NonRecordingSpan",
+            next(iter(parent_context.values())),
+        )
+        parent = parent_span.get_span_context()
+        trace_id = parent.trace_id
+    else:
+        trace_id = ID_GENERATOR.generate_trace_id()
+        parent = None
 
     session_context = opentelemetry.trace.span.SpanContext(
         trace_id=trace_id,
@@ -132,7 +149,7 @@ async def junit_to_spans(
     session_span = ReadableSpan(
         name="test session",
         context=session_context,
-        parent=None,
+        parent=parent,
         # We'll compute start_time later
         end_time=now,
         resource=resource,
