@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import sys
 
 import click
@@ -276,9 +277,9 @@ async def _check_failing_spans_with_quarantine(
     tests_target_branch: str,
     failing_spans_names: list[str],
 ) -> None:
-    fspans_str = "\n".join(failing_spans_names)
+    fspans_str = os.linesep.join(failing_spans_names)
     click.echo(
-        f"Checking the following failing tests for quarantine:\n{fspans_str}",
+        f"Checking the following failing tests for quarantine:{os.linesep}{fspans_str}",
         err=False,
     )
 
@@ -305,23 +306,23 @@ async def _check_failing_spans_with_quarantine(
 
         resp_json = response.json()
         if resp_json["quarantined_tests_names"]:
-            quarantined_test_names_str = "\n".join(
+            quarantined_test_names_str = os.linesep.join(
                 resp_json["quarantined_tests_names"],
             )
             click.echo(
-                f"The following failing tests are quarantined and will be ignored:\n{quarantined_test_names_str}",
+                f"The following failing tests are quarantined and will be ignored:{os.linesep}{quarantined_test_names_str}",
                 err=False,
             )
 
         if not resp_json["non_quarantined_tests_names"]:
             return
 
-        non_quarantined_test_names_str = "\n".join(
+        non_quarantined_test_names_str = os.linesep.join(
             resp_json["non_quarantined_tests_names"],
         )
         click.echo(
             click.style(
-                f"The following failing tests are not quarantined:\n{non_quarantined_test_names_str}",
+                f"{os.linesep}The following failing tests are not quarantined:{os.linesep}{non_quarantined_test_names_str}",
                 fg="red",
             ),
         )
