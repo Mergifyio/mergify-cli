@@ -1,3 +1,4 @@
+import dataclasses
 import sys
 
 import click
@@ -230,13 +231,45 @@ async def _process_junit_files(  # noqa: PLR0913
     )
 
 
+INFO_ERROR_MSG = (
+    "This error occurred because there are failed tests in your CI pipeline and will disappear once your CI passes successfully.\n\n"
+    "If you're unsure why this is happening or need assistance, please contact Mergify to report the issue."
+)
+
+
+@dataclasses.dataclass
+class QuarantineFailedError(Exception):
+    message: str
+
+
+async def check_failing_spans_with_quarantine(
+    api_url: str,
+    token: str,
+    repository: str,
+    tests_target_branch: str,
+    failing_spans_names: list[str],
+) -> None:
+    try:
+        await _check_failing_spans_with_quarantine(
+            api_url,
+            token,
+            repository,
+            tests_target_branch,
+            failing_spans_names,
+        )
+    except QuarantineFailedError as exc:
+        click.echo(click.style(exc.message, fg="red"), err=True)
+        click.echo(click.style(INFO_ERROR_MSG, fg="red"), err=True)
+        sys.exit(1)
+
+
 @tenacity.retry(
     wait=tenacity.wait_exponential(multiplier=0.2),
     stop=tenacity.stop_after_attempt(5),
     retry=tenacity.retry_if_exception_type(httpx.TransportError),
     reraise=True,
 )
-async def check_failing_spans_with_quarantine(
+async def _check_failing_spans_with_quarantine(
     api_url: str,
     token: str,
     repository: str,
@@ -252,14 +285,9 @@ async def check_failing_spans_with_quarantine(
     try:
         repo_owner, repo_name = repository.split("/")
     except ValueError:
-        click.echo(
-            click.style(
-                f"Unable to extract repository owner and name from {repository}",
-                fg="red",
-            ),
-            err=True,
+        raise QuarantineFailedError(
+            message=f"Unable to extract repository owner and name from {repository}",
         )
-        sys.exit(1)
 
     async with utils.get_http_client(
         server=f"{api_url}/v1/ci/{repo_owner}/repositories/{repo_name}/quarantines",
@@ -271,14 +299,9 @@ async def check_failing_spans_with_quarantine(
         )
 
         if response.status_code != 200:
-            click.echo(
-                click.style(
-                    f"HTTP error {response.status_code} while checking quarantined tests: {response.text}",
-                    fg="red",
-                ),
-                err=True,
+            raise QuarantineFailedError(
+                message=f"HTTP error {response.status_code} while checking quarantined tests: {response.text}",
             )
-            sys.exit(1)
 
         resp_json = response.json()
         if resp_json["quarantined_tests_names"]:
@@ -301,6 +324,5 @@ async def check_failing_spans_with_quarantine(
                 f"The following failing tests are not quarantined:\n{non_quarantined_test_names_str}",
                 fg="red",
             ),
-            err=True,
         )
         sys.exit(1)
