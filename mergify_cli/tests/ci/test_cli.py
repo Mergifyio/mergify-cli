@@ -38,7 +38,7 @@ REPORT_XML = pathlib.Path(__file__).parent / "report.xml"
                 "CIRCLE_REPOSITORY_URL": "https://github.com/user/repo",
                 "CIRCLE_SHA1": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
                 "CIRCLE_JOB": "JOB",
-                "MERGIFY_TESTS_TARGET_BRANCH": "main",
+                "GITHUB_REF_NAME": "main",
             },
             id="CircleCI",
         ),
@@ -132,21 +132,6 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
                 "GITHUB_REPOSITORY": "user/repo",
                 "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
                 "GITHUB_WORKFLOW": "JOB",
-                "MERGIFY_TESTS_TARGET_BRANCH": "develop",
-                "GITHUB_REF": "refs/heads/feature-branch",
-            },
-            "develop",
-            id="MERGIFY_TESTS_TARGET_BRANCH takes precedence over GITHUB_REF",
-        ),
-        pytest.param(
-            {
-                "GITHUB_EVENT_NAME": "push",
-                "GITHUB_ACTIONS": "true",
-                "MERGIFY_API_URL": "https://api.mergify.com",
-                "MERGIFY_TOKEN": "abc",
-                "GITHUB_REPOSITORY": "user/repo",
-                "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                "GITHUB_WORKFLOW": "JOB",
                 "GITHUB_REF": "refs/tags/v1.0.0",
             },
             "refs/tags/v1.0.0",
@@ -160,7 +145,11 @@ def test_tests_target_branch_environment_variable_processing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test that tests_target_branch environment variable processing works correctly."""
-    for key in ["GITHUB_REF", "GITHUB_BASE_REF"]:  # Override value from CI runner
+    for key in [
+        "GITHUB_REF",
+        "GITHUB_REF_NAME",
+        "GITHUB_BASE_REF",
+    ]:  # Override value from CI runner
         monkeypatch.delenv(key, raising=False)
 
     for key, value in env.items():
