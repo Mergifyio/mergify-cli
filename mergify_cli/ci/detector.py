@@ -8,6 +8,8 @@ from urllib import parse
 from mergify_cli import utils
 
 
+GIT_BRANCH_PREFIXES = ("origin/", "refs/heads/")
+
 CIProviderT = typing.Literal["github_actions", "circleci", "jenkins"]
 
 
@@ -40,6 +42,19 @@ def get_job_name() -> str | None:
             return None
 
 
+def get_jenkins_head_ref_name() -> str | None:
+    branch = os.getenv("GIT_BRANCH")
+    if branch:
+        # NOTE(sileht): it's not 100% bullet proof but since it's very complicated
+        # and unlikely to change/add a remote with Jenkins Git/GitHub plugins,
+        # we just handle the most common cases.
+        for prefix in GIT_BRANCH_PREFIXES:
+            if branch.startswith(prefix):
+                return branch[len(prefix) :]
+        return branch
+    return None
+
+
 def get_head_ref_name() -> str | None:
     match get_ci_provider():
         case "github_actions":
@@ -47,7 +62,7 @@ def get_head_ref_name() -> str | None:
         case "circleci":
             return os.getenv("CIRCLE_BRANCH")
         case "jenkins":
-            return os.getenv("GIT_BRANCH")
+            return get_jenkins_head_ref_name()
         case _:
             return None
 

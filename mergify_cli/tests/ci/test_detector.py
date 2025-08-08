@@ -9,6 +9,12 @@ from mergify_cli.ci import detector
 PULL_REQUEST_EVENT = pathlib.Path(__file__).parent / "pull_request.json"
 
 
+def test_get_head_branch_jenkins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_BRANCH", "origin/main")
+
+    assert detector.get_jenkins_head_ref_name() == "main"
+
+
 def test_get_head_sha_github_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
