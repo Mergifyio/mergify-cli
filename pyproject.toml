@@ -31,7 +31,7 @@ tenacity = "^9.1.2"
 [tool.poetry.group.dev.dependencies]
 mypy = {version = ">=0.930"}
 mypy-extensions = "^1.0.0"
-ruff = "0.12.7"
+ruff = "0.12.8"
 pytest = {version = ">=6.2.5"}
 poethepoet = ">=0.21,<0.37"
 pytest-asyncio = ">=0.23.2,<1.2.0"
