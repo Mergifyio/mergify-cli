@@ -135,6 +135,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -164,6 +165,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -196,6 +198,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -252,6 +255,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -281,6 +285,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -313,6 +318,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -346,6 +352,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -402,6 +409,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -434,6 +442,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
@@ -463,6 +472,7 @@ async def test_parse(
                 "test.scope": "case",
                 "test.framework": "unittest",
                 "test.language": "python",
+                "cicd.test.quarantined": False,
             },
             "context": {
                 "span_id": anys.ANY_STR,
