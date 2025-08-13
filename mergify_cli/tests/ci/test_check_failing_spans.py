@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from mergify_cli.ci.quarantine import QuarantineFailedError
-from mergify_cli.ci.quarantine import check_failing_spans_with_quarantine
+from mergify_cli.ci.quarantine import check_and_update_failing_spans
 
 
 API_MERGIFY_BASE_URL = "https://api.mergify.com"
@@ -29,7 +29,7 @@ async def test_status_code_resp_not_200(
     ]
 
     with pytest.raises(QuarantineFailedError):
-        await check_failing_spans_with_quarantine(
+        await check_and_update_failing_spans(
             API_MERGIFY_BASE_URL,
             "token",
             "foo/bar",
@@ -61,7 +61,7 @@ async def test_no_failing_tests_quarantined(
         ),
     ]
 
-    failed_tests_quarantined_test_count = await check_failing_spans_with_quarantine(
+    failed_tests_quarantined_test_count = await check_and_update_failing_spans(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",
@@ -109,7 +109,7 @@ async def test_some_failing_tests_quarantined(
         ),
     ]
 
-    failed_tests_quarantined_count = await check_failing_spans_with_quarantine(
+    failed_tests_quarantined_count = await check_and_update_failing_spans(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",
@@ -166,7 +166,7 @@ async def test_all_failing_tests_quarantined(
         ),
     ]
 
-    failed_tests_quarantined_count = await check_failing_spans_with_quarantine(
+    failed_tests_quarantined_count = await check_and_update_failing_spans(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",

@@ -200,7 +200,7 @@ async def _process_junit_files(  # noqa: PLR0913
     # "cicd.test.quarantined" attribute for the required spans.
     try:
         failing_tests_not_quarantined_count = (
-            await quarantine.check_failing_spans_with_quarantine(
+            await quarantine.check_and_update_failing_spans(
                 api_url,
                 token,
                 repository,
