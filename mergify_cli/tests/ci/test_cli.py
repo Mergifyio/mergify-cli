@@ -7,6 +7,7 @@ from click import testing
 import pytest
 
 from mergify_cli.ci import cli as cli_junit_upload
+from mergify_cli.ci import quarantine
 from mergify_cli.ci import upload
 
 
@@ -57,7 +58,7 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
             mock.Mock(),
         ) as mocked_upload,
         mock.patch.object(
-            cli_junit_upload,
+            quarantine,
             "check_failing_spans_with_quarantine",
             return_value=0,
         ),
@@ -201,7 +202,7 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
             mock.Mock(),
         ) as mocked_upload,
         mock.patch.object(
-            cli_junit_upload,
+            quarantine,
             "check_failing_spans_with_quarantine",
             return_value=0,
         ),
