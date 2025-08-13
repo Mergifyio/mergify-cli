@@ -50,7 +50,7 @@ async def check_failing_spans_with_quarantine(
         return 0
 
     failing_tests_not_quarantined_count: int = 0
-    quarantined_tests_tuple = await _check_failing_spans_with_quarantine(
+    quarantined_tests_tuple = await fetch_quarantined_tests_from_failing_spans(
         api_url,
         token,
         repository,
@@ -109,7 +109,7 @@ class QuarantinedTests(typing.NamedTuple):
     retry=tenacity.retry_if_exception_type(httpx.TransportError),
     reraise=True,
 )
-async def _check_failing_spans_with_quarantine(
+async def fetch_quarantined_tests_from_failing_spans(
     api_url: str,
     token: str,
     repository: str,
