@@ -346,18 +346,18 @@ async def _check_failing_spans_with_quarantine(
     tests_target_branch: str,
     failing_spans_names: list[str],
 ) -> QuarantinedTests:
-    fspans_str = os.linesep.join(failing_spans_names)
-    click.echo(
-        f"Checking the following failing tests for quarantine:{os.linesep}{fspans_str}",
-        err=False,
-    )
-
     try:
         repo_owner, repo_name = repository.split("/")
     except ValueError:
         raise QuarantineFailedError(
             message=f"Unable to extract repository owner and name from {repository}",
         )
+
+    fspans_str = os.linesep.join(failing_spans_names)
+    click.echo(
+        f"Checking the following failing tests for quarantine:{os.linesep}{fspans_str}",
+        err=False,
+    )
 
     async with utils.get_http_client(
         server=f"{api_url}/v1/ci/{repo_owner}/repositories/{repo_name}/quarantines",
