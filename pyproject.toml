@@ -146,6 +146,8 @@ ignore = [
     # We don't want to enforce the number of statements
     "PLR0914", "PLR0912", "PLR0915",
     "B904",
+    # Unnecessary parenthesis on raised exceptions, this breaks `isinstance` on exceptions
+    "RSE102",
 ]
 
 [tool.ruff.lint.per-file-ignores]

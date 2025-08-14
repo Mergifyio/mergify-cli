@@ -80,7 +80,7 @@ async def junit_to_spans(
 
     now = time.time_ns()
 
-    common_attributes = {}
+    common_attributes: dict[str, str | bool] = {}
 
     if test_framework is not None:
         common_attributes["test.framework"] = test_framework
@@ -153,10 +153,10 @@ async def junit_to_spans(
         # We'll compute start_time later
         end_time=now,
         resource=resource,
-        attributes={
+        attributes=common_attributes
+        | {
             "test.scope": "session",
-        }
-        | common_attributes,
+        },
     )
 
     session_start_time = now
@@ -180,11 +180,11 @@ async def junit_to_spans(
             # We'll compute start_time later
             end_time=now,
             resource=resource,
-            attributes={
+            attributes=common_attributes
+            | {
                 "test.case.name": suite_name,
                 "test.scope": "suite",
-            }
-            | common_attributes,
+            },
         )
 
         spans.append(testsuite_span)
@@ -198,10 +198,11 @@ async def junit_to_spans(
             start_time = now - int(float(testcase.get("time", 0)) * 10e9)
             min_start_time = min(min_start_time, start_time)
 
-            attributes = {
+            attributes: dict[str, str | bool] = {
                 "test.scope": "case",
                 "test.case.name": test_name,
                 "code.function.name": test_name,
+                "cicd.test.quarantined": False,
             }
 
             if (filename := testcase.get("file")) is not None:
@@ -254,7 +255,7 @@ async def junit_to_spans(
                     is_remote=False,
                 ),
                 parent=testsuite_context,
-                attributes=attributes | common_attributes,
+                attributes=common_attributes | attributes,
                 status=span_status,
                 resource=resource,
             )

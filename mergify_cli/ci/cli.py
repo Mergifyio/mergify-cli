@@ -1,9 +1,11 @@
 import dataclasses
 import os
 import sys
+import typing
 
 import click
 import httpx
+from opentelemetry.sdk.trace import ReadableSpan
 import opentelemetry.trace
 import tenacity
 
@@ -167,6 +169,17 @@ async def junit_process(  # noqa: PLR0913
     )
 
 
+@dataclasses.dataclass
+class QuarantineFailedError(Exception):
+    message: str
+
+
+QUARANTINE_INFO_ERROR_MSG = (
+    "This error occurred because there are failed tests in your CI pipeline and will disappear once your CI passes successfully.\n\n"
+    "If you're unsure why this is happening or need assistance, please contact Mergify to report the issue."
+)
+
+
 async def _process_junit_files(  # noqa: PLR0913
     *,
     api_url: str,
@@ -200,6 +213,28 @@ async def _process_junit_files(  # noqa: PLR0913
         )
         sys.exit(1)
 
+    # NOTE: Check quarantine before uploading in order to properly modify the
+    # "cicd.test.quarantined" attribute for the required spans.
+    try:
+        failing_tests_not_quarantined_count = await check_failing_spans_with_quarantine(
+            api_url,
+            token,
+            repository,
+            tests_target_branch,
+            spans,
+        )
+    except QuarantineFailedError as exc:
+        click.echo(click.style(exc.message, fg="red"), err=True)
+        click.echo(click.style(QUARANTINE_INFO_ERROR_MSG, fg="red"), err=True)
+        quarantine_exit_error_code = 1
+    except Exception as exc:  # noqa: BLE001
+        msg = f"An unexpected error occured when checking quarantined tests: {exc!s}"
+        click.echo(click.style(msg, fg="red"), err=True)
+        click.echo(click.style(QUARANTINE_INFO_ERROR_MSG, fg="red"), err=True)
+        quarantine_exit_error_code = 1
+    else:
+        quarantine_exit_error_code = 1 if failing_tests_not_quarantined_count > 0 else 0
+
     try:
         upload.upload(
             api_url=api_url,
@@ -213,34 +248,8 @@ async def _process_junit_files(  # noqa: PLR0913
             err=True,
         )
 
-    failing_spans = [
-        span
-        for span in spans
-        if span.status.status_code == opentelemetry.trace.StatusCode.ERROR
-        and span.attributes is not None
-        and span.attributes.get("test.scope") == "case"
-    ]
-    if not failing_spans:
-        return
-
-    await check_failing_spans_with_quarantine(
-        api_url,
-        token,
-        repository,
-        tests_target_branch,
-        [fspan.name for fspan in failing_spans],
-    )
-
-
-INFO_ERROR_MSG = (
-    "This error occurred because there are failed tests in your CI pipeline and will disappear once your CI passes successfully.\n\n"
-    "If you're unsure why this is happening or need assistance, please contact Mergify to report the issue."
-)
-
-
-@dataclasses.dataclass
-class QuarantineFailedError(Exception):
-    message: str
+    if quarantine_exit_error_code != 0:
+        sys.exit(quarantine_exit_error_code)
 
 
 async def check_failing_spans_with_quarantine(
@@ -248,20 +257,80 @@ async def check_failing_spans_with_quarantine(
     token: str,
     repository: str,
     tests_target_branch: str,
-    failing_spans_names: list[str],
-) -> None:
-    try:
-        await _check_failing_spans_with_quarantine(
-            api_url,
-            token,
-            repository,
-            tests_target_branch,
-            failing_spans_names,
+    spans: list[ReadableSpan],
+) -> int:
+    """
+    Check all the `spans` with CI Insights Quarantine by:
+        - logging the failed and quarantined test
+        - logging the failed and non-quarantined test as error message
+        - updating the `spans` of quarantined tests by setting the attribute `cicd.test.quarantined` to `true`
+
+    Returns the number of failing tests that are not quarantined.
+    """
+
+    failing_spans = [
+        span
+        for span in spans
+        if span.status.status_code == opentelemetry.trace.StatusCode.ERROR
+        and span.attributes is not None
+        and span.attributes.get("test.scope") == "case"
+    ]
+    failing_spans_name = [fspan.name for fspan in failing_spans]
+    if not failing_spans:
+        return 0
+
+    failing_tests_not_quarantined_count: int = 0
+    quarantined_tests_tuple = await _check_failing_spans_with_quarantine(
+        api_url,
+        token,
+        repository,
+        tests_target_branch,
+        failing_spans_name,
+    )
+
+    if quarantined_tests_tuple.quarantined_tests_names:
+        quarantined_test_names_str = os.linesep.join(
+            quarantined_tests_tuple.quarantined_tests_names,
         )
-    except QuarantineFailedError as exc:
-        click.echo(click.style(exc.message, fg="red"), err=True)
-        click.echo(click.style(INFO_ERROR_MSG, fg="red"), err=True)
-        sys.exit(1)
+        click.echo(
+            f"The following failing tests are quarantined and will be ignored:{os.linesep}{quarantined_test_names_str}",
+            err=False,
+        )
+
+    if quarantined_tests_tuple.non_quarantined_tests_names:
+        non_quarantined_test_names_str = os.linesep.join(
+            quarantined_tests_tuple.non_quarantined_tests_names,
+        )
+        click.echo(
+            click.style(
+                f"{os.linesep}The following failing tests are not quarantined:{os.linesep}{non_quarantined_test_names_str}",
+                fg="red",
+            ),
+        )
+
+    for span in spans:
+        if span.attributes is None or span.attributes.get("test.scope") != "case":
+            continue
+
+        quarantined = bool(
+            span.name in quarantined_tests_tuple.quarantined_tests_names,
+        )
+
+        span._attributes = dict(span.attributes) | {  # noqa: SLF001
+            "cicd.test.quarantined": quarantined,
+        }
+        if (
+            not quarantined
+            and span.status.status_code == opentelemetry.trace.StatusCode.ERROR
+        ):
+            failing_tests_not_quarantined_count += 1
+
+    return failing_tests_not_quarantined_count
+
+
+class QuarantinedTests(typing.NamedTuple):
+    quarantined_tests_names: list[str]
+    non_quarantined_tests_names: list[str]
 
 
 @tenacity.retry(
@@ -276,7 +345,7 @@ async def _check_failing_spans_with_quarantine(
     repository: str,
     tests_target_branch: str,
     failing_spans_names: list[str],
-) -> None:
+) -> QuarantinedTests:
     fspans_str = os.linesep.join(failing_spans_names)
     click.echo(
         f"Checking the following failing tests for quarantine:{os.linesep}{fspans_str}",
@@ -304,26 +373,7 @@ async def _check_failing_spans_with_quarantine(
                 message=f"HTTP error {response.status_code} while checking quarantined tests: {response.text}",
             )
 
-        resp_json = response.json()
-        if resp_json["quarantined_tests_names"]:
-            quarantined_test_names_str = os.linesep.join(
-                resp_json["quarantined_tests_names"],
-            )
-            click.echo(
-                f"The following failing tests are quarantined and will be ignored:{os.linesep}{quarantined_test_names_str}",
-                err=False,
-            )
-
-        if not resp_json["non_quarantined_tests_names"]:
-            return
-
-        non_quarantined_test_names_str = os.linesep.join(
-            resp_json["non_quarantined_tests_names"],
+        return QuarantinedTests(
+            quarantined_tests_names=response.json()["quarantined_tests_names"],
+            non_quarantined_tests_names=response.json()["non_quarantined_tests_names"],
         )
-        click.echo(
-            click.style(
-                f"{os.linesep}The following failing tests are not quarantined:{os.linesep}{non_quarantined_test_names_str}",
-                fg="red",
-            ),
-        )
-        sys.exit(1)
