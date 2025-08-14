@@ -59,7 +59,7 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         ) as mocked_upload,
         mock.patch.object(
             quarantine,
-            "check_failing_spans_with_quarantine",
+            "check_and_update_failing_spans",
             return_value=0,
         ),
     ):
@@ -203,7 +203,7 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
         ) as mocked_upload,
         mock.patch.object(
             quarantine,
-            "check_failing_spans_with_quarantine",
+            "check_and_update_failing_spans",
             return_value=0,
         ),
     ):

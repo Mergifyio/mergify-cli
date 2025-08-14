@@ -22,7 +22,7 @@ QUARANTINE_INFO_ERROR_MSG = (
 )
 
 
-async def check_failing_spans_with_quarantine(
+async def check_and_update_failing_spans(
     api_url: str,
     token: str,
     repository: str,
