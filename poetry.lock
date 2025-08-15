@@ -975,14 +975,14 @@ files = [
 
 [[package]]
 name = "types-click-default-group"
-version = "1.2.0.20250413"
+version = "1.2.0.20250513"
 description = "Typing stubs for click-default-group"
 optional = false
 python-versions = ">=3.9"
 groups = ["dev"]
 files = [
-    {file = "types_click_default_group-1.2.0.20250413-py3-none-any.whl", hash = "sha256:0be1e2e5fc61840c96223d0603fc39b0aaaeea67df71592f77c59ccbc8bc2d68"},
-    {file = "types_click_default_group-1.2.0.20250413.tar.gz", hash = "sha256:05ad6bd446b44d7aeadbc401e7d077563ebca56862e6526837c8f9a2debc87b5"},
+    {file = "types_click_default_group-1.2.0.20250513-py3-none-any.whl", hash = "sha256:3a7af7f84356af7ea9a1d57b0574f1db938a4f40ec501f9d230500dc8aeb56bb"},
+    {file = "types_click_default_group-1.2.0.20250513.tar.gz", hash = "sha256:44804c5de725699e029ee87a3ce8b25b183708681649aa16223b190d926e9c50"},
 ]
 
 [package.dependencies]
