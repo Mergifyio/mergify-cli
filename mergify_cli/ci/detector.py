@@ -150,13 +150,24 @@ def get_cicd_pipeline_run_attempt() -> int | None:
 
 def _get_github_repository_from_env(env: str) -> str | None:
     repository_url = os.getenv(env)
-    if repository_url and (
-        match := re.match(
-            r"(https?://[\w.-]+/)?(?P<full_name>[\w.-]+/[\w.-]+)/?$",
-            repository_url,
-        )
+    if repository_url is None:
+        return None
+
+    # Handle SSH Git URLs like git@github.com:owner/repo.git
+    if match := re.match(
+        r"git@[\w.-]+:(?P<full_name>[\w.-]+/[\w.-]+)(?:\.git)?/?$",
+        repository_url,
+    ):
+        full_name = match.group("full_name")
+        return full_name.removesuffix(".git")
+
+    # Handle HTTPS/HTTP URLs like https://github.com/owner/repo (with optional port)
+    if match := re.match(
+        r"(https?://[\w.-]+(?::\d+)?/)?(?P<full_name>[\w.-]+/[\w.-]+)/?$",
+        repository_url,
     ):
         return match.group("full_name")
+
     return None
 
 
