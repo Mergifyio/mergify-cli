@@ -1,15 +1,43 @@
 extends: .github
+shared:
+  check_runs: &CheckRuns
+    - check-success=test
+
+merge_protections_settings:
+  reporting_method: deployments
+
+merge_protections:
+  - name: 🤖 Continuous Integration
+    if: []
+    success_conditions:
+      - and: *CheckRuns
+
+  - name: 👀 Review Requirements
+    if: []
+    success_conditions:
+      - or:
+        - "#approved-reviews-by>=2"
+        - author = dependabot[bot]
+        - author = renovate[bot]
+        - and:
+            - author = mergify-ci-bot
+            - head = openapi-spec-sync
+        - and:
+            - author = mergify-ci-bot
+            - head ~= ^clifus/
+            - "title ~= ^chore: bump"
 
 queue_rules:
   - name: default
     allow_inplace_checks: true
     queue_conditions:
-      - and: &CheckRuns
-          - check-success=test
-      - "#approved-reviews-by>=2"
-      - "#changes-requested-reviews-by=0"
-      - "#review-threads-unresolved=0"
-      - "#review-requested=0"
+      # We have to set this until we can put the queue below before so it
+      # matches first. We can do that now because order still matters.
+      # But if we don't set it, then bots PRs goes into this queue first.
+      - and:
+          - author != mergify-ci-bot
+          - author != renovate[bot]
+          - author != dependabot[bot]
     commit_message_template: |
       {{ title }} (#{{ number }})
 
@@ -19,14 +47,16 @@ queue_rules:
   - name: lowprio
     allow_inplace_checks: true
     queue_conditions:
-      - and: *CheckRuns
-      - "#commits=1"
-      - author=dependabot[bot]
+      - or:
+          - author = mergify-ci-bot
+          - author = renovate[bot]
+          - author = dependabot[bot]
     merge_method: merge
     batch_size: 7
     batch_max_wait_time: 5min
     commit_message_template:
     queue_branch_merge_method: fast-forward
+
 pull_request_rules:
   - name: automatic merge
     conditions:
@@ -38,6 +68,8 @@ pull_request_rules:
   - name: request review
     conditions:
       - -author=dependabot[bot]
+      - -author=renovate[bot]
+      - -author=mergify-ci-bot
       - -merged
       - -closed
       - and: *CheckRuns
@@ -48,6 +80,3 @@ pull_request_rules:
       request_reviews:
         teams:
           - devs
-
-merge_queue:
-  max_parallel_checks: 5
