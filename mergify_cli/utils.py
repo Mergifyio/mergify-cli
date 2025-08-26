@@ -136,6 +136,19 @@ async def get_default_keep_pr_title_body() -> bool:
     return result == "true"
 
 
+async def get_default_create_as_draft() -> bool:
+    try:
+        result = await git(
+            "config",
+            "--get",
+            "mergify-cli.stack-create-as-draft",
+        )
+    except CommandError:
+        return False
+
+    return result == "true"
+
+
 async def get_trunk() -> str:
     try:
         branch_name = await git_get_branch_name()
