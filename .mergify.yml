@@ -51,3 +51,6 @@ pull_request_rules:
 
 merge_queue:
   max_parallel_checks: 5
+
+merge_protections_settings:
+  reporting_method: deployments
