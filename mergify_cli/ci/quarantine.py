@@ -1,5 +1,4 @@
 import dataclasses
-import os
 import typing
 
 import click
@@ -38,6 +37,9 @@ async def check_and_update_failing_spans(
     Returns the number of failing tests that are not quarantined.
     """
 
+    click.echo("")
+    click.echo("🛡️ Quarantine")
+
     failing_spans = [
         span
         for span in spans
@@ -45,8 +47,12 @@ async def check_and_update_failing_spans(
         and span.attributes is not None
         and span.attributes.get("test.scope") == "case"
     ]
+
     failing_spans_name = [fspan.name for fspan in failing_spans]
     if not failing_spans:
+        click.echo(
+            "• No quarantine check required since no failed tests were detected",
+        )
         return 0
 
     failing_tests_not_quarantined_count: int = 0
@@ -57,26 +63,6 @@ async def check_and_update_failing_spans(
         tests_target_branch,
         failing_spans_name,
     )
-
-    if quarantined_tests_tuple.quarantined_tests_names:
-        quarantined_test_names_str = os.linesep.join(
-            quarantined_tests_tuple.quarantined_tests_names,
-        )
-        click.echo(
-            f"The following failing tests are quarantined and will be ignored:{os.linesep}{quarantined_test_names_str}",
-            err=False,
-        )
-
-    if quarantined_tests_tuple.non_quarantined_tests_names:
-        non_quarantined_test_names_str = os.linesep.join(
-            quarantined_tests_tuple.non_quarantined_tests_names,
-        )
-        click.echo(
-            click.style(
-                f"{os.linesep}The following failing tests are not quarantined:{os.linesep}{non_quarantined_test_names_str}",
-                fg="red",
-            ),
-        )
 
     for span in spans:
         if span.attributes is None or span.attributes.get("test.scope") != "case":
@@ -94,6 +80,31 @@ async def check_and_update_failing_spans(
             and span.status.status_code == opentelemetry.trace.StatusCode.ERROR
         ):
             failing_tests_not_quarantined_count += 1
+
+    quarantined_tests_spans = [
+        span
+        for span in failing_spans
+        if span.name in quarantined_tests_tuple.quarantined_tests_names
+    ]
+
+    non_quarantined_tests_spans = [
+        span
+        for span in failing_spans
+        if span.name in quarantined_tests_tuple.non_quarantined_tests_names
+    ]
+
+    click.echo(
+        f"• Quarantined failures matched: {len(quarantined_tests_spans)}/{len(failing_spans)}",
+    )
+    if quarantined_tests_spans:
+        click.echo("  - 🔒 Quarantined:")
+        for qt_span in quarantined_tests_spans:
+            click.echo(f"      · {qt_span.name}")
+
+    if non_quarantined_tests_spans:
+        click.echo("  - ❌ Unquarantined:")
+        for nqt_span in non_quarantined_tests_spans:
+            click.echo(f"      · {nqt_span.name}")
 
     return failing_tests_not_quarantined_count
 
@@ -122,12 +133,6 @@ async def fetch_quarantined_tests_from_failing_spans(
         raise QuarantineFailedError(
             message=f"Unable to extract repository owner and name from {repository}",
         )
-
-    fspans_str = os.linesep.join(failing_spans_names)
-    click.echo(
-        f"Checking the following failing tests for quarantine:{os.linesep}{fspans_str}",
-        err=False,
-    )
 
     async with utils.get_http_client(
         server=f"{api_url}/v1/ci/{repo_owner}/repositories/{repo_name}/quarantines",

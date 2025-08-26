@@ -39,7 +39,7 @@ async def files_to_spans(
     spans = []
 
     run_id = ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
-    console.print(f"MERGIFY_TEST_RUN_ID={run_id}")
+    console.print(f"🛠️ MERGIFY_TEST_RUN_ID={run_id}")
 
     for filename in files:
         spans.extend(

@@ -58,12 +58,15 @@ def upload(
     repository: str,
     spans: list[ReadableSpan],
 ) -> None:
+    console.log("")
+    console.log("☁️ Upload")
+    console.log(f"• Owner/Repo: {repository}")
     if spans:
         try:
             upload_spans(api_url, token, repository, spans)
         except UploadError as e:
-            console.log(f"Error uploading spans: {e}", style="red")
+            console.log(f"• ❌ Error uploading spans: {e}", style="red")
         else:
-            console.log("[green]:tada: File(s) uploaded[/]")
+            console.log("• [green]🎉 File(s) uploaded[/]")
     else:
-        console.log("[orange]No tests were detected in the JUnit file(s)[/]")
+        console.log("• [orange]🟠 No tests were detected in the JUnit file(s)[/]")

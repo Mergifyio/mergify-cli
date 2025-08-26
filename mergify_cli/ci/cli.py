@@ -1,6 +1,7 @@
 import sys
 
 import click
+import opentelemetry.trace
 
 from mergify_cli import utils
 from mergify_cli.ci import detector
@@ -203,6 +204,10 @@ async def _process_junit_files(  # noqa: PLR0913
     tests_target_branch: str,
     files: tuple[str, ...],
 ) -> None:
+    click.echo("🚀 CI Insights · Upload JUnit")
+    click.echo("────────────────────────────")
+    click.echo(f"📂 Discovered reports: {len(files)}")
+
     try:
         spans = await junit.files_to_spans(
             files,
@@ -212,7 +217,7 @@ async def _process_junit_files(  # noqa: PLR0913
     except junit.InvalidJunitXMLError as e:
         click.echo(
             click.style(
-                f"Error converting JUnit XML file to spans: {e.details}",
+                f"❌ Error converting JUnit XML file to spans: {e.details}",
                 fg="red",
             ),
             err=True,
@@ -221,10 +226,31 @@ async def _process_junit_files(  # noqa: PLR0913
 
     if not spans:
         click.echo(
-            click.style("No spans found in the JUnit files", fg="red"),
+            click.style("❌ No spans found in the JUnit files", fg="red"),
             err=True,
         )
         sys.exit(1)
+
+    tests_cases = [
+        span
+        for span in spans
+        if span.attributes is not None and span.attributes.get("test.scope") == "case"
+    ]
+    nb_failing_spans = len(
+        [
+            span
+            for span in tests_cases
+            if span.status.status_code == opentelemetry.trace.StatusCode.ERROR
+        ],
+    )
+    nb_success_spans = [
+        span
+        for span in tests_cases
+        if span.status.status_code == opentelemetry.trace.StatusCode.OK
+    ]
+    click.echo(
+        f"🧪 Parsed tests: {len(tests_cases)} (✅ passed: {nb_success_spans} | ❌ failed: {nb_failing_spans})",
+    )
 
     # NOTE: Check quarantine before uploading in order to properly modify the
     # "cicd.test.quarantined" attribute for the required spans.
@@ -246,7 +272,7 @@ async def _process_junit_files(  # noqa: PLR0913
         )
         quarantine_exit_error_code = 1
     except Exception as exc:  # noqa: BLE001
-        msg = f"An unexpected error occured when checking quarantined tests: {exc!s}"
+        msg = f"❌ An unexpected error occured when checking quarantined tests: {exc!s}"
         click.echo(click.style(msg, fg="red"), err=True)
         click.echo(
             click.style(quarantine.QUARANTINE_INFO_ERROR_MSG, fg="red"),
@@ -265,9 +291,21 @@ async def _process_junit_files(  # noqa: PLR0913
         )
     except Exception as e:  # noqa: BLE001
         click.echo(
-            click.style(f"Error uploading JUnit XML reports: {e}", fg="red"),
+            click.style(f"❌ Error uploading JUnit XML reports: {e}", fg="red"),
             err=True,
         )
 
-    if quarantine_exit_error_code != 0:
-        sys.exit(quarantine_exit_error_code)
+    click.echo("")
+    if quarantine_exit_error_code == 0:
+        click.echo("🎉 Verdict")
+        click.echo(
+            f"• Status: ✅ OK — all {nb_failing_spans} failures are quarantined (ignored for CI status)",
+        )
+    else:
+        click.echo("❌ Verdict")
+        click.echo(
+            f"• Status: 🔴 FAIL — {failing_tests_not_quarantined_count} unquarantined failures detected ({nb_failing_spans - failing_tests_not_quarantined_count} quarantined)",
+        )
+
+    click.echo(f"• Exit code: {quarantine_exit_error_code}")
+    sys.exit(quarantine_exit_error_code)
