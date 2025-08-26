@@ -46,6 +46,7 @@ async def test_get_trunk() -> None:
     ("default_arg_fct", "config_get_result", "expected_default"),
     [
         (utils.get_default_keep_pr_title_body, "true", True),
+        (utils.get_default_create_as_draft, "true", True),
         (
             lambda: utils.get_default_branch_prefix("author"),
             "dummy-prefix",

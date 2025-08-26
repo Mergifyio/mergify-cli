@@ -49,6 +49,7 @@ class GitMock:
     def default_cli_args(self) -> None:
         self.mock("config", "--get", "mergify-cli.github-server", output="")
         self.mock("config", "--get", "mergify-cli.stack-keep-pr-title-body", output="")
+        self.mock("config", "--get", "mergify-cli.stack-create-as-draft", output="")
         self.mock("config", "--get", "branch.current-branch.merge", output="")
         self.mock("config", "--get", "branch.current-branch.remote", output="")
         self.mock("config", "--get", "mergify-cli.stack-branch-prefix", output="")

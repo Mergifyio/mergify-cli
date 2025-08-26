@@ -129,7 +129,11 @@ async def edit() -> None:
     "--draft",
     "-d",
     is_flag=True,
-    help="Create stacked pull request as draft",
+    # NOTE: `flag_value` here is used to allow the default's lazy loading with `is_flag`
+    flag_value=True,
+    default=lambda: asyncio.run(utils.get_default_create_as_draft()),
+    help="Create stacked pull request as draft. "
+    "Default fetched from git config if added with `git config --add mergify-cli.stack-create-as-draft true`",
 )
 @click.option(
     "--keep-pull-request-title-and-body",
