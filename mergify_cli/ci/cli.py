@@ -9,6 +9,36 @@ from mergify_cli.ci import quarantine
 from mergify_cli.ci import upload
 
 
+class JUnitFile(click.Path):
+    """Custom Click parameter type for JUnit files with better error messages."""
+
+    def __init__(self) -> None:
+        super().__init__(exists=True, dir_okay=False)
+
+    def convert(  # type: ignore[override]
+        self,
+        value: str,
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> str:
+        try:
+            return super().convert(value, param, ctx)
+        except click.BadParameter as e:
+            if "does not exist" in str(e):
+                # Provide a more helpful error message
+                error_msg = (
+                    f"JUnit XML file '{value}' does not exist. \n\n"
+                    "This usually indicates that a previous CI step failed to generate the test results.\n"
+                    "Please check if your test execution step completed successfully and produced the expected output file."
+                )
+                raise click.BadParameter(
+                    error_msg,
+                    ctx=ctx,
+                    param=param,
+                ) from e
+            raise
+
+
 def _process_tests_target_branch(
     _ctx: click.Context,
     _param: click.Parameter,
@@ -68,7 +98,7 @@ ci = click.Group(
     "files",
     nargs=-1,
     required=True,
-    type=click.Path(exists=True, dir_okay=False),
+    type=JUnitFile(),
 )
 @utils.run_with_asyncio
 async def junit_upload(  # noqa: PLR0913
@@ -139,7 +169,7 @@ async def junit_upload(  # noqa: PLR0913
     "files",
     nargs=-1,
     required=True,
-    type=click.Path(exists=True, dir_okay=False),
+    type=JUnitFile(),
 )
 @utils.run_with_asyncio
 async def junit_process(  # noqa: PLR0913

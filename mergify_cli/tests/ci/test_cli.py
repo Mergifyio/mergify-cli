@@ -281,3 +281,32 @@ def test_process_tests_target_branch_callback() -> None:
         param_mock,
         "",
     )
+
+
+def test_junit_file_not_found_error_message() -> None:
+    """Test that a helpful error message is shown when JUnit file doesn't exist."""
+    runner = testing.CliRunner()
+
+    # Set up minimal environment variables
+    env = {
+        "MERGIFY_API_URL": "https://api.mergify.com",
+        "MERGIFY_TOKEN": "abc",
+        "GITHUB_REPOSITORY": "user/repo",
+        "GITHUB_BASE_REF": "main",
+    }
+
+    with runner.isolated_filesystem():
+        # Try to run junit-process with a non-existent file
+        result = runner.invoke(
+            cli_junit_upload.junit_process,
+            ["non_existent_junit.xml"],
+            env=env,
+        )
+
+        assert result.exit_code == 2  # Click parameter validation error
+        assert "non_existent_junit.xml" in result.output
+        assert "does not exist" in result.output
+        assert "previous CI step failed" in result.output
+        assert (
+            "check if your test execution step completed successfully" in result.output
+        )
