@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import typing
 
 import click
@@ -37,8 +38,7 @@ async def check_and_update_failing_spans(
     Returns the number of failing tests that are not quarantined.
     """
 
-    click.echo("")
-    click.echo("🛡️ Quarantine")
+    click.echo(f"{os.linesep}🛡️ Quarantine")
 
     failing_spans = [
         span
