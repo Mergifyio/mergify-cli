@@ -65,7 +65,7 @@ async def test_junit_upload(
 
     captured = capsys.readouterr()
     matched = re.search(
-        r"^MERGIFY_TEST_RUN_ID=(.+)",
+        r"^🛠️ MERGIFY_TEST_RUN_ID=(.+)",
         captured.out,
         re.MULTILINE,
     )
@@ -120,6 +120,6 @@ async def test_junit_upload_http_error_console(
     )
     captured = capsys.readouterr()
     assert (
-        'Error uploading spans: Failed to export batch code: 422, reason: {"detail": "Not\nenabled on this repository"}'
+        '• ❌ Error uploading spans: Failed to export batch code: 422, reason: {"detail":\n"Not enabled on this repository"}'
         in captured.out
     )

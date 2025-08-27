@@ -213,8 +213,8 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
             [str(REPORT_XML)],
         )
     assert result.exit_code == 0, (result.stdout, result.stderr)
-    assert result.stderr == "Error uploading JUnit XML reports: Upload failed\n"
-    assert result.stdout.startswith("MERGIFY_TEST_RUN_ID=")
+    assert result.stderr == "❌ Error uploading JUnit XML reports: Upload failed\n"
+    assert "MERGIFY_TEST_RUN_ID=" in result.stdout
     assert mocked_upload.call_count == 1
     assert mocked_upload.call_args.kwargs == {
         "api_url": "https://api.mergify.com",
