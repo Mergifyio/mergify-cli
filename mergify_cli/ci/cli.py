@@ -1,3 +1,4 @@
+import os
 import sys
 
 import click
@@ -243,11 +244,13 @@ async def _process_junit_files(  # noqa: PLR0913
             if span.status.status_code == opentelemetry.trace.StatusCode.ERROR
         ],
     )
-    nb_success_spans = [
-        span
-        for span in tests_cases
-        if span.status.status_code == opentelemetry.trace.StatusCode.OK
-    ]
+    nb_success_spans = len(
+        [
+            span
+            for span in tests_cases
+            if span.status.status_code == opentelemetry.trace.StatusCode.OK
+        ],
+    )
     click.echo(
         f"🧪 Parsed tests: {len(tests_cases)} (✅ passed: {nb_success_spans} | ❌ failed: {nb_failing_spans})",
     )
@@ -295,14 +298,13 @@ async def _process_junit_files(  # noqa: PLR0913
             err=True,
         )
 
-    click.echo("")
     if quarantine_exit_error_code == 0:
-        click.echo("🎉 Verdict")
+        click.echo(f"{os.linesep}🎉 Verdict")
         click.echo(
             f"• Status: ✅ OK — all {nb_failing_spans} failures are quarantined (ignored for CI status)",
         )
     else:
-        click.echo("❌ Verdict")
+        click.echo(f"{os.linesep}❌ Verdict")
         click.echo(
             f"• Status: 🔴 FAIL — {failing_tests_not_quarantined_count} unquarantined failures detected ({nb_failing_spans - failing_tests_not_quarantined_count} quarantined)",
         )
