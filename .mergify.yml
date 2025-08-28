@@ -1,43 +1,39 @@
 extends: .github
+shared:
+  check_runs: &CheckRuns
+    - check-success=test
 
 queue_rules:
-  - name: default
-    allow_inplace_checks: true
+  - name: dependencies
+    autoqueue: true
     queue_conditions:
-      - and: &CheckRuns
-          - check-success=test
-      - "#approved-reviews-by>=2"
-      - "#changes-requested-reviews-by=0"
-      - "#review-threads-unresolved=0"
-      - "#review-requested=0"
+      - base=main
+      - label!=manual merge
+      - or:
+          - author = renovate[bot]
+          - author = dependabot[bot]
+    merge_method: merge
+    batch_size: 7
+    batch_max_wait_time: 5min
+    commit_message_template:
+    queue_branch_merge_method: fast-forward
+
+  - name: default
+    autoqueue: true
+    queue_conditions:
+      - base=main
+      - label!=manual merge
     commit_message_template: |
       {{ title }} (#{{ number }})
 
       {{ body }}
     merge_method: squash
 
-  - name: lowprio
-    allow_inplace_checks: true
-    queue_conditions:
-      - and: *CheckRuns
-      - "#commits=1"
-      - author=dependabot[bot]
-    merge_method: merge
-    batch_size: 7
-    batch_max_wait_time: 5min
-    commit_message_template:
-    queue_branch_merge_method: fast-forward
 pull_request_rules:
-  - name: automatic merge
-    conditions:
-      - base=main
-      - label!=manual merge
-    actions:
-      queue:
-
   - name: request review
     conditions:
       - -author=dependabot[bot]
+      - -author=renovate[bot]
       - -merged
       - -closed
       - and: *CheckRuns
@@ -48,6 +44,22 @@ pull_request_rules:
       request_reviews:
         teams:
           - devs
+
+
+merge_protections:
+  - name: 🤖 Continuous Integration
+    if: []
+    success_conditions:
+      - and: *CheckRuns
+
+  - name: 👀 Review Requirements
+    if: []
+    success_conditions:
+      - or:
+        - "#approved-reviews-by>=2"
+        - author = dependabot[bot]
+        - author = renovate[bot]
+
 
 merge_queue:
   max_parallel_checks: 5
