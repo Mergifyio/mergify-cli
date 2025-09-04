@@ -92,9 +92,9 @@ async def junit_to_spans(
         "test.run.id": run_id,
     }
 
-    if "MERGIFY_TEST_JOB_NAME" in os.environ:
+    if "_MERGIFY_TEST_JOB_NAME" in os.environ:
         resource_attributes["mergify.test.job.name"] = os.environ[
-            "MERGIFY_TEST_JOB_NAME"
+            "_MERGIFY_TEST_JOB_NAME"
         ]
 
     if (pipeline_name := detector.get_pipeline_name()) is not None:
