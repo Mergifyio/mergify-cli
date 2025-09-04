@@ -132,15 +132,15 @@ class LocalChange(Change):
         url = f"<{self.dest_branch}>" if self.pull is None else self.pull["html_url"]
 
         flags: str = ""
-        if self.pull and self.pull["draft"]:
+        if (self.pull and self.pull["draft"]) or (
+            self.action == "create" and create_as_draft
+        ):
             flags += " [yellow](draft)[/]"
 
         if self.action == "create":
             color = "yellow" if dry_run else "blue"
             action = "to create" if dry_run else "created"
             commit_info = self.commit_short_sha
-            if create_as_draft:
-                flags += " [yellow](draft)[/]"
 
         elif self.action == "update":
             color = "yellow" if dry_run else "blue"
