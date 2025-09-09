@@ -184,3 +184,14 @@ def get_github_repository() -> str | None:
             return _get_github_repository_from_env("GIT_URL")
         case _:
             return None
+
+
+def is_flaky_test_detection_enabled() -> bool:
+    return os.getenv("MERGIFY_TEST_FLAKY_DETECTION", default="").lower() in {
+        "y",
+        "yes",
+        "t",
+        "true",
+        "on",
+        "1",
+    }
