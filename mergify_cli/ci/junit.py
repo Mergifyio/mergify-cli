@@ -123,6 +123,9 @@ async def junit_to_spans(
     if (provider := detector.get_ci_provider()) is not None:
         resource_attributes["cicd.provider.name"] = provider
 
+    if detector.is_flaky_test_detection_enabled():
+        resource_attributes["mergify.test.flaky_detection_enabled"] = True
+
     resource = resources.Resource.create(resource_attributes)
 
     traceparent = os.environ.get("MERGIFY_TRACEPARENT")

@@ -42,6 +42,7 @@ async def test_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("_MERGIFY_TEST_JOB_NAME", "foobar")
+    monkeypatch.setenv("MERGIFY_TEST_FLAKY_DETECTION", "1")
     filename = pathlib.Path(__file__).parent / "junit_example.xml"
     run_id = (32312).to_bytes(8, "big").hex()
     spans = await junit.junit_to_spans(
@@ -72,6 +73,7 @@ async def test_parse(
         "telemetry.sdk.name": "opentelemetry",
         "telemetry.sdk.version": anys.ANY_STR,
         "mergify.test.job.name": "foobar",
+        "mergify.test.flaky_detection_enabled": True,
     }
     assert dictified_spans == [
         {
@@ -547,3 +549,6 @@ async def test_traceparent_injection(
     assert spans[0].parent.span_id == 0x7A085853722DC6D2
     for span in spans:
         assert span.context.trace_id == 0x80E1AFED08E019FC1110464CFA66635C
+
+        # Flaky test detection is disabled by default.
+        assert "mergify.test.flaky_detection_enabled" not in span.resource.attributes
