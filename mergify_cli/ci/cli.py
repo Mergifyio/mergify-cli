@@ -257,6 +257,7 @@ async def _process_junit_files(  # noqa: PLR0913
 
     # NOTE: Check quarantine before uploading in order to properly modify the
     # "cicd.test.quarantined" attribute for the required spans.
+    quarantine_final_failure_message: str | None = None
     try:
         failing_tests_not_quarantined_count = (
             await quarantine.check_and_update_failing_spans(
@@ -273,17 +274,24 @@ async def _process_junit_files(  # noqa: PLR0913
             click.style(quarantine.QUARANTINE_INFO_ERROR_MSG, fg="red"),
             err=True,
         )
-        quarantine_exit_error_code = 1
+        quarantine_final_failure_message = (
+            "Unable to determine quarantined failures due to above error"
+        )
     except Exception as exc:  # noqa: BLE001
-        msg = f"❌ An unexpected error occured when checking quarantined tests: {exc!s}"
+        msg = (
+            f"❌ An unexpected error occurred when checking quarantined tests: {exc!s}"
+        )
         click.echo(click.style(msg, fg="red"), err=True)
         click.echo(
             click.style(quarantine.QUARANTINE_INFO_ERROR_MSG, fg="red"),
             err=True,
         )
-        quarantine_exit_error_code = 1
+        quarantine_final_failure_message = (
+            "Unable to determine quarantined failures due to above error"
+        )
     else:
-        quarantine_exit_error_code = 1 if failing_tests_not_quarantined_count > 0 else 0
+        if failing_tests_not_quarantined_count > 0:
+            quarantine_final_failure_message = f"{failing_tests_not_quarantined_count} unquarantined failures detected ({nb_failing_spans - failing_tests_not_quarantined_count} quarantined)"
 
     try:
         upload.upload(
@@ -298,16 +306,18 @@ async def _process_junit_files(  # noqa: PLR0913
             err=True,
         )
 
-    if quarantine_exit_error_code == 0:
+    if quarantine_final_failure_message is None:
         click.echo(f"{os.linesep}🎉 Verdict")
         click.echo(
             f"• Status: ✅ OK — all {nb_failing_spans} failures are quarantined (ignored for CI status)",
         )
+        quarantine_exit_error_code = 0
     else:
         click.echo(f"{os.linesep}❌ Verdict")
         click.echo(
-            f"• Status: 🔴 FAIL — {failing_tests_not_quarantined_count} unquarantined failures detected ({nb_failing_spans - failing_tests_not_quarantined_count} quarantined)",
+            f"• Status: 🔴 FAIL — {quarantine_final_failure_message}",
         )
+        quarantine_exit_error_code = 1
 
     click.echo(f"• Exit code: {quarantine_exit_error_code}")
     sys.exit(quarantine_exit_error_code)
