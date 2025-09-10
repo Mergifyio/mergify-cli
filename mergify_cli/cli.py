@@ -15,6 +15,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import click
 import click.decorators
 import click_default_group
@@ -43,5 +47,22 @@ cli.add_command(stack_cli_mod.stack)
 cli.add_command(ci_cli_mod.ci)
 
 
+def enforce_utf8_mode() -> None:
+    if sys.flags.utf8_mode:
+        return
+
+    argv = [sys.executable, "-X", "utf8"]
+    argv.extend(subprocess._args_from_interpreter_flags())  # type: ignore[attr-defined]  # noqa: SLF001
+    argv.extend(sys.argv)
+
+    os.execv(argv[0], argv)  # noqa: S606
+
+
 def main() -> None:
+    # NOTE:
+    #   It's unlikely this day that a platform does not support unicode.
+    #   But on windows, the default encoding may not be an unicode one.
+    #   Let's try our best by forcing utf-8 and if it's impossible, just returns escaped character
+    if os.name == "nt":
+        enforce_utf8_mode()
     cli()
