@@ -1,7 +1,9 @@
 extends: .github
 shared:
   check_runs: &CheckRuns
-    - check-success=test
+    - check-success=test (ubuntu-24.04)
+    - check-success=test (windows-2022)
+    - check-success=test (mac-15)
 
 queue_rules:
   - name: dependencies

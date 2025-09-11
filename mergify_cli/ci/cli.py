@@ -1,4 +1,3 @@
-import os
 import sys
 
 import click
@@ -307,13 +306,13 @@ async def _process_junit_files(  # noqa: PLR0913
         )
 
     if quarantine_final_failure_message is None:
-        click.echo(f"{os.linesep}🎉 Verdict")
+        click.echo("\n🎉 Verdict")
         click.echo(
             f"• Status: ✅ OK — all {nb_failing_spans} failures are quarantined (ignored for CI status)",
         )
         quarantine_exit_error_code = 0
     else:
-        click.echo(f"{os.linesep}❌ Verdict")
+        click.echo("\n❌ Verdict")
         click.echo(
             f"• Status: 🔴 FAIL — {quarantine_final_failure_message}",
         )

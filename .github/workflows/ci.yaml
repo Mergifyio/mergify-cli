@@ -10,16 +10,34 @@ on:
 jobs:
   test:
     timeout-minutes: 5
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5.0.0
       - uses: actions/setup-python@v6.0.0
         with:
           python-version: ">=3.10"
-      - run: |
+
+      - name: Setup
+        shell: bash
+        run: |
           # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
           pip install -r requirements-poetry.txt
-          poetry install --sync
-          poetry run poe linters
-          poetry run poe test
-          poetry build
+          poetry sync
+
+      - name: Linters
+        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
+        run: poetry run poe linters
+
+      - name: Tests
+        shell: bash
+        env:
+          PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
+        run: poetry run poe test
+
+      - name: Build
+        shell: bash
+        run: poetry build
