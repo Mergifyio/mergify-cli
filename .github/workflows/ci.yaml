@@ -41,3 +41,13 @@ jobs:
       - name: Build
         shell: bash
         run: poetry build
+
+      - name: Tests build
+        shell: bash
+        env:
+          PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
+        run: |
+          pip install dist/*.whl
+          # We check the installed wheel produces a working binary, specially on Windows
+          # to ensure the utf8 mode is enabled.
+          python -c "import test_binary_build; test_binary_build.test_reexec_enables_utf8_and_prints_emoji();"
