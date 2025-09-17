@@ -25,13 +25,13 @@ def test_reexec_enables_utf8_and_prints_emoji() -> None:
         shell=True,
     )
 
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 0, proc.stderr  # noqa: S101
     stdout = proc.stdout
     if os.name == "nt":
         # After re-exec with -X utf8, utf8_mode should be 1 at print time
-        assert "utf8_mode=1" in stdout
+        assert "utf8_mode=1" in stdout  # noqa: S101
     else:
         # No reexec on linux, no need the utf8 mode
-        assert "utf8_mode=0" in stdout
+        assert "utf8_mode=0" in stdout  # noqa: S101
 
-    assert "✅" in stdout
+    assert "✅" in stdout  # noqa: S101
