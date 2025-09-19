@@ -39,7 +39,8 @@ dest="$1.tmp.${random}"
 
 trap 'rm -f "${dest}"' EXIT
 
-if ! git stripspace --strip-comments < "$1" > "${dest}" ; then
+# cut everything from the scissor marker downwards, then strip comments/whitespace
+if ! (sed '/^# -\{24\} >8 -\{24\}$/,$d' | git stripspace --strip-comments) < "$1" > "${dest}" ; then
    echo "cannot strip comments from $1"
    exit 1
 fi
