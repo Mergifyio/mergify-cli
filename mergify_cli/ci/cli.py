@@ -236,6 +236,14 @@ async def _process_junit_files(  # noqa: PLR0913
         for span in spans
         if span.attributes is not None and span.attributes.get("test.scope") == "case"
     ]
+
+    if not tests_cases:
+        click.echo(
+            click.style("❌ No test spans found in the JUnit files", fg="red"),
+            err=True,
+        )
+        sys.exit(1)
+
     nb_failing_spans = len(
         [
             span
