@@ -239,7 +239,7 @@ async def _process_junit_files(  # noqa: PLR0913
 
     if not tests_cases:
         click.echo(
-            click.style("❌ No test spans found in the JUnit files", fg="red"),
+            click.style("❌ No test cases found in the JUnit files", fg="red"),
             err=True,
         )
         sys.exit(1)
