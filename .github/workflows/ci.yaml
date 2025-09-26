@@ -35,6 +35,7 @@ jobs:
       - name: Tests
         shell: bash
         env:
+          _MERGIFY_TEST_NEW_FLAKY_DETECTION: "true"
           PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
         run: poetry run poe test
 
