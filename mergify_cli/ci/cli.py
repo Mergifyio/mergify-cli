@@ -3,6 +3,7 @@ import click
 from mergify_cli import utils
 from mergify_cli.ci import detector
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
+from mergify_cli.ci.scopes import cli as scopes_cli
 
 
 class JUnitFile(click.Path):
@@ -187,3 +188,24 @@ async def junit_process(  # noqa: PLR0913
         tests_target_branch=tests_target_branch,
         files=files,
     )
+
+
+@ci.command(
+    help="""Give the list scope impacted by changed files""",
+    short_help="""Give the list scope impacted by changed files""",
+)
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(exists=True),
+    default=".mergify-ci.yml",
+    help="Path to YAML config file.",
+)
+def scopes(
+    config_path: str,
+) -> None:
+    try:
+        scopes_cli.detect(config_path=config_path)
+    except scopes_cli.ConfigInvalidError as e:
+        raise click.ClickException(str(e)) from e
