@@ -7,7 +7,7 @@ import opentelemetry.trace.span
 import pytest
 
 from mergify_cli.ci import detector
-from mergify_cli.ci import junit
+from mergify_cli.ci.junit_processing import junit
 
 
 @mock.patch.object(detector, "get_ci_provider", return_value="github_actions")

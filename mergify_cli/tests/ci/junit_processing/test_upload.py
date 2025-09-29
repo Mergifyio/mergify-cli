@@ -6,11 +6,11 @@ import opentelemetry.trace.span
 import pytest
 import responses
 
-from mergify_cli.ci import junit
-from mergify_cli.ci import upload
+from mergify_cli.ci.junit_processing import junit
+from mergify_cli.ci.junit_processing import upload
 
 
-REPORT_XML = pathlib.Path(__file__).parent / "report.xml"
+REPORT_XML = pathlib.Path(__file__).parent.parent / "report.xml"
 
 
 @responses.activate(assert_all_requests_are_fired=True)

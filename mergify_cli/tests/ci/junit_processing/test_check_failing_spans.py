@@ -4,8 +4,8 @@ from opentelemetry.trace import StatusCode
 import pytest
 import respx
 
-from mergify_cli.ci.quarantine import QuarantineFailedError
-from mergify_cli.ci.quarantine import check_and_update_failing_spans
+from mergify_cli.ci.junit_processing.quarantine import QuarantineFailedError
+from mergify_cli.ci.junit_processing.quarantine import check_and_update_failing_spans
 
 
 API_MERGIFY_BASE_URL = "https://api.mergify.com"
