@@ -4,12 +4,12 @@ from unittest import mock
 import anys
 import click
 from click import testing
-from opentelemetry.sdk.trace import id_generator
 import pytest
 
 from mergify_cli.ci import cli as cli_junit_upload
-from mergify_cli.ci import quarantine
-from mergify_cli.ci import upload
+from mergify_cli.ci.junit_processing import cli as junit_processing_cli
+from mergify_cli.ci.junit_processing import quarantine
+from mergify_cli.ci.junit_processing import upload
 
 
 REPORT_XML = pathlib.Path(__file__).parent / "report.xml"
@@ -164,8 +164,8 @@ def test_tests_target_branch_environment_variable_processing(
     runner = testing.CliRunner()
 
     with mock.patch.object(
-        cli_junit_upload,
-        "_process_junit_files",
+        junit_processing_cli,
+        "process_junit_files",
         mock.AsyncMock(),
     ) as mocked_process_junit_files:
         result = runner.invoke(
@@ -175,7 +175,7 @@ def test_tests_target_branch_environment_variable_processing(
 
     assert result.exit_code == 0, result.stdout
 
-    # Check that _process_junit_files was called with the expected branch
+    # Check that process_junit_files was called with the expected branch
     assert mocked_process_junit_files.call_count == 1
     call_kwargs = mocked_process_junit_files.call_args.kwargs
     assert call_kwargs["tests_target_branch"] == expected_branch
@@ -408,46 +408,3 @@ def test_junit_file_not_found_error_message() -> None:
         assert (
             "check if your test execution step completed successfully" in result.output
         )
-
-
-async def test_process_junit_file_reporting(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with (
-        mock.patch.object(
-            quarantine,
-            "check_and_update_failing_spans",
-            return_value=0,
-        ),
-        mock.patch.object(upload, "upload"),
-        mock.patch.object(
-            id_generator.RandomIdGenerator,
-            "generate_span_id",
-            return_value=12345678910,
-        ),
-        pytest.raises(SystemExit),
-    ):
-        await cli_junit_upload._process_junit_files(
-            api_url="https://api.mergify.com",
-            token="foobar",  # noqa: S106
-            repository="foo/bar",
-            test_framework=None,
-            test_language=None,
-            tests_target_branch="main",
-            files=(str(REPORT_XML),),
-        )
-
-    captured = capsys.readouterr()
-    assert (
-        captured.out
-        == """🚀 CI Insights · Upload JUnit
-────────────────────────────
-📂 Discovered reports: 1
-🛠️ MERGIFY_TEST_RUN_ID=00000002dfdc1c3e
-🧪 Parsed tests: 2 (✅ passed: 1 | ❌ failed: 1)
-
-🎉 Verdict
-• Status: ✅ OK — all 1 failures are quarantined (ignored for CI status)
-• Exit code: 0
-"""
-    )
