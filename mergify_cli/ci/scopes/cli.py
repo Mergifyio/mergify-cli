@@ -45,6 +45,7 @@ ScopeName = typing.Annotated[
 
 class Config(pydantic.BaseModel):
     scopes: dict[ScopeName, ScopeConfig]
+    merge_queue_scope: str | None = "merge-queue"
 
     @classmethod
     def from_dict(cls, data: dict[str, typing.Any] | typing.Any) -> Config:  # noqa: ANN401
@@ -113,12 +114,18 @@ def detect(config_path: str) -> None:
     cfg = Config.from_yaml(config_path)
     base = base_detector.detect()
     try:
-        changed = changed_files.git_changed_files(base)
+        changed = changed_files.git_changed_files(base.ref)
     except changed_files.ChangedFilesError as e:
         raise ChangedFilesError(str(e))
     scopes_hit, per_scope = match_scopes(cfg, changed)
 
-    click.echo(f"Base: {base}")
+    all_scopes = set(cfg.scopes.keys())
+    if cfg.merge_queue_scope is not None:
+        all_scopes.add(cfg.merge_queue_scope)
+        if base.is_merge_queue:
+            scopes_hit.add(cfg.merge_queue_scope)
+
+    click.echo(f"Base: {base.ref}")
     if scopes_hit:
         click.echo("Scopes touched:")
         for s in sorted(scopes_hit):
@@ -129,4 +136,4 @@ def detect(config_path: str) -> None:
     else:
         click.echo("No scopes matched.")
 
-    maybe_write_github_outputs(cfg.scopes.keys(), scopes_hit)
+    maybe_write_github_outputs(all_scopes, scopes_hit)

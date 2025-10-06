@@ -4,6 +4,7 @@ from unittest import mock
 import pytest
 import yaml
 
+from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import cli
 
 
@@ -23,6 +24,7 @@ def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
 
     config = cli.Config.from_yaml(str(config_file))
     assert config.model_dump() == {
+        "merge_queue_scope": "merge-queue",
         "scopes": {
             "backend": {"include": ("api/**/*.py", "backend/**/*.py"), "exclude": ()},
             "frontend": {"include": ("ui/**/*.js", "ui/**/*.tsx"), "exclude": ()},
@@ -223,7 +225,7 @@ def test_detect_with_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = "main"
+    mock_detect_base.return_value = base_detector.Base("main", is_merge_queue=True)
     mock_git_changed.return_value = ["api/models.py", "other.txt"]
 
     # Capture output
@@ -240,6 +242,7 @@ def test_detect_with_matches(
     assert "Base: main" in calls
     assert "Scopes touched:" in calls
     assert "- backend" in calls
+    assert "- merge-queue" in calls
 
 
 @mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
@@ -257,7 +260,7 @@ def test_detect_no_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = "main"
+    mock_detect_base.return_value = base_detector.Base("main", is_merge_queue=False)
     mock_git_changed.return_value = ["other.txt"]
 
     # Capture output
@@ -287,7 +290,7 @@ def test_detect_debug_output(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = "main"
+    mock_detect_base.return_value = base_detector.Base("main", is_merge_queue=False)
     mock_git_changed.return_value = ["api/models.py", "api/views.py"]
 
     # Capture output
