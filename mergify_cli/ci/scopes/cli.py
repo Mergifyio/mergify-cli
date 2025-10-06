@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -36,6 +37,7 @@ ScopeName = typing.Annotated[
 
 class Config(pydantic.BaseModel):
     scopes: dict[ScopeName, ScopeConfig]
+    merge_queue_scope: str | None = "merge-queue"
 
     @classmethod
     def from_dict(cls, data: dict[str, typing.Any] | typing.Any) -> Config:  # noqa: ANN401
@@ -118,7 +120,13 @@ def _detect_base_from_event(ev: dict[str, typing.Any]) -> str | None:
     return None
 
 
-def detect_base() -> str:
+@dataclasses.dataclass
+class Base:
+    ref: str
+    is_merge_queue: bool
+
+
+def detect_base() -> Base:
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     event: dict[str, typing.Any] | None = None
     if event_path and pathlib.Path(event_path).is_file():
@@ -132,17 +140,17 @@ def detect_base() -> str:
         # 0) merge-queue PR override
         mq_sha = _detect_base_from_merge_queue_payload(event)
         if mq_sha:
-            return mq_sha
+            return Base(mq_sha, is_merge_queue=True)
 
         # 1) standard event payload
         event_sha = _detect_base_from_event(event)
         if event_sha:
-            return event_sha
+            return Base(event_sha, is_merge_queue=False)
 
     # 2) base ref (e.g., PR target branch)
     base_ref = os.environ.get("GITHUB_BASE_REF")
     if base_ref:
-        return base_ref
+        return Base(base_ref, is_merge_queue=False)
 
     msg = (
         "Could not detect base SHA. Ensure checkout has sufficient history "
@@ -211,10 +219,16 @@ def maybe_write_github_outputs(
 def detect(config_path: str) -> None:
     cfg = Config.from_yaml(config_path)
     base = detect_base()
-    changed = git_changed_files(base)
+    changed = git_changed_files(base.ref)
     scopes_hit, per_scope = match_scopes(cfg, changed)
 
-    click.echo(f"Base: {base}")
+    all_scopes = set(cfg.scopes.keys())
+    if cfg.merge_queue_scope is not None:
+        all_scopes.add(cfg.merge_queue_scope)
+        if base.is_merge_queue:
+            scopes_hit.add(cfg.merge_queue_scope)
+
+    click.echo(f"Base: {base.ref}")
     if scopes_hit:
         click.echo("Scopes touched:")
         for s in sorted(scopes_hit):
@@ -225,4 +239,4 @@ def detect(config_path: str) -> None:
     else:
         click.echo("No scopes matched.")
 
-    maybe_write_github_outputs(cfg.scopes.keys(), scopes_hit)
+    maybe_write_github_outputs(all_scopes, scopes_hit)

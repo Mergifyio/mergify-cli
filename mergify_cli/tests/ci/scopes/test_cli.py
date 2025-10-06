@@ -26,6 +26,7 @@ def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
 
     config = cli.Config.from_yaml(str(config_file))
     assert config.model_dump() == {
+        "merge_queue_scope": "merge-queue",
         "scopes": {
             "backend": {"include": ("api/**/*.py", "backend/**/*.py"), "exclude": ()},
             "frontend": {"include": ("ui/**/*.js", "ui/**/*.tsx"), "exclude": ()},
@@ -82,7 +83,7 @@ def test_detect_base_github_base_ref(
 
     result = cli.detect_base()
 
-    assert result == "main"
+    assert result == cli.Base("main", is_merge_queue=False)
 
 
 def test_detect_base_from_event_path(
@@ -102,7 +103,7 @@ def test_detect_base_from_event_path(
 
     result = cli.detect_base()
 
-    assert result == "abc123"
+    assert result == cli.Base("abc123", is_merge_queue=False)
 
 
 def test_detect_base_merge_queue_override(
@@ -123,7 +124,7 @@ def test_detect_base_merge_queue_override(
 
     result = cli.detect_base()
 
-    assert result == "xyz789"
+    assert result == cli.Base("xyz789", is_merge_queue=True)
 
 
 def test_detect_base_no_info(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,7 +359,7 @@ def test_detect_with_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = "main"
+    mock_detect_base.return_value = cli.Base("main", is_merge_queue=True)
     mock_git_changed.return_value = ["api/models.py", "other.txt"]
 
     # Capture output
@@ -375,6 +376,7 @@ def test_detect_with_matches(
     assert "Base: main" in calls
     assert "Scopes touched:" in calls
     assert "- backend" in calls
+    assert "- merge-queue" in calls
 
 
 @mock.patch("mergify_cli.ci.scopes.cli.detect_base")
@@ -392,7 +394,7 @@ def test_detect_no_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = "main"
+    mock_detect_base.return_value = cli.Base("main", is_merge_queue=False)
     mock_git_changed.return_value = ["other.txt"]
 
     # Capture output
@@ -422,7 +424,7 @@ def test_detect_debug_output(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = "main"
+    mock_detect_base.return_value = cli.Base("main", is_merge_queue=False)
     mock_git_changed.return_value = ["api/models.py", "api/views.py"]
 
     # Capture output
