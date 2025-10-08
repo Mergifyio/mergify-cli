@@ -1,9 +1,6 @@
-import json
 import pathlib
-import subprocess
 from unittest import mock
 
-import click
 import pytest
 import yaml
 
@@ -41,138 +38,6 @@ def test_from_yaml_invalid_config(tmp_path: pathlib.Path) -> None:
     # Bad name and missing dict
     with pytest.raises(cli.ConfigInvalidError, match="2 validation errors"):
         cli.Config.from_yaml(str(config_file))
-
-
-@mock.patch("mergify_cli.ci.scopes.cli.subprocess.check_output")
-def test_git_changed_files(mock_subprocess: mock.Mock) -> None:
-    mock_subprocess.return_value = "file1.py\nfile2.js\n"
-
-    result = cli.git_changed_files("main")
-
-    mock_subprocess.assert_called_once_with(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRTD", "main...HEAD"],
-        text=True,
-        encoding="utf-8",
-    )
-    assert result == ["file1.py", "file2.js"]
-
-
-@mock.patch("mergify_cli.ci.scopes.cli.subprocess.check_output")
-def test_git_changed_files_empty(mock_subprocess: mock.Mock) -> None:
-    mock_subprocess.return_value = ""
-
-    result = cli.git_changed_files("main")
-
-    assert result == []
-
-
-@mock.patch("mergify_cli.ci.scopes.cli.subprocess.check_output")
-def test_run_command_failure(mock_subprocess: mock.Mock) -> None:
-    mock_subprocess.side_effect = subprocess.CalledProcessError(1, ["git", "diff"])
-
-    with pytest.raises(click.ClickException, match="Command failed"):
-        cli._run(["git", "diff"])
-
-
-def test_detect_base_github_base_ref(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("GITHUB_BASE_REF", "main")
-    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
-
-    result = cli.detect_base()
-
-    assert result == "main"
-
-
-def test_detect_base_from_event_path(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-) -> None:
-    event_data = {
-        "pull_request": {
-            "base": {"sha": "abc123"},
-        },
-    }
-    event_file = tmp_path / "event.json"
-    event_file.write_text(json.dumps(event_data))
-
-    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
-
-    result = cli.detect_base()
-
-    assert result == "abc123"
-
-
-def test_detect_base_merge_queue_override(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-) -> None:
-    event_data = {
-        "pull_request": {
-            "title": "merge-queue: Merge group",
-            "body": "```yaml\nchecking_base_sha: xyz789\n```",
-            "base": {"sha": "abc123"},
-        },
-    }
-    event_file = tmp_path / "event.json"
-    event_file.write_text(json.dumps(event_data))
-
-    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
-
-    result = cli.detect_base()
-
-    assert result == "xyz789"
-
-
-def test_detect_base_no_info(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
-
-    with pytest.raises(click.ClickException, match="Could not detect base SHA"):
-        cli.detect_base()
-
-
-def test_yaml_docs_from_fenced_blocks_valid() -> None:
-    body = """Some text
-```yaml
----
-checking_base_sha: xyz789
-pull_requests: [{"number": 1}]
-previous_failed_batches: []
-...
-```
-More text"""
-
-    result = cli._yaml_docs_from_fenced_blocks(body)
-
-    assert result == cli.MergeQueueMetadata(
-        {
-            "checking_base_sha": "xyz789",
-            "pull_requests": [{"number": 1}],
-            "previous_failed_batches": [],
-        },
-    )
-
-
-def test_yaml_docs_from_fenced_blocks_no_yaml() -> None:
-    body = "No yaml here"
-
-    result = cli._yaml_docs_from_fenced_blocks(body)
-
-    assert result is None
-
-
-def test_yaml_docs_from_fenced_blocks_empty_yaml() -> None:
-    body = """Some text
-```yaml
-```
-More text"""
-
-    result = cli._yaml_docs_from_fenced_blocks(body)
-
-    assert result is None
 
 
 def test_match_scopes_basic() -> None:
@@ -338,8 +203,8 @@ def test_maybe_write_github_outputs_no_env(
     cli.maybe_write_github_outputs(["backend"], {"backend"})
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.detect_base")
-@mock.patch("mergify_cli.ci.scopes.cli.git_changed_files")
+@mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_with_matches(
     mock_github_outputs: mock.Mock,
@@ -377,8 +242,8 @@ def test_detect_with_matches(
     assert "- backend" in calls
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.detect_base")
-@mock.patch("mergify_cli.ci.scopes.cli.git_changed_files")
+@mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_no_matches(
     _: mock.Mock,
@@ -405,8 +270,8 @@ def test_detect_no_matches(
     assert "No scopes matched." in calls
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.detect_base")
-@mock.patch("mergify_cli.ci.scopes.cli.git_changed_files")
+@mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 def test_detect_debug_output(
     mock_git_changed: mock.Mock,
     mock_detect_base: mock.Mock,
