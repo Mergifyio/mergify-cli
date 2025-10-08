@@ -12,8 +12,11 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+from collections import abc
 import dataclasses
+import subprocess
 import typing
+from unittest import mock
 
 
 class Commit(typing.TypedDict):
@@ -86,3 +89,47 @@ class GitMock:
             f"mergify-cli-tmp:current-branch/{commit['change_id']}",
             output="",
         )
+
+
+@dataclasses.dataclass
+class SubprocessMock:
+    cmd: list[str]
+    output: str = ""
+    exit_code: int = 0
+
+
+@dataclasses.dataclass
+class SubprocessMocks:
+    calls: list[SubprocessMock] = dataclasses.field(default_factory=list)
+
+    def register(self, cmd: list[str], output: str = "", exit_code: int = 0) -> None:
+        self.calls.append(SubprocessMock(cmd=cmd, output=output, exit_code=exit_code))
+
+
+def subprocess_mocked() -> abc.Generator[SubprocessMocks]:
+    mocks = SubprocessMocks()
+
+    with mock.patch("subprocess.check_output") as mock_run:
+
+        def check_output(
+            cmd: list[str],
+            **kwargs: typing.Any,  # noqa: ARG001 ANN401
+        ) -> str:
+            try:
+                m = mocks.calls.pop(0)
+            except IndexError:
+                msg = f"Unexpected command: {cmd}"
+                raise ValueError(msg)
+            if m.cmd == cmd:
+                if m.exit_code != 0:
+                    raise subprocess.CalledProcessError(
+                        m.exit_code,
+                        cmd,
+                        output=m.output,
+                    )
+                return m.output
+            msg = f"Unexpected command: {m.cmd} != {cmd}"
+            raise ValueError(msg)
+
+        mock_run.side_effect = check_output
+        yield mocks
