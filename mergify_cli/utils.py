@@ -18,6 +18,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import json
+import os
+import pathlib
 import sys
 import typing
 from urllib import parse
@@ -237,6 +240,26 @@ def get_http_client(
     )
 
 
+def get_mergify_http_client(api_url: str, token: str) -> httpx.AsyncClient:
+    event_hooks: Mapping[str, list[Callable[..., typing.Any]]] = {
+        "request": [],
+        "response": [check_for_status],
+    }
+    if is_debug():
+        event_hooks["request"].insert(0, log_httpx_request)
+        event_hooks["response"].insert(0, log_httpx_response)
+
+    return get_http_client(
+        api_url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        event_hooks=event_hooks,
+        follow_redirects=True,
+    )
+
+
 def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
     event_hooks: Mapping[str, list[Callable[..., typing.Any]]] = {
         "request": [],
@@ -255,6 +278,20 @@ def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
         event_hooks=event_hooks,
         follow_redirects=True,
     )
+
+
+def get_boolean_env(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in {
+        "y",
+        "yes",
+        "t",
+        "true",
+        "on",
+        "1",
+    }
 
 
 P = typing.ParamSpec("P")
@@ -278,3 +315,18 @@ def run_with_asyncio(
         return asyncio.run(result)
 
     return wrapper
+
+
+class GitHubEventNotFoundError(Exception):
+    pass
+
+
+def get_github_event() -> typing.Any:  # noqa: ANN401
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if event_path and pathlib.Path(event_path).is_file():
+        try:
+            with pathlib.Path(event_path).open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            pass
+    raise GitHubEventNotFoundError

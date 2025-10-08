@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import os
-import pathlib
 import typing
 
 import click
 import yaml
+
+from mergify_cli import utils
 
 
 class MergeQueuePullRequest(typing.TypedDict):
@@ -72,16 +72,11 @@ class Base:
 
 
 def detect() -> Base:
-    event_path = os.environ.get("GITHUB_EVENT_PATH")
-    event: dict[str, typing.Any] | None = None
-    if event_path and pathlib.Path(event_path).is_file():
-        try:
-            with pathlib.Path(event_path).open("r", encoding="utf-8") as f:
-                event = json.load(f)
-        except FileNotFoundError:
-            event = None
-
-    if event is not None:
+    try:
+        event = utils.get_github_event()
+    except utils.GitHubEventNotFoundError:
+        pass
+    else:
         # 0) merge-queue PR override
         mq_sha = _detect_base_from_merge_queue_payload(event)
         if mq_sha:

@@ -1,3 +1,4 @@
+import json
 import pathlib
 
 import pytest
@@ -110,3 +111,73 @@ def test_get_repository_name_from_url_invalid(
     monkeypatch.setenv("MY_URL", url)
     result = detector._get_github_repository_from_env("MY_URL")
     assert result is None
+
+
+def test_get_github_pull_request_number_github_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(PULL_REQUEST_EVENT))
+
+    result = detector.get_github_pull_request_number()
+    assert result == 2
+
+
+def test_get_github_pull_request_number_no_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    result = detector.get_github_pull_request_number()
+    assert result is None
+
+
+def test_get_github_pull_request_number_non_pr_event(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {"push": {"ref": "refs/heads/main"}}
+    event_file = tmp_path / "push_event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    result = detector.get_github_pull_request_number()
+    assert result is None
+
+
+def test_get_github_pull_request_number_unsupported_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("CIRCLECI", raising=False)
+
+    result = detector.get_github_pull_request_number()
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        ("", False),
+        ("false", False),
+    ],
+)
+def test_is_flaky_test_detection_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str,
+    expected: bool,
+) -> None:
+    if env_value:
+        monkeypatch.setenv("MERGIFY_TEST_FLAKY_DETECTION", env_value)
+    else:
+        monkeypatch.delenv("MERGIFY_TEST_FLAKY_DETECTION", raising=False)
+
+    result = detector.is_flaky_test_detection_enabled()
+    assert result == expected

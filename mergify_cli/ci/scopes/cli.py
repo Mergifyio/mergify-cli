@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import pathlib
 import typing
@@ -8,6 +9,7 @@ import click
 import pydantic
 import yaml
 
+from mergify_cli import utils
 from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import changed_files
 
@@ -110,7 +112,13 @@ def maybe_write_github_outputs(
             fh.write(f"{key}={val}\n")
 
 
-def detect(config_path: str) -> None:
+@dataclasses.dataclass
+class DetectedScope:
+    ref: str
+    scopes: set[str]
+
+
+def detect(config_path: str) -> DetectedScope:
     cfg = Config.from_yaml(config_path)
     base = base_detector.detect()
     try:
@@ -137,3 +145,37 @@ def detect(config_path: str) -> None:
         click.echo("No scopes matched.")
 
     maybe_write_github_outputs(all_scopes, scopes_hit)
+    return DetectedScope(base.ref, scopes_hit)
+
+
+async def send_scopes(
+    api_url: str,
+    token: str,
+    repository: str,
+    pull_request: int,
+    scopes: list[str],
+) -> None:
+    client = utils.get_mergify_http_client(api_url, token)
+    await client.post(
+        f"/v1/repos/{repository}/pulls/{pull_request}/scopes",
+        json={"scopes": scopes},
+    )
+
+
+class InvalidDumpError(ScopesError):
+    pass
+
+
+class ScopeDump(pydantic.BaseModel):
+    scopes: list[str]
+
+
+def write_dump(write: str, scopes: DetectedScope) -> None:
+    dump = ScopeDump(scopes=list(scopes.scopes))
+    with pathlib.Path(write).open("w", encoding="utf-8") as f:
+        f.write(dump.model_dump_json())
+
+
+def load_dump(filename: str) -> ScopeDump:
+    with pathlib.Path(filename).open("r", encoding="utf-8") as f:
+        return ScopeDump.model_validate_json(f.read())
