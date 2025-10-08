@@ -1,7 +1,9 @@
+import json
 import pathlib
 from unittest import mock
 
 import pytest
+import respx
 import yaml
 
 from mergify_cli.ci.scopes import base_detector
@@ -230,7 +232,7 @@ def test_detect_with_matches(
 
     # Capture output
     with mock.patch("click.echo") as mock_echo:
-        cli.detect(str(config_file))
+        result = cli.detect(str(config_file))
 
     # Verify calls
     mock_detect_base.assert_called_once()
@@ -243,6 +245,9 @@ def test_detect_with_matches(
     assert "Scopes touched:" in calls
     assert "- backend" in calls
     assert "- merge-queue" in calls
+
+    assert result.base_ref == "main"
+    assert result.scopes == {"backend", "merge-queue"}
 
 
 @mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
@@ -265,12 +270,14 @@ def test_detect_no_matches(
 
     # Capture output
     with mock.patch("click.echo") as mock_echo:
-        cli.detect(str(config_file))
+        result = cli.detect(str(config_file))
 
     # Verify output
     calls = [call.args[0] for call in mock_echo.call_args_list]
     assert "Base: main" in calls
     assert "No scopes matched." in calls
+    assert result.scopes == set()
+    assert result.base_ref == "main"
 
 
 @mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
@@ -295,9 +302,58 @@ def test_detect_debug_output(
 
     # Capture output
     with mock.patch("click.echo") as mock_echo:
-        cli.detect(str(config_file))
+        result = cli.detect(str(config_file))
 
     # Verify debug output includes file details
     calls = [call.args[0] for call in mock_echo.call_args_list]
     assert any("    api/models.py" in call for call in calls)
     assert any("    api/views.py" in call for call in calls)
+
+    assert result.base_ref == "main"
+    assert result.scopes == {"backend"}
+
+
+async def test_upload_scopes(respx_mock: respx.MockRouter) -> None:
+    api_url = "https://api.mergify.test"
+    token = "test-token"  # noqa: S105
+    repository = "owner/repo"
+    pull_request = 123
+
+    # Mock the HTTP request
+    route = respx_mock.post(
+        f"{api_url}/v1/repos/{repository}/pulls/{pull_request}/scopes",
+    ).mock(
+        return_value=respx.MockResponse(200, json={"status": "ok"}),
+    )
+
+    # Call the upload function
+    await cli.send_scopes(
+        api_url,
+        token,
+        repository,
+        pull_request,
+        ["backend", "frontend"],
+    )
+
+    # Verify the request was made
+    assert route.called
+    assert route.call_count == 1
+
+    # Verify the request body
+    request = route.calls[0].request
+    assert request.headers["Authorization"] == "Bearer test-token"
+    assert request.headers["Accept"] == "application/json"
+
+    # Verify the JSON payload
+    payload = json.loads(request.content)
+    assert payload == {"scopes": ["backend", "frontend"]}
+
+
+def test_dump(tmp_path: pathlib.Path) -> None:
+    config_file = tmp_path / "scopes.json"
+    saved = cli.DetectedScope(base_ref="main", scopes={"backend", "merge-queue"})
+    saved.save_to_file(str(config_file))
+
+    loaded = cli.DetectedScope.load_from_file(str(config_file))
+    assert loaded.scopes == saved.scopes
+    assert loaded.base_ref == saved.base_ref

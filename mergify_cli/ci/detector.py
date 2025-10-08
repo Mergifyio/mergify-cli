@@ -174,6 +174,22 @@ def _get_github_repository_from_env(env: str) -> str | None:
     return None
 
 
+def get_github_pull_request_number() -> int | None:
+    match get_ci_provider():
+        case "github_actions":
+            try:
+                event = utils.get_github_event()
+            except utils.GitHubEventNotFoundError:
+                return None
+            pr = event.get("pull_request")
+            if not isinstance(pr, dict):
+                return None
+            return typing.cast("int", pr["number"])
+
+        case _:
+            return None
+
+
 def get_github_repository() -> str | None:
     match get_ci_provider():
         case "github_actions":
@@ -187,11 +203,4 @@ def get_github_repository() -> str | None:
 
 
 def is_flaky_test_detection_enabled() -> bool:
-    return os.getenv("MERGIFY_TEST_FLAKY_DETECTION", default="").lower() in {
-        "y",
-        "yes",
-        "t",
-        "true",
-        "on",
-        "1",
-    }
+    return utils.get_boolean_env("MERGIFY_TEST_FLAKY_DETECTION")

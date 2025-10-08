@@ -1,3 +1,4 @@
+import json
 import pathlib
 from unittest import mock
 
@@ -5,8 +6,9 @@ import anys
 import click
 from click import testing
 import pytest
+import respx
 
-from mergify_cli.ci import cli as cli_junit_upload
+from mergify_cli.ci import cli as ci_cli
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.junit_processing import quarantine
 from mergify_cli.ci.junit_processing import upload
@@ -65,11 +67,11 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     ):
         result_process = runner.invoke(
-            cli_junit_upload.junit_process,
+            ci_cli.junit_process,
             [str(REPORT_XML)],
         )
         result_upload = runner.invoke(
-            cli_junit_upload.junit_upload,
+            ci_cli.junit_upload,
             [str(REPORT_XML)],
         )
     assert result_process.exit_code == 0, result_process.stdout
@@ -169,7 +171,7 @@ def test_tests_target_branch_environment_variable_processing(
         mock.AsyncMock(),
     ) as mocked_process_junit_files:
         result = runner.invoke(
-            cli_junit_upload.junit_process,
+            ci_cli.junit_process,
             [str(REPORT_XML)],
         )
 
@@ -209,7 +211,7 @@ def test_quarantine_unhandled_error(monkeypatch: pytest.MonkeyPatch) -> None:
         ) as mocked_quarantine,
     ):
         result = runner.invoke(
-            cli_junit_upload.junit_process,
+            ci_cli.junit_process,
             [str(REPORT_XML)],
         )
 
@@ -258,7 +260,7 @@ def test_quarantine_handled_error(monkeypatch: pytest.MonkeyPatch) -> None:
         ) as mocked_quarantine,
     ):
         result = runner.invoke(
-            cli_junit_upload.junit_process,
+            ci_cli.junit_process,
             [str(REPORT_XML)],
         )
     assert result.exit_code == 1, (result.stdout, result.stderr)
@@ -307,7 +309,7 @@ def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
     ):
         mocked_upload.side_effect = Exception("Upload failed")
         result = runner.invoke(
-            cli_junit_upload.junit_process,
+            ci_cli.junit_process,
             [str(REPORT_XML)],
         )
     assert result.exit_code == 0, (result.stdout, result.stderr)
@@ -329,7 +331,7 @@ def test_process_tests_target_branch_callback() -> None:
 
     # Test stripping refs/heads/ prefix
     assert (
-        cli_junit_upload._process_tests_target_branch(
+        ci_cli._process_tests_target_branch(
             context_mock,
             param_mock,
             "refs/heads/main",
@@ -337,7 +339,7 @@ def test_process_tests_target_branch_callback() -> None:
         == "main"
     )
     assert (
-        cli_junit_upload._process_tests_target_branch(
+        ci_cli._process_tests_target_branch(
             context_mock,
             param_mock,
             "refs/heads/feature-branch",
@@ -347,7 +349,7 @@ def test_process_tests_target_branch_callback() -> None:
 
     # Test not stripping other prefixes
     assert (
-        cli_junit_upload._process_tests_target_branch(
+        ci_cli._process_tests_target_branch(
             context_mock,
             param_mock,
             "refs/tags/v1.0.0",
@@ -355,7 +357,7 @@ def test_process_tests_target_branch_callback() -> None:
         == "refs/tags/v1.0.0"
     )
     assert (
-        cli_junit_upload._process_tests_target_branch(
+        ci_cli._process_tests_target_branch(
             context_mock,
             param_mock,
             "main",
@@ -365,7 +367,7 @@ def test_process_tests_target_branch_callback() -> None:
 
     # Test None value
     assert (
-        cli_junit_upload._process_tests_target_branch(
+        ci_cli._process_tests_target_branch(
             context_mock,
             param_mock,
             None,
@@ -374,7 +376,7 @@ def test_process_tests_target_branch_callback() -> None:
     )
 
     # Test empty string
-    assert not cli_junit_upload._process_tests_target_branch(
+    assert not ci_cli._process_tests_target_branch(
         context_mock,
         param_mock,
         "",
@@ -396,7 +398,7 @@ def test_junit_file_not_found_error_message() -> None:
     with runner.isolated_filesystem():
         # Try to run junit-process with a non-existent file
         result = runner.invoke(
-            cli_junit_upload.junit_process,
+            ci_cli.junit_process,
             ["non_existent_junit.xml"],
             env=env,
         )
@@ -408,3 +410,43 @@ def test_junit_file_not_found_error_message() -> None:
         assert (
             "check if your test execution step completed successfully" in result.output
         )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+def test_scopes_send(
+    respx_mock: respx.MockRouter,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Test scopes command with all required parameters."""
+
+    # Create config file
+    scopes_file = tmp_path / "scopes.json"
+    scopes_file.write_text(
+        json.dumps({"base_ref": "main", "scopes": ["backend", "frontend"]}),
+    )
+
+    runner = testing.CliRunner()
+
+    post_mock = respx_mock.post(
+        "https://api.mergify.com/v1/repos/owner/repository/pulls/123/scopes",
+        headers={"Authorization": "Bearer test-token"},
+    ).respond(200)
+    result = runner.invoke(
+        ci_cli.scopes_send,
+        [
+            "--pull-request",
+            "123",
+            "--repository",
+            "owner/repository",
+            "--token",
+            "test-token",
+            "--scope",
+            "foobar",
+            "--file",
+            str(scopes_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(post_mock.calls[0].request.content)
+    assert sorted(payload["scopes"]) == ["backend", "foobar", "frontend"]
