@@ -207,5 +207,5 @@ def scopes(
 ) -> None:
     try:
         scopes_cli.detect(config_path=config_path)
-    except scopes_cli.ConfigInvalidError as e:
+    except scopes_cli.ScopesError as e:
         raise click.ClickException(str(e)) from e

@@ -20,7 +20,15 @@ SCOPE_PREFIX = "scope_"
 SCOPE_NAME_RE = r"^[A-Za-z0-9_-]+$"
 
 
-class ConfigInvalidError(Exception):
+class ScopesError(Exception):
+    pass
+
+
+class ConfigInvalidError(ScopesError):
+    pass
+
+
+class ChangedFilesError(ScopesError):
     pass
 
 
@@ -104,7 +112,10 @@ def maybe_write_github_outputs(
 def detect(config_path: str) -> None:
     cfg = Config.from_yaml(config_path)
     base = base_detector.detect()
-    changed = changed_files.git_changed_files(base)
+    try:
+        changed = changed_files.git_changed_files(base)
+    except changed_files.ChangedFilesError as e:
+        raise ChangedFilesError(str(e))
     scopes_hit, per_scope = match_scopes(cfg, changed)
 
     click.echo(f"Base: {base}")
