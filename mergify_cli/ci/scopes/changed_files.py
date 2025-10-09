@@ -3,11 +3,13 @@ from __future__ import annotations
 import subprocess
 import sys
 
+from mergify_cli.ci.scopes import exceptions
+
 
 COMMITS_BATCH_SIZE = 100
 
 
-class ChangedFilesError(Exception):
+class ChangedFilesError(exceptions.ScopesError):
     pass
 
 

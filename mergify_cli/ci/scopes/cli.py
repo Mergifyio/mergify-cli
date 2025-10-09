@@ -12,6 +12,7 @@ import yaml
 from mergify_cli import utils
 from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import changed_files
+from mergify_cli.ci.scopes import exceptions
 
 
 if typing.TYPE_CHECKING:
@@ -22,15 +23,7 @@ SCOPE_PREFIX = "scope_"
 SCOPE_NAME_RE = r"^[A-Za-z0-9_-]+$"
 
 
-class ScopesError(Exception):
-    pass
-
-
-class ConfigInvalidError(ScopesError):
-    pass
-
-
-class ChangedFilesError(ScopesError):
+class ConfigInvalidError(exceptions.ScopesError):
     pass
 
 
@@ -121,10 +114,7 @@ class DetectedScope:
 def detect(config_path: str) -> DetectedScope:
     cfg = Config.from_yaml(config_path)
     base = base_detector.detect()
-    try:
-        changed = changed_files.git_changed_files(base.ref)
-    except changed_files.ChangedFilesError as e:
-        raise ChangedFilesError(str(e))
+    changed = changed_files.git_changed_files(base.ref)
     scopes_hit, per_scope = match_scopes(cfg, changed)
 
     all_scopes = set(cfg.scopes.keys())
@@ -162,7 +152,7 @@ async def send_scopes(
     )
 
 
-class InvalidDumpError(ScopesError):
+class InvalidDumpError(exceptions.ScopesError):
     pass
 
 

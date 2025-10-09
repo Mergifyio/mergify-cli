@@ -1,7 +1,6 @@
 import json
 import pathlib
 
-import click
 import pytest
 
 from mergify_cli.ci.scopes import base_detector
@@ -63,7 +62,10 @@ def test_detect_base_no_info(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
     monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
 
-    with pytest.raises(click.ClickException, match="Could not detect base SHA"):
+    with pytest.raises(
+        base_detector.BaseNotFoundError,
+        match="Could not detect base SHA",
+    ):
         base_detector.detect()
 
 

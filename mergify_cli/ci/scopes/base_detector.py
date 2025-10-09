@@ -4,10 +4,14 @@ import dataclasses
 import os
 import typing
 
-import click
 import yaml
 
 from mergify_cli import utils
+from mergify_cli.ci.scopes import exceptions
+
+
+class BaseNotFoundError(exceptions.ScopesError):
+    pass
 
 
 class MergeQueuePullRequest(typing.TypedDict):
@@ -92,10 +96,5 @@ def detect() -> Base:
     if base_ref:
         return Base(base_ref, is_merge_queue=False)
 
-    msg = (
-        "Could not detect base SHA. Ensure checkout has sufficient history "
-        "(e.g., actions/checkout with fetch-depth: 0) or provide GITHUB_EVENT_PATH / GITHUB_BASE_REF."
-    )
-    raise click.ClickException(
-        msg,
-    )
+    msg = "Could not detect base SHA. Provide GITHUB_EVENT_PATH / GITHUB_BASE_REF."
+    raise BaseNotFoundError(msg)
