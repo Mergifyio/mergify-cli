@@ -6,18 +6,41 @@ import pytest
 from mergify_cli.ci.scopes import base_detector
 
 
-def test_detect_base_github_base_ref(
+@pytest.mark.parametrize("event_name", ["pull_request", "pull_request_review", "push"])
+def test_detect_base_from_repository_default_branch(
+    event_name: str,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
 ) -> None:
-    monkeypatch.setenv("GITHUB_BASE_REF", "main")
-    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    event_data = {"repository": {"default_branch": "main"}}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event_name)
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
     result = base_detector.detect()
 
     assert result == base_detector.Base("main", is_merge_queue=False)
 
 
-def test_detect_base_from_event_path(
+def test_detect_base_from_push_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    event_data = {"before": "abc123"}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    result = base_detector.detect()
+
+    assert result == base_detector.Base("abc123", is_merge_queue=False)
+
+
+def test_detect_base_from_pull_request_event_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -29,8 +52,8 @@ def test_detect_base_from_event_path(
     event_file = tmp_path / "event.json"
     event_file.write_text(json.dumps(event_data))
 
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
 
     result = base_detector.detect()
 
@@ -51,6 +74,7 @@ def test_detect_base_merge_queue_override(
     event_file = tmp_path / "event.json"
     event_file.write_text(json.dumps(event_data))
 
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
     result = base_detector.detect()
@@ -58,9 +82,16 @@ def test_detect_base_merge_queue_override(
     assert result == base_detector.Base("xyz789", is_merge_queue=True)
 
 
-def test_detect_base_no_info(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+def test_detect_base_no_info(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data: dict[str, str] = {}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
     with pytest.raises(
         base_detector.BaseNotFoundError,

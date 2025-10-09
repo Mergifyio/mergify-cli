@@ -117,9 +117,11 @@ def test_get_github_event_success(
     event_file = tmp_path / "event.json"
     event_file.write_text(json.dumps(event_data))
 
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
-    result = utils.get_github_event()
-    assert result == event_data
+    name, event = utils.get_github_event()
+    assert name == "pull_request"
+    assert event == event_data
 
 
 def test_get_github_event_not_found(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -321,12 +321,15 @@ class GitHubEventNotFoundError(Exception):
     pass
 
 
-def get_github_event() -> typing.Any:  # noqa: ANN401
+def get_github_event() -> tuple[str, typing.Any]:
+    event_name = os.environ.get("GITHUB_EVENT_NAME")
+    if not event_name:
+        raise GitHubEventNotFoundError
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if event_path and pathlib.Path(event_path).is_file():
         try:
             with pathlib.Path(event_path).open("r", encoding="utf-8") as f:
-                return json.load(f)
+                return event_name, json.load(f)
         except FileNotFoundError:
             pass
     raise GitHubEventNotFoundError
