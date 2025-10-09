@@ -10,15 +10,23 @@ from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import cli
 
 
-def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
+def test_from_yaml_with_extras_ignored(tmp_path: pathlib.Path) -> None:
     config_file = tmp_path / "config.yml"
     config_file.write_text(
         yaml.dump(
             {
+                "defaults": {},
+                "queue_rules": [],
+                "pull_request_rules": [],
+                "partitions_rules": [],
                 "scopes": {
-                    "backend": {"include": ["api/**/*.py", "backend/**/*.py"]},
-                    "frontend": {"include": ["ui/**/*.js", "ui/**/*.tsx"]},
-                    "docs": {"include": ["*.md", "docs/**/*"]},
+                    "source": {
+                        "files": {
+                            "backend": {"include": ["api/**/*.py", "backend/**/*.py"]},
+                            "frontend": {"include": ["ui/**/*.js", "ui/**/*.tsx"]},
+                            "docs": {"include": ["*.md", "docs/**/*"]},
+                        },
+                    },
                 },
             },
         ),
@@ -26,21 +34,74 @@ def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
 
     config = cli.Config.from_yaml(str(config_file))
     assert config.model_dump() == {
-        "merge_queue_scope": "merge-queue",
         "scopes": {
-            "backend": {"include": ("api/**/*.py", "backend/**/*.py"), "exclude": ()},
-            "frontend": {"include": ("ui/**/*.js", "ui/**/*.tsx"), "exclude": ()},
-            "docs": {"include": ("*.md", "docs/**/*"), "exclude": ()},
+            "mode": "serial",
+            "source": {
+                "files": {
+                    "backend": {
+                        "include": ("api/**/*.py", "backend/**/*.py"),
+                        "exclude": (),
+                    },
+                    "frontend": {
+                        "include": ("ui/**/*.js", "ui/**/*.tsx"),
+                        "exclude": (),
+                    },
+                    "docs": {"include": ("*.md", "docs/**/*"), "exclude": ()},
+                },
+            },
+            "merge_queue_scope": "merge-queue",
+        },
+    }
+
+
+def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "scopes": {
+                    "source": {
+                        "files": {
+                            "backend": {"include": ["api/**/*.py", "backend/**/*.py"]},
+                            "frontend": {"include": ["ui/**/*.js", "ui/**/*.tsx"]},
+                            "docs": {"include": ["*.md", "docs/**/*"]},
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    config = cli.Config.from_yaml(str(config_file))
+    assert config.model_dump() == {
+        "scopes": {
+            "merge_queue_scope": "merge-queue",
+            "mode": "serial",
+            "source": {
+                "files": {
+                    "backend": {
+                        "include": ("api/**/*.py", "backend/**/*.py"),
+                        "exclude": (),
+                    },
+                    "frontend": {
+                        "include": ("ui/**/*.js", "ui/**/*.tsx"),
+                        "exclude": (),
+                    },
+                    "docs": {"include": ("*.md", "docs/**/*"), "exclude": ()},
+                },
+            },
         },
     }
 
 
 def test_from_yaml_invalid_config(tmp_path: pathlib.Path) -> None:
     config_file = tmp_path / "config.yml"
-    config_file.write_text(yaml.dump({"scopes": {"Back#end-API": ["api/**/*.py"]}}))
+    config_file.write_text(
+        yaml.dump({"scopes": {"source": {"files": {"Back#end-API": ["api/**/*.py"]}}}}),
+    )
 
     # Bad name and missing dict
-    with pytest.raises(cli.ConfigInvalidError, match="2 validation errors"):
+    with pytest.raises(cli.ConfigInvalidError, match="3 validation errors"):
         cli.Config.from_yaml(str(config_file))
 
 
@@ -48,15 +109,21 @@ def test_match_scopes_basic() -> None:
     config = cli.Config.from_dict(
         {
             "scopes": {
-                "backend": {"include": ("api/**/*.py", "backend/**/*.py")},
-                "frontend": {"include": ("ui/**/*.js", "ui/**/*.tsx")},
-                "docs": {"include": ("*.md", "docs/**/*")},
+                "source": {
+                    "files": {
+                        "backend": {"include": ("api/**/*.py", "backend/**/*.py")},
+                        "frontend": {"include": ("ui/**/*.js", "ui/**/*.tsx")},
+                        "docs": {"include": ("*.md", "docs/**/*")},
+                    },
+                },
             },
         },
     )
     files = ["api/models.py", "ui/components/Button.tsx", "README.md", "other.txt"]
 
-    scopes_hit, per_scope = cli.match_scopes(config, files)
+    assert config.scopes.source is not None
+    assert isinstance(config.scopes.source, cli.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
 
     assert scopes_hit == {"backend", "frontend", "docs"}
     assert per_scope == {
@@ -70,14 +137,20 @@ def test_match_scopes_no_matches() -> None:
     config = cli.Config.from_dict(
         {
             "scopes": {
-                "backend": {"include": ("api/**/*.py",)},
-                "frontend": {"include": ("ui/**/*.js",)},
+                "source": {
+                    "files": {
+                        "backend": {"include": ("api/**/*.py",)},
+                        "frontend": {"include": ("ui/**/*.js",)},
+                    },
+                },
             },
         },
     )
     files = ["other.txt", "unrelated.cpp"]
 
-    scopes_hit, per_scope = cli.match_scopes(config, files)
+    assert config.scopes.source is not None
+    assert isinstance(config.scopes.source, cli.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
 
     assert scopes_hit == set()
     assert per_scope == {}
@@ -87,13 +160,19 @@ def test_match_scopes_multiple_include_single_scope() -> None:
     config = cli.Config.from_dict(
         {
             "scopes": {
-                "backend": {"include": ("api/**/*.py", "backend/**/*.py")},
+                "source": {
+                    "files": {
+                        "backend": {"include": ("api/**/*.py", "backend/**/*.py")},
+                    },
+                },
             },
         },
     )
     files = ["api/models.py", "backend/services.py"]
 
-    scopes_hit, per_scope = cli.match_scopes(config, files)
+    assert config.scopes.source is not None
+    assert isinstance(config.scopes.source, cli.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
 
     assert scopes_hit == {"backend"}
     assert per_scope == {
@@ -105,13 +184,17 @@ def test_match_scopes_with_negation_include() -> None:
     config = cli.Config.from_dict(
         {
             "scopes": {
-                "backend": {
-                    "include": ("api/**/*.py",),
-                    "exclude": ("api/**/test_*.py",),
-                },
-                "frontend": {
-                    "include": ("ui/**/*.js",),
-                    "exclude": ("ui/**/*.spec.js",),
+                "source": {
+                    "files": {
+                        "backend": {
+                            "include": ("api/**/*.py",),
+                            "exclude": ("api/**/test_*.py",),
+                        },
+                        "frontend": {
+                            "include": ("ui/**/*.js",),
+                            "exclude": ("ui/**/*.spec.js",),
+                        },
+                    },
                 },
             },
         },
@@ -123,7 +206,9 @@ def test_match_scopes_with_negation_include() -> None:
         "ui/components.spec.js",
     ]
 
-    scopes_hit, per_scope = cli.match_scopes(config, files)
+    assert config.scopes.source is not None
+    assert isinstance(config.scopes.source, cli.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
 
     assert scopes_hit == {"backend", "frontend"}
     assert per_scope == {
@@ -136,16 +221,22 @@ def test_match_scopes_negation_only() -> None:
     config = cli.Config.from_dict(
         {
             "scopes": {
-                "exclude_images": {
-                    "include": ("**/*",),
-                    "exclude": ("**/*.jpeg", "**/*.png"),
+                "source": {
+                    "files": {
+                        "exclude_images": {
+                            "include": ("**/*",),
+                            "exclude": ("**/*.jpeg", "**/*.png"),
+                        },
+                    },
                 },
             },
         },
     )
     files = ["image.jpeg", "document.txt", "photo.png", "readme.md"]
 
-    scopes_hit, per_scope = cli.match_scopes(config, files)
+    assert config.scopes.source is not None
+    assert isinstance(config.scopes.source, cli.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
 
     assert scopes_hit == {"exclude_images"}
     assert per_scope == {
@@ -157,9 +248,13 @@ def test_match_scopes_mixed_with_complex_negation() -> None:
     config = cli.Config.from_dict(
         {
             "scopes": {
-                "backend": {
-                    "include": ("**/*.py",),
-                    "exclude": ("**/test_*.py", "**/*_test.py"),
+                "source": {
+                    "files": {
+                        "backend": {
+                            "include": ("**/*.py",),
+                            "exclude": ("**/test_*.py", "**/*_test.py"),
+                        },
+                    },
                 },
             },
         },
@@ -172,7 +267,9 @@ def test_match_scopes_mixed_with_complex_negation() -> None:
         "main.py",
     ]
 
-    scopes_hit, per_scope = cli.match_scopes(config, files)
+    assert config.scopes.source is not None
+    assert isinstance(config.scopes.source, cli.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
 
     assert scopes_hit == {"backend"}
     assert per_scope == {
@@ -219,8 +316,12 @@ def test_detect_with_matches(
     # Setup config file
     config_data = {
         "scopes": {
-            "backend": {"include": ["api/**/*.py"]},
-            "frontend": {"include": ["api/**/*.js"]},
+            "source": {
+                "files": {
+                    "backend": {"include": ["api/**/*.py"]},
+                    "frontend": {"include": ["api/**/*.js"]},
+                },
+            },
         },
     }
     config_file = tmp_path / "mergify-ci.yml"
@@ -260,7 +361,9 @@ def test_detect_no_matches(
     tmp_path: pathlib.Path,
 ) -> None:
     # Setup config file
-    config_data = {"scopes": {"backend": {"include": ["api/**/*.py"]}}}
+    config_data = {
+        "scopes": {"source": {"files": {"backend": {"include": ["api/**/*.py"]}}}},
+    }
     config_file = tmp_path / ".mergify-ci.yml"
     config_file.write_text(yaml.dump(config_data))
 
@@ -292,7 +395,9 @@ def test_detect_debug_output(
     monkeypatch.setenv("ACTIONS_STEP_DEBUG", "true")
 
     # Setup config file
-    config_data = {"scopes": {"backend": {"include": ["api/**/*.py"]}}}
+    config_data = {
+        "scopes": {"source": {"files": {"backend": {"include": ["api/**/*.py"]}}}},
+    }
     config_file = tmp_path / ".mergify-ci.yml"
     config_file.write_text(yaml.dump(config_data))
 
