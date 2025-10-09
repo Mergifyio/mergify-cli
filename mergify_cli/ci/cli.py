@@ -4,6 +4,7 @@ from mergify_cli import utils
 from mergify_cli.ci import detector
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.scopes import cli as scopes_cli
+from mergify_cli.ci.scopes import exceptions as scopes_exc
 
 
 class JUnitFile(click.Path):
@@ -214,7 +215,7 @@ def scopes(
 ) -> None:
     try:
         scopes = scopes_cli.detect(config_path=config_path)
-    except scopes_cli.ScopesError as e:
+    except scopes_exc.ScopesError as e:
         raise click.ClickException(str(e)) from e
 
     if write is not None:
@@ -273,7 +274,7 @@ async def scopes_send(  # noqa: PLR0913, PLR0917
     if file is not None:
         try:
             dump = scopes_cli.DetectedScope.load_from_file(file)
-        except scopes_cli.ScopesError as e:
+        except scopes_exc.ScopesError as e:
             raise click.ClickException(str(e)) from e
         scopes.extend(dump.scopes)
 
