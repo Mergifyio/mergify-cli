@@ -26,20 +26,37 @@ class ConfigInvalidError(exceptions.ScopesError):
     pass
 
 
-class ScopeConfig(pydantic.BaseModel):
-    include: tuple[str, ...] = pydantic.Field(default_factory=tuple)
-    exclude: tuple[str, ...] = pydantic.Field(default_factory=tuple)
-
-
 ScopeName = typing.Annotated[
     str,
     pydantic.StringConstraints(pattern=SCOPE_NAME_RE, min_length=1),
 ]
 
 
-class Config(pydantic.BaseModel):
-    scopes: dict[ScopeName, ScopeConfig]
+class FileFilters(pydantic.BaseModel):
+    include: tuple[str, ...] = pydantic.Field(default_factory=tuple)
+    exclude: tuple[str, ...] = pydantic.Field(default_factory=tuple)
+
+
+class SourceFiles(pydantic.BaseModel):
+    files: dict[ScopeName, FileFilters]
+
+
+class SourceOther(pydantic.BaseModel):
+    other: None
+
+
+class ScopesConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    mode: typing.Literal["serial", "parallel"] = "serial"
+    source: SourceFiles | SourceOther | None = None
     merge_queue_scope: str | None = "merge-queue"
+
+
+class Config(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="ignore")
+
+    scopes: ScopesConfig
 
     @classmethod
     def from_dict(cls, data: dict[str, typing.Any] | typing.Any) -> Config:  # noqa: ANN401
@@ -60,15 +77,15 @@ class Config(pydantic.BaseModel):
 
 
 def match_scopes(
-    config: Config,
     files: abc.Iterable[str],
+    filters: dict[ScopeName, FileFilters],
 ) -> tuple[set[str], dict[str, list[str]]]:
     scopes_hit: set[str] = set()
-    per_scope: dict[str, list[str]] = {s: [] for s in config.scopes}
+    per_scope: dict[str, list[str]] = {s: [] for s in filters}
     for f in files:
         # NOTE(sileht): we use pathlib.full_match to support **, as fnmatch does not
         p = pathlib.PurePosixPath(f)
-        for scope, scope_config in config.scopes.items():
+        for scope, scope_config in filters.items():
             if not scope_config.include and not scope_config.exclude:
                 continue
 
@@ -128,14 +145,27 @@ class DetectedScope(pydantic.BaseModel):
 def detect(config_path: str) -> DetectedScope:
     cfg = Config.from_yaml(config_path)
     base = base_detector.detect()
-    changed = changed_files.git_changed_files(base.ref)
-    scopes_hit, per_scope = match_scopes(cfg, changed)
 
-    all_scopes = set(cfg.scopes.keys())
-    if cfg.merge_queue_scope is not None:
-        all_scopes.add(cfg.merge_queue_scope)
+    scopes_hit: set[str]
+    per_scope: dict[str, list[str]]
+
+    source = cfg.scopes.source
+    if source is None:
+        all_scopes = set()
+        scopes_hit = set()
+        per_scope = {}
+    elif isinstance(source, SourceFiles):
+        changed = changed_files.git_changed_files(base.ref)
+        all_scopes = set(source.files.keys())
+        scopes_hit, per_scope = match_scopes(changed, source.files)
+    else:
+        msg = "Unsupported source type"  # type:ignore[unreachable]
+        raise RuntimeError(msg)
+
+    if cfg.scopes.merge_queue_scope is not None:
+        all_scopes.add(cfg.scopes.merge_queue_scope)
         if base.is_merge_queue:
-            scopes_hit.add(cfg.merge_queue_scope)
+            scopes_hit.add(cfg.scopes.merge_queue_scope)
 
     click.echo(f"Base: {base.ref}")
     if scopes_hit:
