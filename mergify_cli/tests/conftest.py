@@ -12,6 +12,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+from collections import abc
 from collections.abc import Generator
 import pathlib
 import subprocess
@@ -77,3 +78,8 @@ def git_mock(
 
     with mock.patch("mergify_cli.utils.git", git_mock_object):
         yield git_mock_object
+
+
+@pytest.fixture
+def mock_subprocess() -> abc.Generator[test_utils.SubprocessMocks]:
+    yield from test_utils.subprocess_mocked()
