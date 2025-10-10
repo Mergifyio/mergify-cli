@@ -199,13 +199,88 @@ async def junit_process(  # noqa: PLR0913
     "config_path",
     required=True,
     type=click.Path(exists=True),
-    default=".mergify-ci.yml",
+    default=".mergify.yml",
     help="Path to YAML config file.",
+)
+@click.option(
+    "--write",
+    "-w",
+    type=click.Path(),
+    help="Write the detected scopes to a file (json).",
 )
 def scopes(
     config_path: str,
+    write: str | None = None,
 ) -> None:
     try:
-        scopes_cli.detect(config_path=config_path)
+        scopes = scopes_cli.detect(config_path=config_path)
     except scopes_cli.ScopesError as e:
         raise click.ClickException(str(e)) from e
+
+    if write is not None:
+        scopes.save_to_file(write)
+
+
+@ci.command(help="Send scopes tied to a pull request to Mergify")
+@click.option(
+    "--api-url",
+    "-u",
+    help="URL of the Mergify API",
+    required=True,
+    envvar="MERGIFY_API_URL",
+    default="https://api.mergify.com",
+    show_default=True,
+)
+@click.option(
+    "--token",
+    "-t",
+    help="Mergify Key",
+    envvar="MERGIFY_TOKEN",
+    required=True,
+)
+@click.option(
+    "--repository",
+    "-r",
+    help="Repository full name (owner/repo)",
+    default=detector.get_github_repository,
+    required=True,
+)
+@click.option(
+    "--pull-request",
+    "-p",
+    help="pull_request number",
+    type=int,
+    default=detector.get_github_pull_request_number,
+    required=True,
+)
+@click.option("--scope", "-s", multiple=True, help="Scope to upload")
+@click.option(
+    "--file",
+    "-f",
+    help="File containing scopes to upload",
+    type=click.Path(exists=True),
+)
+@utils.run_with_asyncio
+async def scopes_send(  # noqa: PLR0913, PLR0917
+    api_url: str,
+    token: str,
+    repository: str,
+    pull_request: int,
+    scope: tuple[str, ...],
+    file: str | None,
+) -> None:
+    scopes = list(scope)
+    if file is not None:
+        try:
+            dump = scopes_cli.DetectedScope.load_from_file(file)
+        except scopes_cli.ScopesError as e:
+            raise click.ClickException(str(e)) from e
+        scopes.extend(dump.scopes)
+
+    await scopes_cli.send_scopes(
+        api_url,
+        token,
+        repository,
+        pull_request,
+        scopes,
+    )

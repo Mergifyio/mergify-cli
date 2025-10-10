@@ -8,6 +8,7 @@ import click
 import pydantic
 import yaml
 
+from mergify_cli import utils
 from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import changed_files
 
@@ -110,7 +111,28 @@ def maybe_write_github_outputs(
             fh.write(f"{key}={val}\n")
 
 
-def detect(config_path: str) -> None:
+class InvalidDetectedScopeError(ScopesError):
+    pass
+
+
+class DetectedScope(pydantic.BaseModel):
+    base_ref: str
+    scopes: set[str]
+
+    def save_to_file(self, file: str) -> None:
+        with pathlib.Path(file).open("w", encoding="utf-8") as f:
+            f.write(self.model_dump_json())
+
+    @classmethod
+    def load_from_file(cls, filename: str) -> DetectedScope:
+        with pathlib.Path(filename).open("r", encoding="utf-8") as f:
+            try:
+                return cls.model_validate_json(f.read())
+            except pydantic.ValidationError as e:
+                raise InvalidDetectedScopeError(str(e))
+
+
+def detect(config_path: str) -> DetectedScope:
     cfg = Config.from_yaml(config_path)
     base = base_detector.detect()
     try:
@@ -137,3 +159,18 @@ def detect(config_path: str) -> None:
         click.echo("No scopes matched.")
 
     maybe_write_github_outputs(all_scopes, scopes_hit)
+    return DetectedScope(base_ref=base.ref, scopes=scopes_hit)
+
+
+async def send_scopes(
+    api_url: str,
+    token: str,
+    repository: str,
+    pull_request: int,
+    scopes: list[str],
+) -> None:
+    client = utils.get_mergify_http_client(api_url, token)
+    await client.post(
+        f"/v1/repos/{repository}/pulls/{pull_request}/scopes",
+        json={"scopes": scopes},
+    )

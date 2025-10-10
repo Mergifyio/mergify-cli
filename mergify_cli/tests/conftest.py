@@ -24,6 +24,13 @@ from mergify_cli.tests import utils as test_utils
 
 
 @pytest.fixture(autouse=True)
+def _unset_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _unset_github_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
