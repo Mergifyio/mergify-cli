@@ -15,7 +15,7 @@ def test_detect_base_github_base_ref(
 
     result = base_detector.detect()
 
-    assert result == "main"
+    assert result == base_detector.Base("main", is_merge_queue=False)
 
 
 def test_detect_base_from_event_path(
@@ -35,7 +35,7 @@ def test_detect_base_from_event_path(
 
     result = base_detector.detect()
 
-    assert result == "abc123"
+    assert result == base_detector.Base("abc123", is_merge_queue=False)
 
 
 def test_detect_base_merge_queue_override(
@@ -56,7 +56,7 @@ def test_detect_base_merge_queue_override(
 
     result = base_detector.detect()
 
-    assert result == "xyz789"
+    assert result == base_detector.Base("xyz789", is_merge_queue=True)
 
 
 def test_detect_base_no_info(monkeypatch: pytest.MonkeyPatch) -> None:

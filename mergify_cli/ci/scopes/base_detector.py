@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -64,7 +65,13 @@ def _detect_base_from_event(ev: dict[str, typing.Any]) -> str | None:
     return None
 
 
-def detect() -> str:
+@dataclasses.dataclass
+class Base:
+    ref: str
+    is_merge_queue: bool
+
+
+def detect() -> Base:
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     event: dict[str, typing.Any] | None = None
     if event_path and pathlib.Path(event_path).is_file():
@@ -78,17 +85,17 @@ def detect() -> str:
         # 0) merge-queue PR override
         mq_sha = _detect_base_from_merge_queue_payload(event)
         if mq_sha:
-            return mq_sha
+            return Base(mq_sha, is_merge_queue=True)
 
         # 1) standard event payload
         event_sha = _detect_base_from_event(event)
         if event_sha:
-            return event_sha
+            return Base(event_sha, is_merge_queue=False)
 
     # 2) base ref (e.g., PR target branch)
     base_ref = os.environ.get("GITHUB_BASE_REF")
     if base_ref:
-        return base_ref
+        return Base(base_ref, is_merge_queue=False)
 
     msg = (
         "Could not detect base SHA. Ensure checkout has sufficient history "
