@@ -178,7 +178,7 @@ def get_github_pull_request_number() -> int | None:
     match get_ci_provider():
         case "github_actions":
             try:
-                event = utils.get_github_event()
+                _, event = utils.get_github_event()
             except utils.GitHubEventNotFoundError:
                 return None
             pr = event.get("pull_request")
