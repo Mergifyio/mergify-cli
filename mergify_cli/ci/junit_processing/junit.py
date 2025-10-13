@@ -45,7 +45,7 @@ async def files_to_spans(
         spans.extend(
             await junit_to_spans(
                 run_id,
-                pathlib.Path(filename).read_bytes(),
+                pathlib.Path(filename).read_bytes(),  # noqa: ASYNC240
                 test_language=test_language,
                 test_framework=test_framework,
             ),

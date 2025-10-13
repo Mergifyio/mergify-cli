@@ -20,7 +20,6 @@ import subprocess
 import sys
 
 import click
-import click.decorators
 import click_default_group
 
 from mergify_cli import VERSION
