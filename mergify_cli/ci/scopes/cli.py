@@ -48,7 +48,6 @@ class SourceManual(pydantic.BaseModel):
 class ScopesConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    mode: typing.Literal["serial", "parallel"] = "serial"
     source: SourceFiles | SourceManual | None = None
     merge_queue_scope: str | None = "merge-queue"
 
