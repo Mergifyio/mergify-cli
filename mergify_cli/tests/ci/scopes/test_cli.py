@@ -35,7 +35,6 @@ def test_from_yaml_with_extras_ignored(tmp_path: pathlib.Path) -> None:
     config = cli.Config.from_yaml(str(config_file))
     assert config.model_dump() == {
         "scopes": {
-            "mode": "serial",
             "source": {
                 "files": {
                     "backend": {
@@ -76,7 +75,6 @@ def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
     assert config.model_dump() == {
         "scopes": {
             "merge_queue_scope": "merge-queue",
-            "mode": "serial",
             "source": {
                 "files": {
                     "backend": {
