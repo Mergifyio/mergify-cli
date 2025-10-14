@@ -41,15 +41,15 @@ class SourceFiles(pydantic.BaseModel):
     files: dict[ScopeName, FileFilters]
 
 
-class SourceOther(pydantic.BaseModel):
-    other: None
+class SourceManual(pydantic.BaseModel):
+    manual: None
 
 
 class ScopesConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
 
     mode: typing.Literal["serial", "parallel"] = "serial"
-    source: SourceFiles | SourceOther | None = None
+    source: SourceFiles | SourceManual | None = None
     merge_queue_scope: str | None = "merge-queue"
 
 
@@ -158,10 +158,8 @@ def detect(config_path: str) -> DetectedScope:
         changed = changed_files.git_changed_files(base.ref)
         all_scopes = set(source.files.keys())
         scopes_hit, per_scope = match_scopes(changed, source.files)
-    elif isinstance(source, SourceOther):
-        msg = (
-            "source `other` has been set, scopes must be send with `scopes-send` or API"
-        )
+    elif isinstance(source, SourceManual):
+        msg = "source `manual` has been set, scopes must be send with `scopes-send` or API"
         raise exceptions.ScopesError(msg)
     else:
         msg = "Unsupported source type"  # type:ignore[unreachable]
