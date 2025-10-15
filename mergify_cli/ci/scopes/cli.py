@@ -6,11 +6,11 @@ import typing
 
 import click
 import pydantic
-import yaml
 
 from mergify_cli import utils
 from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import changed_files
+from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
 
 
@@ -19,65 +19,11 @@ if typing.TYPE_CHECKING:
 
 
 SCOPE_PREFIX = "scope_"
-SCOPE_NAME_RE = r"^[A-Za-z0-9_-]+$"
-
-
-class ConfigInvalidError(exceptions.ScopesError):
-    pass
-
-
-ScopeName = typing.Annotated[
-    str,
-    pydantic.StringConstraints(pattern=SCOPE_NAME_RE, min_length=1),
-]
-
-
-class FileFilters(pydantic.BaseModel):
-    include: tuple[str, ...] = pydantic.Field(default_factory=lambda: ("**/*",))
-    exclude: tuple[str, ...] = pydantic.Field(default_factory=tuple)
-
-
-class SourceFiles(pydantic.BaseModel):
-    files: dict[ScopeName, FileFilters]
-
-
-class SourceManual(pydantic.BaseModel):
-    manual: None
-
-
-class ScopesConfig(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
-
-    source: SourceFiles | SourceManual | None = None
-    merge_queue_scope: str | None = "merge-queue"
-
-
-class Config(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="ignore")
-
-    scopes: ScopesConfig
-
-    @classmethod
-    def from_dict(cls, data: dict[str, typing.Any] | typing.Any) -> Config:  # noqa: ANN401
-        try:
-            return cls.model_validate(data)
-        except pydantic.ValidationError as e:
-            raise ConfigInvalidError(e)
-
-    @classmethod
-    def from_yaml(cls, path: str) -> Config:
-        with pathlib.Path(path).open(encoding="utf-8") as f:
-            try:
-                data = yaml.safe_load(f) or {}
-            except yaml.YAMLError as e:
-                raise ConfigInvalidError(e)
-
-            return cls.from_dict(data)
 
 
 def match_scopes(
     files: abc.Iterable[str],
-    filters: dict[ScopeName, FileFilters],
+    filters: dict[config.ScopeName, config.FileFilters],
 ) -> tuple[set[str], dict[str, list[str]]]:
     scopes_hit: set[str] = set()
     per_scope: dict[str, list[str]] = {s: [] for s in filters}
@@ -142,7 +88,7 @@ class DetectedScope(pydantic.BaseModel):
 
 
 def detect(config_path: str) -> DetectedScope:
-    cfg = Config.from_yaml(config_path)
+    cfg = config.Config.from_yaml(config_path)
     base = base_detector.detect()
 
     scopes_hit: set[str]
@@ -153,11 +99,11 @@ def detect(config_path: str) -> DetectedScope:
         all_scopes = set()
         scopes_hit = set()
         per_scope = {}
-    elif isinstance(source, SourceFiles):
+    elif isinstance(source, config.SourceFiles):
         changed = changed_files.git_changed_files(base.ref)
         all_scopes = set(source.files.keys())
         scopes_hit, per_scope = match_scopes(changed, source.files)
-    elif isinstance(source, SourceManual):
+    elif isinstance(source, config.SourceManual):
         msg = "source `manual` has been set, scopes must be send with `scopes-send` or API"
         raise exceptions.ScopesError(msg)
     else:
