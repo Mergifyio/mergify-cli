@@ -18,9 +18,6 @@ if typing.TYPE_CHECKING:
     from collections import abc
 
 
-SCOPE_PREFIX = "scope_"
-
-
 def match_scopes(
     files: abc.Iterable[str],
     filters: dict[config.ScopeName, config.FileFilters],
@@ -60,9 +57,8 @@ def maybe_write_github_outputs(
     if not gha:
         return
     with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
-        for s in sorted(all_scopes):
-            key = f"{SCOPE_PREFIX}{s}"
-            val = "true" if s in scopes_hit else "false"
+        for key in sorted(all_scopes):
+            val = "true" if key in scopes_hit else "false"
             fh.write(f"{key}={val}\n")
 
 
