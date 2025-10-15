@@ -57,7 +57,11 @@ async def test_no_failing_tests_quarantined(
         ReadableSpan(
             name="test_me.py::test_mee",
             status=Status(status_code=StatusCode.ERROR, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe",
+                "test.case.name": "test_me",
+            },
         ),
     ]
 
@@ -90,17 +94,29 @@ async def test_some_failing_tests_quarantined(
         ReadableSpan(
             name="test_me.py::test_me1",
             status=Status(status_code=StatusCode.ERROR, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe1",
+                "test.case.name": "test_me1",
+            },
         ),
         ReadableSpan(
             name="test_me.py::test_me2",
             status=Status(status_code=StatusCode.ERROR, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe2",
+                "test.case.name": "test_me2",
+            },
         ),
         ReadableSpan(
             name="test_me.py::test_me3",
             status=Status(status_code=StatusCode.OK, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe3",
+                "test.case.name": "test_me3",
+            },
         ),
         ReadableSpan(
             name="test_me.py::test_me4",
@@ -152,17 +168,29 @@ async def test_all_failing_tests_quarantined(
         ReadableSpan(
             name="test_me.py::test_me1",
             status=Status(status_code=StatusCode.ERROR, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe1",
+                "test.case.name": "test_me1",
+            },
         ),
         ReadableSpan(
             name="test_me.py::test_me2",
             status=Status(status_code=StatusCode.ERROR, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe2",
+                "test.case.name": "test_me2",
+            },
         ),
         ReadableSpan(
             name="test_me.py::test_me3",
             status=Status(status_code=StatusCode.ERROR, description=""),
-            attributes={"test.scope": "case"},
+            attributes={
+                "test.scope": "case",
+                "test.suite.name": "TestMe3",
+                "test.case.name": "test_me3",
+            },
         ),
     ]
 

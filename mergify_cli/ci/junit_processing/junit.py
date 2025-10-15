@@ -194,17 +194,19 @@ async def junit_to_spans(
 
         for testcase in testsuite.findall("testcase"):
             classname = testcase.get("classname")
+            test_case_name = testcase.get("name", "unnamed test")
             if classname is not None:
-                test_name = classname + "." + testcase.get("name", "unnamed test")
+                test_name = classname + "." + test_case_name
             else:
-                test_name = testcase.get("name", "unnamed test")
+                test_name = test_case_name
             start_time = now - int(float(testcase.get("time", 0)) * 10e9)
             min_start_time = min(min_start_time, start_time)
 
             attributes: dict[str, str | bool] = {
                 "test.scope": "case",
-                "test.case.name": test_name,
-                "code.function.name": test_name,
+                "test.suite.name": classname if classname is not None else "",
+                "test.case.name": test_case_name,
+                "code.function.name": test_case_name,
                 "cicd.test.quarantined": False,
             }
 

@@ -21,6 +21,16 @@ QUARANTINE_INFO_ERROR_MSG = (
 )
 
 
+def generate_test_report(test_class: str, test_name: str) -> None:
+    click.echo("      · Test:")
+    click.echo(
+        f"         Class: {test_class}",
+    )
+    click.echo(
+        f"         Name: {test_name}",
+    )
+
+
 async def check_and_update_failing_spans(
     api_url: str,
     token: str,
@@ -98,12 +108,30 @@ async def check_and_update_failing_spans(
     if quarantined_tests_spans:
         click.echo("  - 🔒 Quarantined:")
         for qt_span in quarantined_tests_spans:
-            click.echo(f"      · {qt_span.name}")
+            if qt_span.attributes is not None:
+                generate_test_report(
+                    test_class=typing.cast(
+                        "str",
+                        qt_span.attributes["test.suite.name"],
+                    ),
+                    test_name=typing.cast("str", qt_span.attributes["test.case.name"]),
+                )
+            else:
+                click.echo(f"      · {qt_span.name}")
 
     if non_quarantined_tests_spans:
         click.echo("  - ❌ Unquarantined:")
         for nqt_span in non_quarantined_tests_spans:
-            click.echo(f"      · {nqt_span.name}")
+            if nqt_span.attributes is not None:
+                generate_test_report(
+                    test_class=typing.cast(
+                        "str",
+                        nqt_span.attributes["test.suite.name"],
+                    ),
+                    test_name=typing.cast("str", nqt_span.attributes["test.case.name"]),
+                )
+            else:
+                click.echo(f"      · {nqt_span.name}")
 
     return failing_tests_not_quarantined_count
 
