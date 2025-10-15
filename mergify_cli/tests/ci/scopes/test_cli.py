@@ -289,9 +289,7 @@ def test_maybe_write_github_outputs(
     cli.maybe_write_github_outputs(all_scopes, scopes_hit)
 
     content = output_file.read_text()
-    assert "backend=true\n" in content
-    assert "docs=true\n" in content
-    assert "frontend=false\n" in content
+    assert """{"backend": "true", "docs": "true", "frontend": "false"}""" in content
 
 
 def test_maybe_write_github_outputs_no_env(
