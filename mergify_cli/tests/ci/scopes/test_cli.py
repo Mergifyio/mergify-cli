@@ -8,6 +8,7 @@ import yaml
 
 from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import cli
+from mergify_cli.ci.scopes import config
 
 
 def test_from_yaml_with_extras_ignored(tmp_path: pathlib.Path) -> None:
@@ -32,8 +33,8 @@ def test_from_yaml_with_extras_ignored(tmp_path: pathlib.Path) -> None:
         ),
     )
 
-    config = cli.Config.from_yaml(str(config_file))
-    assert config.model_dump() == {
+    cfg = config.Config.from_yaml(str(config_file))
+    assert cfg.model_dump() == {
         "scopes": {
             "source": {
                 "files": {
@@ -71,8 +72,8 @@ def test_from_yaml_valid(tmp_path: pathlib.Path) -> None:
         ),
     )
 
-    config = cli.Config.from_yaml(str(config_file))
-    assert config.model_dump() == {
+    cfg = config.Config.from_yaml(str(config_file))
+    assert cfg.model_dump() == {
         "scopes": {
             "merge_queue_scope": "merge-queue",
             "source": {
@@ -99,12 +100,12 @@ def test_from_yaml_invalid_config(tmp_path: pathlib.Path) -> None:
     )
 
     # Bad name and missing dict
-    with pytest.raises(cli.ConfigInvalidError, match="3 validation errors"):
-        cli.Config.from_yaml(str(config_file))
+    with pytest.raises(config.ConfigInvalidError, match="3 validation errors"):
+        config.Config.from_yaml(str(config_file))
 
 
 def test_match_scopes_basic() -> None:
-    config = cli.Config.from_dict(
+    cfg = config.Config.from_dict(
         {
             "scopes": {
                 "source": {
@@ -119,9 +120,9 @@ def test_match_scopes_basic() -> None:
     )
     files = ["api/models.py", "ui/components/Button.tsx", "README.md", "other.txt"]
 
-    assert config.scopes.source is not None
-    assert isinstance(config.scopes.source, cli.SourceFiles)
-    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
+    assert cfg.scopes.source is not None
+    assert isinstance(cfg.scopes.source, config.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, cfg.scopes.source.files)
 
     assert scopes_hit == {"backend", "frontend", "docs"}
     assert per_scope == {
@@ -132,7 +133,7 @@ def test_match_scopes_basic() -> None:
 
 
 def test_match_scopes_no_matches() -> None:
-    config = cli.Config.from_dict(
+    cfg = config.Config.from_dict(
         {
             "scopes": {
                 "source": {
@@ -146,16 +147,16 @@ def test_match_scopes_no_matches() -> None:
     )
     files = ["other.txt", "unrelated.cpp"]
 
-    assert config.scopes.source is not None
-    assert isinstance(config.scopes.source, cli.SourceFiles)
-    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
+    assert cfg.scopes.source is not None
+    assert isinstance(cfg.scopes.source, config.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, cfg.scopes.source.files)
 
     assert scopes_hit == set()
     assert per_scope == {}
 
 
 def test_match_scopes_multiple_include_single_scope() -> None:
-    config = cli.Config.from_dict(
+    cfg = config.Config.from_dict(
         {
             "scopes": {
                 "source": {
@@ -168,9 +169,9 @@ def test_match_scopes_multiple_include_single_scope() -> None:
     )
     files = ["api/models.py", "backend/services.py"]
 
-    assert config.scopes.source is not None
-    assert isinstance(config.scopes.source, cli.SourceFiles)
-    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
+    assert cfg.scopes.source is not None
+    assert isinstance(cfg.scopes.source, config.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, cfg.scopes.source.files)
 
     assert scopes_hit == {"backend"}
     assert per_scope == {
@@ -179,7 +180,7 @@ def test_match_scopes_multiple_include_single_scope() -> None:
 
 
 def test_match_scopes_with_negation_include() -> None:
-    config = cli.Config.from_dict(
+    cfg = config.Config.from_dict(
         {
             "scopes": {
                 "source": {
@@ -204,9 +205,9 @@ def test_match_scopes_with_negation_include() -> None:
         "ui/components.spec.js",
     ]
 
-    assert config.scopes.source is not None
-    assert isinstance(config.scopes.source, cli.SourceFiles)
-    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
+    assert cfg.scopes.source is not None
+    assert isinstance(cfg.scopes.source, config.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, cfg.scopes.source.files)
 
     assert scopes_hit == {"backend", "frontend"}
     assert per_scope == {
@@ -216,7 +217,7 @@ def test_match_scopes_with_negation_include() -> None:
 
 
 def test_match_scopes_negation_only() -> None:
-    config = cli.Config.from_dict(
+    cfg = config.Config.from_dict(
         {
             "scopes": {
                 "source": {
@@ -232,9 +233,9 @@ def test_match_scopes_negation_only() -> None:
     )
     files = ["image.jpeg", "document.txt", "photo.png", "readme.md"]
 
-    assert config.scopes.source is not None
-    assert isinstance(config.scopes.source, cli.SourceFiles)
-    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
+    assert cfg.scopes.source is not None
+    assert isinstance(cfg.scopes.source, config.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, cfg.scopes.source.files)
 
     assert scopes_hit == {"exclude_images"}
     assert per_scope == {
@@ -243,7 +244,7 @@ def test_match_scopes_negation_only() -> None:
 
 
 def test_match_scopes_mixed_with_complex_negation() -> None:
-    config = cli.Config.from_dict(
+    cfg = config.Config.from_dict(
         {
             "scopes": {
                 "source": {
@@ -265,9 +266,9 @@ def test_match_scopes_mixed_with_complex_negation() -> None:
         "main.py",
     ]
 
-    assert config.scopes.source is not None
-    assert isinstance(config.scopes.source, cli.SourceFiles)
-    scopes_hit, per_scope = cli.match_scopes(files, config.scopes.source.files)
+    assert cfg.scopes.source is not None
+    assert isinstance(cfg.scopes.source, config.SourceFiles)
+    scopes_hit, per_scope = cli.match_scopes(files, cfg.scopes.source.files)
 
     assert scopes_hit == {"backend"}
     assert per_scope == {
