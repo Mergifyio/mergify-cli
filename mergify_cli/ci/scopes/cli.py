@@ -62,11 +62,11 @@ def maybe_write_github_outputs(
         return
     delimiter = f"ghadelimiter_{uuid.uuid4()}"
     with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
-        # NOTE(sileht): boolean in GitHub Workflow should be avoided
-        # in GHA an output is a string, so putting a bool in the json
-        # will be a bool when the json is parsed, but once copied into another output
-        # it's converted to the string "false|true". To avoid any confusion about where it's
-        # a bool and where it's a string, just make it always a string.
+        # NOTE(sileht): Boolean in GitHub Workflow should be avoided.
+        # In GHA, an output is a string, so putting a bool in the JSON
+        # will be a bool when the JSON is parsed, but once copied into another output
+        # it's converted to the string "false|true". To avoid any confusion about whether it's
+        # a bool or a string, make it always a string.
         data = {
             key: "true" if key in scopes_hit else "false" for key in sorted(all_scopes)
         }
