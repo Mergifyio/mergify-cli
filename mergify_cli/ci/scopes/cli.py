@@ -119,6 +119,8 @@ def detect(config_path: str) -> DetectedScope:
     cfg = config.Config.from_yaml(config_path)
     base = base_detector.detect()
 
+    click.echo(f"Base: {base.ref}")
+
     scopes_hit: set[str]
     per_scope: dict[str, list[str]]
 
@@ -129,6 +131,9 @@ def detect(config_path: str) -> DetectedScope:
         per_scope = {}
     elif isinstance(source, config.SourceFiles):
         changed = changed_files.git_changed_files(base.ref)
+        click.echo("Changed files detected:")
+        for file in changed:
+            click.echo(f"- {file}")
         all_scopes = set(source.files.keys())
         scopes_hit, per_scope = match_scopes(changed, source.files)
     elif isinstance(source, config.SourceManual):
@@ -143,7 +148,6 @@ def detect(config_path: str) -> DetectedScope:
         if base.is_merge_queue:
             scopes_hit.add(cfg.scopes.merge_queue_scope)
 
-    click.echo(f"Base: {base.ref}")
     if scopes_hit:
         click.echo("Scopes touched:")
         for s in sorted(scopes_hit):
