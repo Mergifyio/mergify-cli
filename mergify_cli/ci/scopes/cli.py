@@ -75,6 +75,25 @@ def maybe_write_github_outputs(
         )
 
 
+def maybe_write_github_step_summary(
+    base: str,
+    all_scopes: abc.Iterable[str],
+    scopes_hit: set[str],
+) -> None:
+    gha = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not gha:
+        return
+    # Build a pretty Markdown table with emojis
+    markdown = f"## Mergify CI Scope Matching Results for `{base}...HEAD`\n\n"
+    markdown += "| 🎯 Scope | ✅ Match |\n|:--|:--|\n"
+    for scope in sorted(all_scopes):
+        emoji = "✅" if scope in scopes_hit else "❌"
+        markdown += f"| `{scope}` | {emoji} |\n"
+
+    with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
+        fh.write(markdown)
+
+
 class InvalidDetectedScopeError(exceptions.ScopesError):
     pass
 
@@ -136,6 +155,7 @@ def detect(config_path: str) -> DetectedScope:
         click.echo("No scopes matched.")
 
     maybe_write_github_outputs(all_scopes, scopes_hit)
+    maybe_write_github_step_summary(base.ref, all_scopes, scopes_hit)
     return DetectedScope(base_ref=base.ref, scopes=scopes_hit)
 
 

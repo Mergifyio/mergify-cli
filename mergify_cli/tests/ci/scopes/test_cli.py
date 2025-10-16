@@ -292,6 +292,30 @@ def test_maybe_write_github_outputs(
     assert """{"backend": "true", "docs": "true", "frontend": "false"}""" in content
 
 
+def test_maybe_write_github_step_summary(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_file = tmp_path / "github_step_summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(output_file))
+
+    all_scopes = ["backend", "frontend", "docs"]
+    scopes_hit = {"backend", "docs"}
+
+    cli.maybe_write_github_step_summary("da26838", all_scopes, scopes_hit)
+
+    content = output_file.read_text()
+    expected = """## Mergify CI Scope Matching Results for `da26838...HEAD`
+
+| 🎯 Scope | ✅ Match |
+|:--|:--|
+| `backend` | ✅ |
+| `docs` | ✅ |
+| `frontend` | ❌ |
+"""
+    assert content == expected
+
+
 def test_maybe_write_github_outputs_no_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
