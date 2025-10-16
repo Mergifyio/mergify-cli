@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import typing
+import uuid
 
 import click
 import pydantic
@@ -16,6 +18,8 @@ from mergify_cli.ci.scopes import exceptions
 
 if typing.TYPE_CHECKING:
     from collections import abc
+
+GITHUB_ACTIONS_OUTPUT_NAME = "scopes"
 
 
 def match_scopes(
@@ -56,10 +60,19 @@ def maybe_write_github_outputs(
     gha = os.environ.get("GITHUB_OUTPUT")
     if not gha:
         return
+    delimiter = f"ghadelimiter_{uuid.uuid4()}"
     with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
-        for key in sorted(all_scopes):
-            val = "true" if key in scopes_hit else "false"
-            fh.write(f"{key}={val}\n")
+        # NOTE(sileht): Boolean in GitHub Workflow should be avoided.
+        # In GHA, an output is a string, so putting a bool in the JSON
+        # will be a bool when the JSON is parsed, but once copied into another output
+        # it's converted to the string "false|true". To avoid any confusion about whether it's
+        # a bool or a string, make it always a string.
+        data = {
+            key: "true" if key in scopes_hit else "false" for key in sorted(all_scopes)
+        }
+        fh.write(
+            f"{GITHUB_ACTIONS_OUTPUT_NAME}<<{delimiter}\n{json.dumps(data)}\n{delimiter}\n",
+        )
 
 
 class InvalidDetectedScopeError(exceptions.ScopesError):
