@@ -120,7 +120,7 @@ async def test_junit_upload_http_error_console(
     )
     captured = capsys.readouterr()
     assert (
-        "• ❌ Error uploading spans: Failed to export batch code: 422, reason:"
+        "• ❌ Error uploading spans: Failed to export span batch code: 422, reason:"
         in captured.out
     )
     # Open Telemetry does not render JSON the same way between Windows and Linux
