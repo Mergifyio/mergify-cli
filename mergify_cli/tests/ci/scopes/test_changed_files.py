@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pytest
 
 from mergify_cli.ci.scopes import changed_files
-from mergify_cli.tests import utils as test_utils
+
+
+if TYPE_CHECKING:
+    from mergify_cli.tests import utils as test_utils
 
 
 def test_git_changed_files(mock_subprocess: test_utils.SubprocessMocks) -> None:

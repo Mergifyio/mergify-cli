@@ -40,8 +40,8 @@ if typing.TYPE_CHECKING:
 _DEBUG = False
 
 
-def set_debug(debug: bool) -> None:
-    global _DEBUG  # noqa: PLW0603
+def set_debug(*, debug: bool) -> None:
+    global _DEBUG
     _DEBUG = debug
 
 
@@ -212,6 +212,7 @@ async def log_httpx_response(response: httpx.Response) -> None:
 
 def get_http_client(
     server: str,
+    *,
     headers: dict[str, typing.Any] | None = None,
     event_hooks: Mapping[str, list[Callable[..., typing.Any]]] | None = None,
     follow_redirects: bool = False,
@@ -280,7 +281,7 @@ def get_github_http_client(github_server: str, token: str) -> httpx.AsyncClient:
     )
 
 
-def get_boolean_env(name: str, default: bool = False) -> bool:
+def get_boolean_env(name: str, *, default: bool = False) -> bool:
     v = os.getenv(name)
     if v is None:
         return default
@@ -298,7 +299,7 @@ P = typing.ParamSpec("P")
 R = typing.TypeVar("R")
 
 
-def run_with_asyncio(
+def run_with_asyncio[**P, R](
     func: Callable[
         P,
         Coroutine[typing.Any, typing.Any, R],

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pathlib
 from unittest import mock
 
@@ -31,7 +33,7 @@ async def test_process_junit_file_reporting(
     ):
         await cli.process_junit_files(
             api_url="https://api.mergify.com",
-            token="foobar",  # noqa: S106
+            token="foobar",
             repository="foo/bar",
             test_framework=None,
             test_language=None,

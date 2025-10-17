@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from mergify_cli.ci.scopes.config.root import Config
 from mergify_cli.ci.scopes.config.root import ConfigInvalidError
 from mergify_cli.ci.scopes.config.scopes import FileFilters

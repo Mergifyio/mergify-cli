@@ -12,16 +12,20 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+from __future__ import annotations
 
-
-import collections
 import json
-import pathlib
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
 
 from mergify_cli import utils
+
+
+if TYPE_CHECKING:
+    import collections
+    import pathlib
 
 
 @pytest.mark.usefixtures("_git_repo")
@@ -57,6 +61,7 @@ async def test_get_trunk() -> None:
     ],
 )
 async def test_defaults_config_args_set(
+    *,
     default_arg_fct: collections.abc.Callable[
         [],
         collections.abc.Awaitable[bool | str],
@@ -92,6 +97,7 @@ async def test_defaults_config_args_set(
 )
 def test_get_boolean_env(
     monkeypatch: pytest.MonkeyPatch,
+    *,
     env_value: str,
     expected: bool,
 ) -> None:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 
 import click
@@ -8,7 +10,7 @@ from mergify_cli.ci.junit_processing import quarantine
 from mergify_cli.ci.junit_processing import upload
 
 
-async def process_junit_files(  # noqa: PLR0913
+async def process_junit_files(
     *,
     api_url: str,
     token: str,
@@ -98,7 +100,7 @@ async def process_junit_files(  # noqa: PLR0913
         quarantine_final_failure_message = (
             "Unable to determine quarantined failures due to above error"
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         msg = (
             f"❌ An unexpected error occurred when checking quarantined tests: {exc!s}"
         )
@@ -121,7 +123,7 @@ async def process_junit_files(  # noqa: PLR0913
             repository=repository,
             spans=spans,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         click.echo(
             click.style(f"❌ Error uploading JUnit XML reports: {e}", fg="red"),
             err=True,

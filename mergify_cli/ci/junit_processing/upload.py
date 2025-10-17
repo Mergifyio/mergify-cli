@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import io
 import logging
@@ -5,10 +7,13 @@ import typing
 
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace import export
 
 from mergify_cli import console
+
+
+if typing.TYPE_CHECKING:
+    from opentelemetry.sdk.trace import ReadableSpan
 
 
 class UploadError(Exception):
@@ -16,7 +21,7 @@ class UploadError(Exception):
 
 
 @contextlib.contextmanager
-def capture_log(logger: logging.Logger) -> typing.Generator[io.StringIO, None, None]:
+def capture_log(logger: logging.Logger) -> typing.Generator[io.StringIO]:
     # Create a string stream to capture logs
     log_capture_string = io.StringIO()
 

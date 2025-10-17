@@ -12,11 +12,16 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-from collections import abc
+from __future__ import annotations
+
 import dataclasses
 import subprocess
 import typing
 from unittest import mock
+
+
+if typing.TYPE_CHECKING:
+    from collections import abc
 
 
 class Commit(typing.TypedDict):
@@ -113,7 +118,7 @@ def subprocess_mocked() -> abc.Generator[SubprocessMocks]:
 
         def check_output(
             cmd: list[str],
-            **kwargs: typing.Any,  # noqa: ARG001 ANN401
+            **kwargs: typing.Any,  # noqa: ARG001
         ) -> str:
             try:
                 m = mocks.calls.pop(0)

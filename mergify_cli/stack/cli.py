@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 from urllib import parse
@@ -170,8 +172,9 @@ async def edit() -> None:
     help="Only update existing pull requests, do not create new ones",
 )
 @utils.run_with_asyncio
-async def push(  # noqa: PLR0913, PLR0917
+async def push(
     ctx: click.Context,
+    *,
     setup: bool,
     dry_run: bool,
     next_only: bool,
@@ -239,8 +242,9 @@ async def push(  # noqa: PLR0913, PLR0917
     help="Change the target branch of the stack.",
 )
 @utils.run_with_asyncio
-async def checkout(  # noqa: PLR0913, PLR0917
+async def checkout(
     ctx: click.Context,
+    *,
     author: str | None,
     repository: str,
     branch: str,
@@ -252,13 +256,13 @@ async def checkout(  # noqa: PLR0913, PLR0917
     await stack_checkout_mod.stack_checkout(
         ctx.obj["github_server"],
         ctx.obj["token"],
-        user,
-        repo,
-        branch_prefix,
-        branch,
-        author,
-        trunk,
-        dry_run,
+        user=user,
+        repo=repo,
+        branch_prefix=branch_prefix,
+        branch=branch,
+        author=author,
+        trunk=trunk,
+        dry_run=dry_run,
     )
 
 

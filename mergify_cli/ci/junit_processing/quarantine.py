@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 import dataclasses
 import typing
 
 import click
 import httpx
-from opentelemetry.sdk.trace import ReadableSpan
 import opentelemetry.trace
 import tenacity
 
 from mergify_cli import utils
+
+
+if typing.TYPE_CHECKING:
+    from opentelemetry.sdk.trace import ReadableSpan
 
 
 @dataclasses.dataclass
@@ -71,7 +76,7 @@ async def check_and_update_failing_spans(
             span.name in quarantined_tests_tuple.quarantined_tests_names,
         )
 
-        span._attributes = dict(span.attributes) | {  # noqa: SLF001
+        span._attributes = dict(span.attributes) | {
             "cicd.test.quarantined": quarantined,
         }
         if (

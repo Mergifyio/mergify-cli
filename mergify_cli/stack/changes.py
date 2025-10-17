@@ -12,7 +12,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-
+from __future__ import annotations
 
 import asyncio
 import dataclasses
@@ -20,11 +20,13 @@ import re
 import sys
 import typing
 
-import httpx
-
 from mergify_cli import console
 from mergify_cli import github_types
 from mergify_cli import utils
+
+
+if typing.TYPE_CHECKING:
+    import httpx
 
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
@@ -126,6 +128,7 @@ class LocalChange(Change):
 
     def get_log_from_local_change(
         self,
+        *,
         dry_run: bool,
         create_as_draft: bool,
     ) -> str:
@@ -184,7 +187,7 @@ class LocalChange(Change):
 
 @dataclasses.dataclass
 class OrphanChange(Change):
-    def get_log_from_orphan_change(self, dry_run: bool) -> str:
+    def get_log_from_orphan_change(self, *, dry_run: bool) -> str:
         action = "to delete" if dry_run else "deleted"
         title = self.pull["title"] if self.pull else "<unknown>"
         url = self.pull["html_url"] if self.pull else "<unknown>"
@@ -201,6 +204,7 @@ class Changes:
 
 def display_plan(
     changes: Changes,
+    *,
     create_as_draft: bool,
 ) -> None:
     for change in changes.locals:
@@ -215,7 +219,8 @@ def display_plan(
         console.log(orphan.get_log_from_orphan_change(dry_run=True))
 
 
-async def get_changes(  # noqa: PLR0913,PLR0917
+async def get_changes(
+    *,
     base_commit_sha: str,
     stack_prefix: str,
     base_branch: str,

@@ -12,13 +12,19 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
 
 import pytest
-import respx
 
 from mergify_cli.stack import push
 from mergify_cli.tests import utils as test_utils
+
+
+if TYPE_CHECKING:
+    import respx
 
 
 @pytest.mark.parametrize(
