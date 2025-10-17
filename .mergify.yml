@@ -36,6 +36,7 @@ pull_request_rules:
     conditions:
       - -author=dependabot[bot]
       - -author=renovate[bot]
+      - -author=mergify-ci-bot
       - -merged
       - -closed
       - and: *CheckRuns
@@ -61,6 +62,7 @@ merge_protections:
         - "#approved-reviews-by>=2"
         - author = dependabot[bot]
         - author = renovate[bot]
+        - author = mergify-ci-bot
 
 
 merge_queue:
