@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import click
 
 from mergify_cli import utils
@@ -99,7 +101,7 @@ ci = click.Group(
     type=JUnitFile(),
 )
 @utils.run_with_asyncio
-async def junit_upload(  # noqa: PLR0913
+async def junit_upload(
     *,
     api_url: str,
     token: str,
@@ -170,7 +172,7 @@ async def junit_upload(  # noqa: PLR0913
     type=JUnitFile(),
 )
 @utils.run_with_asyncio
-async def junit_process(  # noqa: PLR0913
+async def junit_process(
     *,
     api_url: str,
     token: str,
@@ -262,7 +264,7 @@ def scopes(
     type=click.Path(exists=True),
 )
 @utils.run_with_asyncio
-async def scopes_send(  # noqa: PLR0913, PLR0917
+async def scopes_send(
     api_url: str,
     token: str,
     repository: str,

@@ -1,11 +1,18 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode
 import pytest
-import respx
 
 from mergify_cli.ci.junit_processing.quarantine import QuarantineFailedError
 from mergify_cli.ci.junit_processing.quarantine import check_and_update_failing_spans
+
+
+if TYPE_CHECKING:
+    import respx
 
 
 API_MERGIFY_BASE_URL = "https://api.mergify.com"

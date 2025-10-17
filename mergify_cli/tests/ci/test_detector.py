@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 import json
 import pathlib
+from typing import TYPE_CHECKING
 
 import pytest
-import respx
 
 from mergify_cli.ci import detector
+
+
+if TYPE_CHECKING:
+    import respx
 
 
 PULL_REQUEST_EVENT = pathlib.Path(__file__).parent / "pull_request.json"
@@ -171,6 +177,7 @@ def test_get_github_pull_request_number_unsupported_ci(
 )
 def test_is_flaky_test_detection_enabled(
     monkeypatch: pytest.MonkeyPatch,
+    *,
     env_value: str,
     expected: bool,
 ) -> None:

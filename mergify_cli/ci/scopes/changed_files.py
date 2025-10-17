@@ -14,7 +14,7 @@ class ChangedFilesError(exceptions.ScopesError):
 
 
 def _run(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, text=True, encoding="utf-8").strip()
+    return subprocess.check_output(cmd, text=True, encoding="utf-8").strip()  # noqa: S603
 
 
 def has_merge_base(base: str, head: str) -> bool:

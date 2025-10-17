@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import json
-import pathlib
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
@@ -9,6 +11,10 @@ import yaml
 from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import cli
 from mergify_cli.ci.scopes import config
+
+
+if TYPE_CHECKING:
+    import pathlib
 
 
 def test_from_yaml_with_extras_ignored(tmp_path: pathlib.Path) -> None:
@@ -441,7 +447,7 @@ def test_detect_debug_output(
 
 async def test_upload_scopes(respx_mock: respx.MockRouter) -> None:
     api_url = "https://api.mergify.test"
-    token = "test-token"  # noqa: S105
+    token = "test-token"
     repository = "owner/repo"
     pull_request = 123
 

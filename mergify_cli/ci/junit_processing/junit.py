@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 import os
 import pathlib
@@ -45,7 +47,7 @@ async def files_to_spans(
         spans.extend(
             await junit_to_spans(
                 run_id,
-                pathlib.Path(filename).read_bytes(),  # noqa: ASYNC240
+                pathlib.Path(filename).read_bytes(),
                 test_language=test_language,
                 test_framework=test_framework,
             ),
@@ -265,9 +267,9 @@ async def junit_to_spans(
 
             spans.append(span)
 
-        testsuite_span._start_time = min_start_time  # noqa: SLF001
+        testsuite_span._start_time = min_start_time
         session_start_time = min(session_start_time, min_start_time)
 
-    session_span._start_time = session_start_time  # noqa: SLF001
+    session_span._start_time = session_start_time
 
     return spans

@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import json
-import pathlib
+from typing import TYPE_CHECKING
 
 import pytest
 
 from mergify_cli.ci.scopes import base_detector
+
+
+if TYPE_CHECKING:
+    import pathlib
 
 
 @pytest.mark.parametrize("event_name", ["pull_request", "pull_request_review", "push"])

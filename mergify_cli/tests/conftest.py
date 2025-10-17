@@ -12,15 +12,21 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-from collections import abc
-from collections.abc import Generator
-import pathlib
+from __future__ import annotations
+
 import subprocess
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
 
 from mergify_cli.tests import utils as test_utils
+
+
+if TYPE_CHECKING:
+    from collections import abc
+    from collections.abc import Generator
+    import pathlib
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +66,7 @@ def _git_repo() -> None:
 @pytest.fixture
 def git_mock(
     tmp_path: pathlib.Path,
-) -> Generator[test_utils.GitMock, None, None]:
+) -> Generator[test_utils.GitMock]:
     git_mock_object = test_utils.GitMock()
     # Top level directory is a temporary path
     git_mock_object.mock("rev-parse", "--show-toplevel", output=str(tmp_path))

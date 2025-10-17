@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+from typing import TYPE_CHECKING
 
 from mergify_cli import console
-from mergify_cli import github_types
 from mergify_cli import utils
 from mergify_cli.stack import changes
+
+
+if TYPE_CHECKING:
+    from mergify_cli import github_types
 
 
 @dataclasses.dataclass
@@ -15,9 +19,10 @@ class ChangeNode:
     up: ChangeNode | None = None
 
 
-async def stack_checkout(  # noqa: PLR0913, PLR0917
+async def stack_checkout(
     github_server: str,
     token: str,
+    *,
     user: str,
     repo: str,
     branch_prefix: str | None,

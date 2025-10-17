@@ -1,17 +1,23 @@
+from __future__ import annotations
+
 import json
 import pathlib
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import anys
 import click
 from click import testing
 import pytest
-import respx
 
 from mergify_cli.ci import cli as ci_cli
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.junit_processing import quarantine
 from mergify_cli.ci.junit_processing import upload
+
+
+if TYPE_CHECKING:
+    import respx
 
 
 REPORT_XML = pathlib.Path(__file__).parent / "report.xml"

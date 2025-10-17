@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pathlib
 import typing
 
@@ -20,7 +22,7 @@ class Config(pydantic.BaseModel):
     @classmethod
     def from_dict(
         cls,
-        data: dict[str, typing.Any] | typing.Any,  # noqa: ANN401
+        data: dict[str, typing.Any] | typing.Any,
     ) -> typing.Self:
         try:
             return cls.model_validate(data)

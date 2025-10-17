@@ -1,13 +1,19 @@
+from __future__ import annotations
+
 import json
 import pathlib
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import anys
 import opentelemetry.trace.span
-import pytest
 
 from mergify_cli.ci import detector
 from mergify_cli.ci.junit_processing import junit
+
+
+if TYPE_CHECKING:
+    import pytest
 
 
 @mock.patch.object(detector, "get_ci_provider", return_value="github_actions")

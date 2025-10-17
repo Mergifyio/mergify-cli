@@ -37,6 +37,7 @@ from mergify_cli.stack import cli as stack_cli_mod
 @click.pass_context
 def cli(
     ctx: click.Context,
+    *,
     debug: bool,
 ) -> None:
     ctx.obj = {"debug": debug}
@@ -53,7 +54,7 @@ def main() -> None:
     #   Let's try our best by forcing utf-8 and if it's impossible, just returns escaped character
     if os.name == "nt" and not sys.flags.utf8_mode:
         os.environ["PYTHONUTF8"] = "1"
-        p = subprocess.Popen(
+        p = subprocess.Popen(  # noqa: S603
             sys.argv,
             env=os.environ,
             stdin=sys.stdin,

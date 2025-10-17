@@ -64,103 +64,154 @@ show_error_codes = true
 [tool.ruff]
 line-length = 88
 indent-width = 4
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 preview = true
 select = [
-    "F",
-    "E",
-    "W",
-    "I",
-    "N",
-    "UP",
-    "YTT",
-    "ANN",
-    "ASYNC",
-    "S",
-    "BLE",
-    "FBT",
-    "B",
-    "A",
-    "COM",
-    "C4",
-    "DTZ",
-    "T10",
-    "EM",
-    "FA",
-    "ISC",
-    "ICN",
-    "G",
-    "INP",
-    "PIE",
-    "T20",
-    "PYI",
-    "PT",
-    "Q",
-    "RSE",
-    "RET",
-    "SLF",
-    "SLOT",
-    "SIM",
-    "TID",
-    "TCH",
-    "INT",
-    "ARG",
-    "PTH",
-    "TD",
-    "ERA",
-    "PGH",
-    "PL",
-    "TRY",
-    "FLY",
-    "NPY",
-    "PERF",
-    "FURB",
-    "LOG",
-    "RUF",
+ "E", "W", "F", "I", "A", "B", "Q",
+ "C4", "T10", "ISC", "ICN", "BLE",
+ "G", "RSE", "TID", "TRY", "UP",
+ "RUF", "RET", "DTZ", "TC", "COM",
+ "PERF", "PT", "PGH", "SIM",
+ "PIE", "YTT", "T20", "ARG", "PTH",
+ "N", "PYI", "FURB", "FBT", "S",
+ "NPY", "FA", "LOG", "SLOT",
+ "PLC", "PLE", "PLR", "PLW",
+ "FAST",
+ # FIXME(sileht): doctring/rst-docstring like
+ # "D"
 ]
 
 ignore = [
-    # NOTE(charly): line-length is up to the formatter
-    "E501",
-    # NOTE(charly): `subprocess` module is possibly insecure
+    # NOTE: Parameter {arg_name} appears in route path, but not in {function_name} signature
+    "FAST003",
+    # NOTE: subclassing of collections.UserDict/List/String instead of dict/list/string
+    "FURB189",
+    # NOTE: we don't care that much about shadowing Python modules
+    "A004", "A005",
+    # NOTE(Greesb): subprocess module is possibly insecure
     "S404",
-    # NOTE(jd): likely a false positive https://github.com/PyCQA/bandit/issues/333
-    "S603",
-    # NOTE(charly): Starting a process with a partial executable path
+    # NOTE(Greesb): Starting a process with a partial executable path
     "S607",
-    # NOTE(charly): Boolean-typed positional argument in function definition.
-    # Interesting, but require some work.
-    "FBT001",
-    # NOTE(charly): Boolean default positional argument in function definition.
-    # Interesting, but require some work.
-    "FBT002",
-    # NOTE(charly): Missing issue link on the line following this TODO
-    "TD003",
-    # NOTE(charly): Magic value used in comparison
+    # NOTE(Greesb): itertools.starmap is less efficient than list comprehensions
+    "FURB140",
+    # NOTE(Greesb): Checks for union annotations that contain redundant numeric types (e.g., int | float).
+    # too confusing to only have `float` as typing when the function can also receive an `int`
+    "PYI041",
+    # NOTE(Greesb): Function name should be lowercase
+    # For a lot of usecases it makes sense to want to not use lowercase
+    "N802",
+    # NOTE(Greesb): variable in function should be lowercase
+    # For a lot of usecases it makes sense to want to not use lowercase variables
+    "N806",
+    # NOTE(Greesb): contextlib.suppress is slower than try-except-pass
+    "SIM105",
+    # NOTE(Greesb): Import should be at the top level of the file
+    # we already have isort for this, also when we do not have an import at top level
+    # it's because of circular imports
+    "PLC0415",
+    # NOTE(Greesb): Method could be a function, classmethod or static method
+    # rule useless since we have a lot of abstraction
+    "PLR6301",
+    # NOTE(Greesb): Magic value used in comparison
+    # Interesting but will require a refactor, and will need to be ignored
+    # in tests
     "PLR2004",
-    # List comprehensions are most efficient in most cases now
+    # NOTE(Greesb): too many public methods
+    "PLR0904",
+    # NOTE(Greesb): Too many return, branches, arguments, local variables, statements, positional arguments.
+    # Interesting but will require a big refactor
+    "PLR0911", "PLR0912", "PLR0913", "PLR0914", "PLR0915", "PLR0917",
+    # NOTE(Greesb): Too many nested blocks
+    # interesting but require some refactor
     "PLR1702",
-    # We use mock.patch.object, which automatically pass the mock as an
-    # argument to the test if no `new` is specified, without needing the mock
-    # itself.
+    # NOTE(Greesb): custom class with __eq__ but no __hash__
+    # We don't need it
+    "PLW1641",
+    # NOTE(Greesb): Checks for the use of global statements to update identifiers.
+    "PLW0603",
+    # NOTE(Greesb): subprocess.run without explicit check argument
+    "PLW1510",
+    # NOTE(Greesb): continue not supported inside finally clause
+    # only useful for python < 3.8
+    "PLE0116",
+    # NOTE(Greesb): we use mock.patch.object, which automatically pass
+    # the mock as an argument to the test if no `new` is specified, without
+    # needing the mock itself.
     "PT019",
-    # We don't want to enforce the number of statements
-    "PLR0914", "PLR0912", "PLR0915",
-    "B904",
-    # Unnecessary parenthesis on raised exceptions, this breaks `isinstance` on exceptions
+    # NOTE(sileht): not compatible with ruff-format
+    "ISC001",
+    # NOTE(sileht): line-length is up to black
+    "E501",
+    # NOTE(sileht): we prefer using exc_info=True
+    "G201", "TRY400",
+    # NOTE(sileht): "Unnecessary parentheses on raised exception", this breaks
+    # isinstance on exception
     "RSE102",
+    # NOTE(sileht): No exception with message set via __init__
+    "TRY003", "TRY301",
+    # NOTE(sileht): This enforce usage of raise ... from ...
+    "B904",
+    # FIXME(sileht): very interesting, ruff BLE is far better that flake8-blind-except
+    "BLE001",
+    # NOTE(Greesb): mypy doesn't support the `type myvar = [...]` syntax yet
+    "UP040",
 ]
 
+[tool.ruff.lint.flake8-pytest-style]
+parametrize-values-type = "list"
+parametrize-values-row-type = "tuple"
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
+quote-annotations = true
+# https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking_runtime-evaluated-base-classes
+runtime-evaluated-base-classes = [
+    "typing.Annotated",
+    "pydantic.BaseModel",
+    "pydantic.TypeAdapter",
+    # typing.TypedDict is generally used by pydantic for validation,
+    # so we need the imports of the key of a typing.TypedDict class
+    # to be available at runtime.
+    "typing.TypedDict",
+]
+# https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking_exempt-modules
+# Modules that should not be moved to a type-checking block.
+exempt-modules = [
+    "typing",
+    "annotated_types",
+]
+# https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking_runtime-evaluated-decorators
+# Exempt classes and functions decorated with any of the enumerated decorators
+# from being moved into type-checking blocks.
+runtime-evaluated-decorators = [
+    "pydantic.dataclasses.dataclass",
+]
+
+
 [tool.ruff.lint.per-file-ignores]
-"mergify_cli/tests/**/*.py" = ["S101", "SLF001"]
+"mergify_cli/tests/**/*.py" = [
+    # Use of assert detected
+    "S101",
+    # hardcoded passwords
+    "S105", "S106",
+    # Standard pseudo-random generators are not suitable for cryptographic purposes
+    "S311",
+    # subprocess call: check for execution of untrusted input
+    "S603",
+    # Magic value used in comparison
+    "PLR2004",
+    # Function is declared async, but doesn't await or use async features.
+    "RUF029",
+]
 
 [tool.ruff.lint.isort]
 force-single-line = true
 force-sort-within-sections = true
 lines-after-imports = 2
 known-first-party = ["mergify_cli"]
+required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

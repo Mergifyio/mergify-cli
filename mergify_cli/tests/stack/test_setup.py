@@ -1,13 +1,16 @@
+from __future__ import annotations
+
 import typing
 
-import pytest
-
 from mergify_cli.stack import setup
-from mergify_cli.tests import utils as test_utils
 
 
 if typing.TYPE_CHECKING:
     import pathlib
+
+    import pytest
+
+    from mergify_cli.tests import utils as test_utils
 
 
 async def test_setup(

@@ -23,13 +23,14 @@ import sys
 import typing
 
 from mergify_cli import console
-from mergify_cli import github_types
 from mergify_cli import utils
 from mergify_cli.stack import changes
 
 
 if typing.TYPE_CHECKING:
     import httpx
+
+    from mergify_cli import github_types
 
 DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
 TMP_STACK_BRANCH = "mergify-cli-tmp"
@@ -65,7 +66,7 @@ def format_pull_description(
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
-async def stack_push(  # noqa: PLR0913
+async def stack_push(
     github_server: str,
     token: str,
     *,
@@ -153,18 +154,18 @@ async def stack_push(  # noqa: PLR0913
         with console.status("Preparing stacked branches..."):
             console.log("Stacked pull request plan:", style="green")
             planned_changes = await changes.get_changes(
-                base_commit_sha,
-                stack_prefix,
-                base_branch,
-                dest_branch,
-                remote_changes,
-                only_update_existing_pulls,
-                next_only,
+                base_commit_sha=base_commit_sha,
+                stack_prefix=stack_prefix,
+                base_branch=base_branch,
+                dest_branch=dest_branch,
+                remote_changes=remote_changes,
+                only_update_existing_pulls=only_update_existing_pulls,
+                next_only=next_only,
             )
 
         changes.display_plan(
             planned_changes,
-            create_as_draft,
+            create_as_draft=create_as_draft,
         )
 
         if dry_run:
@@ -180,13 +181,13 @@ async def stack_push(  # noqa: PLR0913
             if change.action in {"create", "update"}:
                 pull = await create_or_update_stack(
                     client,
-                    user,
-                    repo,
-                    remote,
-                    change,
-                    depends_on,
-                    create_as_draft,
-                    keep_pull_request_title_and_body,
+                    user=user,
+                    repo=repo,
+                    remote=remote,
+                    change=change,
+                    depends_on=depends_on,
+                    create_as_draft=create_as_draft,
+                    keep_pull_request_title_and_body=keep_pull_request_title_and_body,
                 )
                 change.pull = pull
 
@@ -287,8 +288,9 @@ async def delete_stack(
     console.log(change.get_log_from_orphan_change(dry_run=False))
 
 
-async def create_or_update_stack(  # noqa: PLR0913,PLR0917
+async def create_or_update_stack(
     client: httpx.AsyncClient,
+    *,
     user: str,
     repo: str,
     remote: str,
