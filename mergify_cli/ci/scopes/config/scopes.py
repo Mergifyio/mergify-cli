@@ -50,6 +50,8 @@ class SourceManual(pydantic.BaseModel):
 
 
 class Scopes(pydantic.BaseModel):
+    # NOTE(sileht): we must be explicit as mergify-cli parent object use
+    # extra=ignore
     model_config = pydantic.ConfigDict(extra="forbid")
 
     source: SourceFiles | SourceManual | None = pydantic.Field(
