@@ -19,7 +19,8 @@ from mergify_cli.ci.scopes import exceptions
 if typing.TYPE_CHECKING:
     from collections import abc
 
-GITHUB_ACTIONS_OUTPUT_NAME = "scopes"
+GITHUB_ACTIONS_SCOPES_OUTPUT_NAME = "scopes"
+GITHUB_ACTIONS_BASE_OUTPUT_NAME = "base"
 
 
 def match_scopes(
@@ -54,6 +55,7 @@ def match_scopes(
 
 
 def maybe_write_github_outputs(
+    base: str,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
 ) -> None:
@@ -70,8 +72,9 @@ def maybe_write_github_outputs(
         data = {
             key: "true" if key in scopes_hit else "false" for key in sorted(all_scopes)
         }
+        fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={base}\n")
         fh.write(
-            f"{GITHUB_ACTIONS_OUTPUT_NAME}<<{delimiter}\n{json.dumps(data)}\n{delimiter}\n",
+            f"{GITHUB_ACTIONS_SCOPES_OUTPUT_NAME}<<{delimiter}\n{json.dumps(data)}\n{delimiter}\n",
         )
 
 
@@ -158,7 +161,7 @@ def detect(config_path: str) -> DetectedScope:
     else:
         click.echo("No scopes matched.")
 
-    maybe_write_github_outputs(all_scopes, scopes_hit)
+    maybe_write_github_outputs(base.ref, all_scopes, scopes_hit)
     maybe_write_github_step_summary(base.ref, all_scopes, scopes_hit)
     return DetectedScope(base_ref=base.ref, scopes=scopes_hit)
 
