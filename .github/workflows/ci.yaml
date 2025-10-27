@@ -8,17 +8,14 @@ on:
       - devs/**
 
 jobs:
-  test:
+  linters:
     timeout-minutes: 5
-    strategy:
-      matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5.0.0
       - uses: actions/setup-python@v6.0.0
         with:
-          python-version: ">=3.10"
+          python-version: 3.13
 
       - name: Setup
         shell: bash
@@ -28,9 +25,28 @@ jobs:
           poetry sync
 
       - name: Linters
-        if: matrix.os == 'ubuntu-24.04'
         shell: bash
         run: poetry run poe linters
+
+  test:
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+        python: [3.13, 3.14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5.0.0
+      - uses: actions/setup-python@v6.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup
+        shell: bash
+        run: |
+          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
+          pip install -r requirements-poetry.txt
+          poetry sync
 
       - name: Tests
         shell: bash
@@ -52,3 +68,16 @@ jobs:
           # We check the installed wheel produces a working binary, specially on Windows
           # to ensure the utf8 mode is enabled.
           python -c "import test_binary_build; test_binary_build.test_reexec_enables_utf8_and_prints_emoji();"
+
+  ci-gate:
+    if: ${{ !cancelled() }}
+    needs:
+      - test
+      - linters
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all jobs succeeded
+        uses: Mergifyio/gha-mergify-ci@v10
+        with:
+          action: wait-jobs
+          jobs: ${{ toJSON(needs) }}
