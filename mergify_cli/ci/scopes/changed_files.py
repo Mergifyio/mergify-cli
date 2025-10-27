@@ -48,7 +48,7 @@ def ensure_git_history(base: str, head: str) -> None:
     last_commits_count = get_commits_count()
     while not has_merge_base(base, head):
         fetch_depth = min(fetch_depth * 2, sys.maxsize)
-        _run(["git", "fetch", f"--deepen={fetch_depth}", "origin", base, "HEAD"])
+        _run(["git", "fetch", f"--deepen={fetch_depth}", "origin", base, head])
         commits_count = get_commits_count()
         if commits_count == last_commits_count:
             if not has_merge_base(base, head):
@@ -59,8 +59,7 @@ def ensure_git_history(base: str, head: str) -> None:
         last_commits_count = commits_count
 
 
-def git_changed_files(base: str) -> list[str]:
-    head = "HEAD"
+def git_changed_files(base: str, head: str) -> list[str]:
     ensure_git_history(base, head)
     # Committed changes only between base_sha and HEAD.
     # Includes: Added (A), Copied (C), Modified (M), Renamed (R), Type-changed (T), Deleted (D)
