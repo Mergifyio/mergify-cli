@@ -292,10 +292,16 @@ def test_maybe_write_github_outputs(
     all_scopes = ["backend", "frontend", "docs"]
     scopes_hit = {"backend", "docs"}
 
-    cli.maybe_write_github_outputs(all_scopes, scopes_hit)
+    with mock.patch("uuid.uuid4", return_value="fixed-uuid"):
+        cli.maybe_write_github_outputs("main", all_scopes, scopes_hit)
 
     content = output_file.read_text()
-    assert """{"backend": "true", "docs": "true", "frontend": "false"}""" in content
+    expected = """base=main
+scopes<<ghadelimiter_fixed-uuid
+{"backend": "true", "docs": "true", "frontend": "false"}
+ghadelimiter_fixed-uuid
+"""
+    assert content == expected
 
 
 def test_maybe_write_github_step_summary(
@@ -328,7 +334,7 @@ def test_maybe_write_github_outputs_no_env(
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
     # Should not raise any exception
-    cli.maybe_write_github_outputs(["backend"], {"backend"})
+    cli.maybe_write_github_outputs("main", ["backend"], {"backend"})
 
 
 @mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
