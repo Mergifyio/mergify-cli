@@ -10,10 +10,10 @@ import click
 import pydantic
 
 from mergify_cli import utils
-from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import changed_files
 from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
+from mergify_cli.ci.scopes import git_refs_detector
 
 
 if typing.TYPE_CHECKING:
@@ -21,6 +21,7 @@ if typing.TYPE_CHECKING:
 
 GITHUB_ACTIONS_SCOPES_OUTPUT_NAME = "scopes"
 GITHUB_ACTIONS_BASE_OUTPUT_NAME = "base"
+GITHUB_ACTIONS_HEAD_OUTPUT_NAME = "head"
 
 
 def match_scopes(
@@ -56,6 +57,7 @@ def match_scopes(
 
 def maybe_write_github_outputs(
     base: str,
+    head: str,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
 ) -> None:
@@ -73,6 +75,7 @@ def maybe_write_github_outputs(
             key: "true" if key in scopes_hit else "false" for key in sorted(all_scopes)
         }
         fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={base}\n")
+        fh.write(f"{GITHUB_ACTIONS_HEAD_OUTPUT_NAME}={head}\n")
         fh.write(
             f"{GITHUB_ACTIONS_SCOPES_OUTPUT_NAME}<<{delimiter}\n{json.dumps(data)}\n{delimiter}\n",
         )
@@ -80,6 +83,7 @@ def maybe_write_github_outputs(
 
 def maybe_write_github_step_summary(
     base: str,
+    head: str,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
 ) -> None:
@@ -87,7 +91,7 @@ def maybe_write_github_step_summary(
     if not gha:
         return
     # Build a pretty Markdown table with emojis
-    markdown = f"## Mergify CI Scope Matching Results for `{base}...HEAD`\n\n"
+    markdown = f"## Mergify CI Scope Matching Results for `{base}...{head}`\n\n"
     markdown += "| 🎯 Scope | ✅ Match |\n|:--|:--|\n"
     for scope in sorted(all_scopes):
         emoji = "✅" if scope in scopes_hit else "❌"
@@ -103,6 +107,7 @@ class InvalidDetectedScopeError(exceptions.ScopesError):
 
 class DetectedScope(pydantic.BaseModel):
     base_ref: str
+    head_ref: str
     scopes: set[str]
 
     def save_to_file(self, file: str) -> None:
@@ -120,9 +125,10 @@ class DetectedScope(pydantic.BaseModel):
 
 def detect(config_path: str) -> DetectedScope:
     cfg = config.Config.from_yaml(config_path)
-    base = base_detector.detect()
+    git_refs = git_refs_detector.detect()
 
-    click.echo(f"Base: {base.ref}")
+    click.echo(f"Base: {git_refs.base}")
+    click.echo(f"Head: {git_refs.head}")
 
     scopes_hit: set[str]
     per_scope: dict[str, list[str]]
@@ -133,7 +139,7 @@ def detect(config_path: str) -> DetectedScope:
         scopes_hit = set()
         per_scope = {}
     elif isinstance(source, config.SourceFiles):
-        changed = changed_files.git_changed_files(base.ref)
+        changed = changed_files.git_changed_files(git_refs.base, git_refs.head)
         click.echo("Changed files detected:")
         for file in changed:
             click.echo(f"- {file}")
@@ -148,7 +154,7 @@ def detect(config_path: str) -> DetectedScope:
 
     if cfg.scopes.merge_queue_scope is not None:
         all_scopes.add(cfg.scopes.merge_queue_scope)
-        if base.is_merge_queue:
+        if git_refs.is_merge_queue:
             scopes_hit.add(cfg.scopes.merge_queue_scope)
 
     if scopes_hit:
@@ -161,9 +167,18 @@ def detect(config_path: str) -> DetectedScope:
     else:
         click.echo("No scopes matched.")
 
-    maybe_write_github_outputs(base.ref, all_scopes, scopes_hit)
-    maybe_write_github_step_summary(base.ref, all_scopes, scopes_hit)
-    return DetectedScope(base_ref=base.ref, scopes=scopes_hit)
+    maybe_write_github_outputs(git_refs.base, git_refs.head, all_scopes, scopes_hit)
+    maybe_write_github_step_summary(
+        git_refs.base,
+        git_refs.head,
+        all_scopes,
+        scopes_hit,
+    )
+    return DetectedScope(
+        base_ref=git_refs.base,
+        head_ref=git_refs.head,
+        scopes=scopes_hit,
+    )
 
 
 async def send_scopes(

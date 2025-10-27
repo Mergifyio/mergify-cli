@@ -428,7 +428,9 @@ def test_scopes_send(
     # Create config file
     scopes_file = tmp_path / "scopes.json"
     scopes_file.write_text(
-        json.dumps({"base_ref": "main", "scopes": ["backend", "frontend"]}),
+        json.dumps(
+            {"base_ref": "base", "head_ref": "head", "scopes": ["backend", "frontend"]},
+        ),
     )
 
     runner = testing.CliRunner()

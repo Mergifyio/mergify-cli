@@ -8,9 +8,9 @@ import pytest
 import respx
 import yaml
 
-from mergify_cli.ci.scopes import base_detector
 from mergify_cli.ci.scopes import cli
 from mergify_cli.ci.scopes import config
+from mergify_cli.ci.scopes import git_refs_detector
 
 
 if TYPE_CHECKING:
@@ -293,10 +293,11 @@ def test_maybe_write_github_outputs(
     scopes_hit = {"backend", "docs"}
 
     with mock.patch("uuid.uuid4", return_value="fixed-uuid"):
-        cli.maybe_write_github_outputs("main", all_scopes, scopes_hit)
+        cli.maybe_write_github_outputs("base-sha", "head-sha", all_scopes, scopes_hit)
 
     content = output_file.read_text()
-    expected = """base=main
+    expected = """base=base-sha
+head=head-sha
 scopes<<ghadelimiter_fixed-uuid
 {"backend": "true", "docs": "true", "frontend": "false"}
 ghadelimiter_fixed-uuid
@@ -314,7 +315,7 @@ def test_maybe_write_github_step_summary(
     all_scopes = ["backend", "frontend", "docs"]
     scopes_hit = {"backend", "docs"}
 
-    cli.maybe_write_github_step_summary("da26838", all_scopes, scopes_hit)
+    cli.maybe_write_github_step_summary("da26838", "HEAD", all_scopes, scopes_hit)
 
     content = output_file.read_text()
     expected = """## Mergify CI Scope Matching Results for `da26838...HEAD`
@@ -334,10 +335,10 @@ def test_maybe_write_github_outputs_no_env(
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
     # Should not raise any exception
-    cli.maybe_write_github_outputs("main", ["backend"], {"backend"})
+    cli.maybe_write_github_outputs("old", "new", ["backend"], {"backend"})
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_with_matches(
@@ -361,7 +362,11 @@ def test_detect_with_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = base_detector.Base("main", is_merge_queue=True)
+    mock_detect_base.return_value = git_refs_detector.References(
+        "old",
+        "new",
+        is_merge_queue=True,
+    )
     mock_git_changed.return_value = ["api/models.py", "other.txt"]
 
     # Capture output
@@ -370,21 +375,23 @@ def test_detect_with_matches(
 
     # Verify calls
     mock_detect_base.assert_called_once()
-    mock_git_changed.assert_called_once_with("main")
+    mock_git_changed.assert_called_once_with("old", "new")
     mock_github_outputs.assert_called_once()
 
     # Verify output
     calls = [call.args[0] for call in mock_echo.call_args_list]
-    assert "Base: main" in calls
+    assert "Base: old" in calls
+    assert "Head: new" in calls
     assert "Scopes touched:" in calls
     assert "- backend" in calls
     assert "- merge-queue" in calls
 
-    assert result.base_ref == "main"
+    assert result.base_ref == "old"
+    assert result.head_ref == "new"
     assert result.scopes == {"backend", "merge-queue"}
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_no_matches(
@@ -401,7 +408,11 @@ def test_detect_no_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = base_detector.Base("main", is_merge_queue=False)
+    mock_detect_base.return_value = git_refs_detector.References(
+        "old",
+        "new",
+        is_merge_queue=False,
+    )
     mock_git_changed.return_value = ["other.txt"]
 
     # Capture output
@@ -410,13 +421,15 @@ def test_detect_no_matches(
 
     # Verify output
     calls = [call.args[0] for call in mock_echo.call_args_list]
-    assert "Base: main" in calls
+    assert "Base: old" in calls
+    assert "Head: new" in calls
     assert "No scopes matched." in calls
     assert result.scopes == set()
-    assert result.base_ref == "main"
+    assert result.base_ref == "old"
+    assert result.head_ref == "new"
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.base_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 def test_detect_debug_output(
     mock_git_changed: mock.Mock,
@@ -435,7 +448,11 @@ def test_detect_debug_output(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = base_detector.Base("main", is_merge_queue=False)
+    mock_detect_base.return_value = git_refs_detector.References(
+        "main",
+        "HEAD",
+        is_merge_queue=False,
+    )
     mock_git_changed.return_value = ["api/models.py", "api/views.py"]
 
     # Capture output
@@ -489,7 +506,11 @@ async def test_upload_scopes(respx_mock: respx.MockRouter) -> None:
 
 def test_dump(tmp_path: pathlib.Path) -> None:
     config_file = tmp_path / "scopes.json"
-    saved = cli.DetectedScope(base_ref="main", scopes={"backend", "merge-queue"})
+    saved = cli.DetectedScope(
+        base_ref="base",
+        head_ref="head",
+        scopes={"backend", "merge-queue"},
+    )
     saved.save_to_file(str(config_file))
 
     loaded = cli.DetectedScope.load_from_file(str(config_file))
