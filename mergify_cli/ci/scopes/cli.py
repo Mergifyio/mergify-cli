@@ -10,7 +10,6 @@ import click
 import pydantic
 
 from mergify_cli import utils
-from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.scopes import changed_files
 from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
@@ -100,8 +99,6 @@ class InvalidDetectedScopeError(exceptions.ScopesError):
 
 
 class DetectedScope(pydantic.BaseModel):
-    base_ref: str
-    head_ref: str
     scopes: set[str]
 
     def save_to_file(self, file: str) -> None:
@@ -117,12 +114,17 @@ class DetectedScope(pydantic.BaseModel):
                 raise InvalidDetectedScopeError(str(e))
 
 
-def detect(config_path: str) -> DetectedScope:
+def detect(
+    config_path: str,
+    *,
+    base: str,
+    head: str,
+    is_merge_queue: bool,
+) -> DetectedScope:
     cfg = config.Config.from_yaml(config_path)
-    git_refs = git_refs_detector.detect()
 
-    click.echo(f"Base: {git_refs.base}")
-    click.echo(f"Head: {git_refs.head}")
+    click.echo(f"Base: {base}")
+    click.echo(f"Head: {head}")
 
     scopes_hit: set[str]
     per_scope: dict[str, list[str]]
@@ -133,7 +135,7 @@ def detect(config_path: str) -> DetectedScope:
         scopes_hit = set()
         per_scope = {}
     elif isinstance(source, config.SourceFiles):
-        changed = changed_files.git_changed_files(git_refs.base, git_refs.head)
+        changed = changed_files.git_changed_files(base, head)
         click.echo("Changed files detected:")
         for file in changed:
             click.echo(f"- {file}")
@@ -148,7 +150,7 @@ def detect(config_path: str) -> DetectedScope:
 
     if cfg.scopes.merge_queue_scope is not None:
         all_scopes.add(cfg.scopes.merge_queue_scope)
-        if git_refs.is_merge_queue:
+        if is_merge_queue:
             scopes_hit.add(cfg.scopes.merge_queue_scope)
 
     if scopes_hit:
@@ -161,19 +163,14 @@ def detect(config_path: str) -> DetectedScope:
     else:
         click.echo("No scopes matched.")
 
-    git_refs.maybe_write_to_github_outputs()
     maybe_write_github_outputs(all_scopes, scopes_hit)
     maybe_write_github_step_summary(
-        git_refs.base,
-        git_refs.head,
+        base,
+        head,
         all_scopes,
         scopes_hit,
     )
-    return DetectedScope(
-        base_ref=git_refs.base,
-        head_ref=git_refs.head,
-        scopes=scopes_hit,
-    )
+    return DetectedScope(scopes=scopes_hit)
 
 
 async def send_scopes(
