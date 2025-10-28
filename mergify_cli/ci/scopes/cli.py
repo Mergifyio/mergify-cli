@@ -134,7 +134,7 @@ def detect(config_path: str) -> DetectedScope:
     per_scope: dict[str, list[str]]
 
     source = cfg.scopes.source
-    if source is None:
+    if source is None or isinstance(source, config.SourceManual):
         all_scopes = set()
         scopes_hit = set()
         per_scope = {}
@@ -145,9 +145,6 @@ def detect(config_path: str) -> DetectedScope:
             click.echo(f"- {file}")
         all_scopes = set(source.files.keys())
         scopes_hit, per_scope = match_scopes(changed, source.files)
-    elif isinstance(source, config.SourceManual):
-        msg = "source `manual` has been set, scopes must be send with `scopes-send` or API"
-        raise exceptions.ScopesError(msg)
     else:
         msg = "Unsupported source type"  # type:ignore[unreachable]
         raise RuntimeError(msg)

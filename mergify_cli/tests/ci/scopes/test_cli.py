@@ -392,6 +392,41 @@ def test_detect_with_matches(
 
 
 @mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
+@mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
+def test_detect_manual(
+    _: mock.Mock,
+    mock_detect_base: mock.Mock,
+    tmp_path: pathlib.Path,
+) -> None:
+    # Setup config file
+    config_data = {
+        "scopes": {"source": None},
+    }
+    config_file = tmp_path / ".mergify-ci.yml"
+    config_file.write_text(yaml.dump(config_data))
+
+    # Setup mocks
+    mock_detect_base.return_value = git_refs_detector.References(
+        "old",
+        "new",
+        is_merge_queue=False,
+    )
+
+    # Capture output
+    with mock.patch("click.echo") as mock_echo:
+        result = cli.detect(str(config_file))
+
+    # Verify output
+    calls = [call.args[0] for call in mock_echo.call_args_list]
+    assert "Base: old" in calls
+    assert "Head: new" in calls
+    assert "No scopes matched." in calls
+    assert result.scopes == set()
+    assert result.base_ref == "old"
+    assert result.head_ref == "new"
+
+
+@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_no_matches(
