@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from mergify_cli.ci.scopes import git_refs_detector
+from mergify_cli.ci.git_refs import detector
 
 
 if TYPE_CHECKING:
@@ -25,9 +25,34 @@ def test_detect_base_from_repository_default_branch(
     monkeypatch.setenv("GITHUB_EVENT_NAME", event_name)
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
-    result = git_refs_detector.detect()
+    result = detector.detect()
 
-    assert result == git_refs_detector.References("main", "HEAD", is_merge_queue=False)
+    assert result == detector.References("main", "HEAD", is_merge_queue=False)
+
+
+def test_maybe_write_github_outputs(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {"before": "abc123", "after": "xyz987"}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    output_file = tmp_path / "github_output"
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    result = detector.detect()
+
+    result.maybe_write_to_github_outputs()
+
+    content = output_file.read_text()
+    expected = """base=abc123
+head=xyz987
+"""
+    assert content == expected
 
 
 def test_detect_base_from_push_event(
@@ -41,9 +66,9 @@ def test_detect_base_from_push_event(
     monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
-    result = git_refs_detector.detect()
+    result = detector.detect()
 
-    assert result == git_refs_detector.References(
+    assert result == detector.References(
         "abc123",
         "xyz987",
         is_merge_queue=False,
@@ -66,9 +91,9 @@ def test_detect_base_from_pull_request_event_path(
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
-    result = git_refs_detector.detect()
+    result = detector.detect()
 
-    assert result == git_refs_detector.References(
+    assert result == detector.References(
         "abc123",
         "xyz987",
         is_merge_queue=False,
@@ -92,9 +117,9 @@ def test_detect_base_merge_queue_override(
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
-    result = git_refs_detector.detect()
+    result = detector.detect()
 
-    assert result == git_refs_detector.References("xyz789", "HEAD", is_merge_queue=True)
+    assert result == detector.References("xyz789", "HEAD", is_merge_queue=True)
 
 
 def test_detect_base_no_info(
@@ -109,10 +134,10 @@ def test_detect_base_no_info(
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
     with pytest.raises(
-        git_refs_detector.BaseNotFoundError,
+        detector.BaseNotFoundError,
         match="Could not detect base SHA",
     ):
-        git_refs_detector.detect()
+        detector.detect()
 
 
 def test_yaml_docs_from_fenced_blocks_valid() -> None:
@@ -126,9 +151,9 @@ previous_failed_batches: []
 ```
 More text"""
 
-    result = git_refs_detector._yaml_docs_from_fenced_blocks(body)
+    result = detector._yaml_docs_from_fenced_blocks(body)
 
-    assert result == git_refs_detector.MergeQueueMetadata(
+    assert result == detector.MergeQueueMetadata(
         {
             "checking_base_sha": "xyz789",
             "pull_requests": [{"number": 1}],
@@ -140,7 +165,7 @@ More text"""
 def test_yaml_docs_from_fenced_blocks_no_yaml() -> None:
     body = "No yaml here"
 
-    result = git_refs_detector._yaml_docs_from_fenced_blocks(body)
+    result = detector._yaml_docs_from_fenced_blocks(body)
 
     assert result is None
 
@@ -151,6 +176,6 @@ def test_yaml_docs_from_fenced_blocks_empty_yaml() -> None:
 ```
 More text"""
 
-    result = git_refs_detector._yaml_docs_from_fenced_blocks(body)
+    result = detector._yaml_docs_from_fenced_blocks(body)
 
     assert result is None

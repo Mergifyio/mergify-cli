@@ -10,18 +10,16 @@ import click
 import pydantic
 
 from mergify_cli import utils
+from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.scopes import changed_files
 from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
-from mergify_cli.ci.scopes import git_refs_detector
 
 
 if typing.TYPE_CHECKING:
     from collections import abc
 
 GITHUB_ACTIONS_SCOPES_OUTPUT_NAME = "scopes"
-GITHUB_ACTIONS_BASE_OUTPUT_NAME = "base"
-GITHUB_ACTIONS_HEAD_OUTPUT_NAME = "head"
 
 
 def match_scopes(
@@ -56,8 +54,6 @@ def match_scopes(
 
 
 def maybe_write_github_outputs(
-    base: str,
-    head: str,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
 ) -> None:
@@ -74,8 +70,6 @@ def maybe_write_github_outputs(
         data = {
             key: "true" if key in scopes_hit else "false" for key in sorted(all_scopes)
         }
-        fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={base}\n")
-        fh.write(f"{GITHUB_ACTIONS_HEAD_OUTPUT_NAME}={head}\n")
         fh.write(
             f"{GITHUB_ACTIONS_SCOPES_OUTPUT_NAME}<<{delimiter}\n{json.dumps(data)}\n{delimiter}\n",
         )
@@ -164,7 +158,8 @@ def detect(config_path: str) -> DetectedScope:
     else:
         click.echo("No scopes matched.")
 
-    maybe_write_github_outputs(git_refs.base, git_refs.head, all_scopes, scopes_hit)
+    git_refs.maybe_write_to_github_outputs()
+    maybe_write_github_outputs(all_scopes, scopes_hit)
     maybe_write_github_step_summary(
         git_refs.base,
         git_refs.head,

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import dataclasses
+import os
+import pathlib
 import typing
 
 import yaml
 
 from mergify_cli import utils
 from mergify_cli.ci.scopes import exceptions
+
+
+GITHUB_ACTIONS_BASE_OUTPUT_NAME = "base"
+GITHUB_ACTIONS_HEAD_OUTPUT_NAME = "head"
 
 
 class BaseNotFoundError(exceptions.ScopesError):
@@ -106,6 +112,14 @@ class References:
     base: str
     head: str
     is_merge_queue: bool
+
+    def maybe_write_to_github_outputs(self) -> None:
+        gha = os.environ.get("GITHUB_OUTPUT")
+        if not gha:
+            return
+        with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
+            fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={self.base}\n")
+            fh.write(f"{GITHUB_ACTIONS_HEAD_OUTPUT_NAME}={self.head}\n")
 
 
 PULL_REQUEST_EVENTS = {
