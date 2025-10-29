@@ -414,7 +414,7 @@ def test_detect_manual(
     # Capture output
     with pytest.raises(
         exceptions.ScopesError,
-        match="source `manual` has been set, scopes must be send with `scopes-send` or API",
+        match="source `manual` has been set, scopes must be sent with `scopes-send` or API",
     ):
         cli.detect(str(config_file))
 
