@@ -8,9 +8,9 @@ import pytest
 import respx
 import yaml
 
+from mergify_cli.ci.git_refs import detector
 from mergify_cli.ci.scopes import cli
 from mergify_cli.ci.scopes import config
-from mergify_cli.ci.scopes import git_refs_detector
 
 
 if TYPE_CHECKING:
@@ -293,12 +293,10 @@ def test_maybe_write_github_outputs(
     scopes_hit = {"backend", "docs"}
 
     with mock.patch("uuid.uuid4", return_value="fixed-uuid"):
-        cli.maybe_write_github_outputs("base-sha", "head-sha", all_scopes, scopes_hit)
+        cli.maybe_write_github_outputs(all_scopes, scopes_hit)
 
     content = output_file.read_text()
-    expected = """base=base-sha
-head=head-sha
-scopes<<ghadelimiter_fixed-uuid
+    expected = """scopes<<ghadelimiter_fixed-uuid
 {"backend": "true", "docs": "true", "frontend": "false"}
 ghadelimiter_fixed-uuid
 """
@@ -335,10 +333,10 @@ def test_maybe_write_github_outputs_no_env(
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
     # Should not raise any exception
-    cli.maybe_write_github_outputs("old", "new", ["backend"], {"backend"})
+    cli.maybe_write_github_outputs(["backend"], {"backend"})
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
+@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_with_matches(
@@ -362,7 +360,7 @@ def test_detect_with_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = git_refs_detector.References(
+    mock_detect_base.return_value = detector.References(
         "old",
         "new",
         is_merge_queue=True,
@@ -391,7 +389,7 @@ def test_detect_with_matches(
     assert result.scopes == {"backend", "merge-queue"}
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
+@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_manual(
     _: mock.Mock,
@@ -406,7 +404,7 @@ def test_detect_manual(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = git_refs_detector.References(
+    mock_detect_base.return_value = detector.References(
         "old",
         "new",
         is_merge_queue=False,
@@ -426,7 +424,7 @@ def test_detect_manual(
     assert result.head_ref == "new"
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
+@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_no_matches(
@@ -443,7 +441,7 @@ def test_detect_no_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = git_refs_detector.References(
+    mock_detect_base.return_value = detector.References(
         "old",
         "new",
         is_merge_queue=False,
@@ -464,7 +462,7 @@ def test_detect_no_matches(
     assert result.head_ref == "new"
 
 
-@mock.patch("mergify_cli.ci.scopes.cli.git_refs_detector.detect")
+@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 def test_detect_debug_output(
     mock_git_changed: mock.Mock,
@@ -483,7 +481,7 @@ def test_detect_debug_output(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = git_refs_detector.References(
+    mock_detect_base.return_value = detector.References(
         "main",
         "HEAD",
         is_merge_queue=False,
