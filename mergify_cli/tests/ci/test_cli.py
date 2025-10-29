@@ -458,3 +458,28 @@ def test_scopes_send(
     assert result.exit_code == 0, result.output
     payload = json.loads(post_mock.calls[0].request.content)
     assert sorted(payload["scopes"]) == ["backend", "foobar", "frontend"]
+
+
+def test_git_refs(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {"before": "abc123", "after": "xyz987"}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    output_file = tmp_path / "github_output"
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.git_refs, [])
+    assert result.exit_code == 0, result.output
+
+    content = output_file.read_text()
+    expected = """base=abc123
+head=xyz987
+"""
+    assert content == expected

@@ -4,6 +4,7 @@ import click
 
 from mergify_cli import utils
 from mergify_cli.ci import detector
+from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.scopes import cli as scopes_cli
 from mergify_cli.ci.scopes import exceptions as scopes_exc
@@ -191,6 +192,17 @@ async def junit_process(
         tests_target_branch=tests_target_branch,
         files=files,
     )
+
+
+@ci.command(
+    help="""Give the base/head git references of the pull request""",
+    short_help="""Give the base/head git references of the pull request""",
+)
+def git_refs() -> None:
+    ref = git_refs_detector.detect()
+    click.echo(f"Base: {ref.base}")
+    click.echo(f"Head: {ref.head}")
+    ref.maybe_write_to_github_outputs()
 
 
 @ci.command(
