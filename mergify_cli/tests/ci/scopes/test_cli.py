@@ -11,6 +11,7 @@ import yaml
 from mergify_cli.ci.git_refs import detector
 from mergify_cli.ci.scopes import cli
 from mergify_cli.ci.scopes import config
+from mergify_cli.ci.scopes import exceptions
 
 
 if TYPE_CHECKING:
@@ -398,7 +399,7 @@ def test_detect_manual(
 ) -> None:
     # Setup config file
     config_data = {
-        "scopes": {"source": None},
+        "scopes": {"source": {"manual": None}},
     }
     config_file = tmp_path / ".mergify-ci.yml"
     config_file.write_text(yaml.dump(config_data))
@@ -411,17 +412,11 @@ def test_detect_manual(
     )
 
     # Capture output
-    with mock.patch("click.echo") as mock_echo:
-        result = cli.detect(str(config_file))
-
-    # Verify output
-    calls = [call.args[0] for call in mock_echo.call_args_list]
-    assert "Base: old" in calls
-    assert "Head: new" in calls
-    assert "No scopes matched." in calls
-    assert result.scopes == set()
-    assert result.base_ref == "old"
-    assert result.head_ref == "new"
+    with pytest.raises(
+        exceptions.ScopesError,
+        match="source `manual` has been set, scopes must be sent with `scopes-send` or API",
+    ):
+        cli.detect(str(config_file))
 
 
 @mock.patch("mergify_cli.ci.git_refs.detector.detect")
