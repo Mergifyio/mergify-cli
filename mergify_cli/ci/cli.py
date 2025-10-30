@@ -218,6 +218,14 @@ def git_refs() -> None:
     help="Path to YAML config file.",
 )
 @click.option(
+    "--base",
+    help="The base git reference to use to look for changed files",
+)
+@click.option(
+    "--head",
+    help="The head git reference to use to look for changed files",
+)
+@click.option(
     "--write",
     "-w",
     type=click.Path(),
@@ -226,9 +234,17 @@ def git_refs() -> None:
 def scopes(
     config_path: str,
     write: str | None = None,
+    head: str | None = None,
+    base: str | None = None,
 ) -> None:
+    ref = git_refs_detector.detect()
     try:
-        scopes = scopes_cli.detect(config_path=config_path)
+        scopes = scopes_cli.detect(
+            config_path=config_path,
+            base=base or ref.base,
+            head=head or ref.head,
+            is_merge_queue=ref.is_merge_queue,
+        )
     except scopes_exc.ScopesError as e:
         raise click.ClickException(str(e)) from e
 
