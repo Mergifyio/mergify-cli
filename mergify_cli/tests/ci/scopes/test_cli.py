@@ -8,7 +8,6 @@ import pytest
 import respx
 import yaml
 
-from mergify_cli.ci.git_refs import detector
 from mergify_cli.ci.scopes import cli
 from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
@@ -337,13 +336,11 @@ def test_maybe_write_github_outputs_no_env(
     cli.maybe_write_github_outputs(["backend"], {"backend"})
 
 
-@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_with_matches(
     mock_github_outputs: mock.Mock,
     mock_git_changed: mock.Mock,
-    mock_detect_base: mock.Mock,
     tmp_path: pathlib.Path,
 ) -> None:
     # Setup config file
@@ -361,19 +358,18 @@ def test_detect_with_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = detector.References(
-        "old",
-        "new",
-        is_merge_queue=True,
-    )
     mock_git_changed.return_value = ["api/models.py", "other.txt"]
 
     # Capture output
     with mock.patch("click.echo") as mock_echo:
-        result = cli.detect(str(config_file))
+        result = cli.detect(
+            str(config_file),
+            base="old",
+            head="new",
+            is_merge_queue=True,
+        )
 
     # Verify calls
-    mock_detect_base.assert_called_once()
     mock_git_changed.assert_called_once_with("old", "new")
     mock_github_outputs.assert_called_once()
 
@@ -385,16 +381,12 @@ def test_detect_with_matches(
     assert "- backend" in calls
     assert "- merge-queue" in calls
 
-    assert result.base_ref == "old"
-    assert result.head_ref == "new"
     assert result.scopes == {"backend", "merge-queue"}
 
 
-@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_manual(
     _: mock.Mock,
-    mock_detect_base: mock.Mock,
     tmp_path: pathlib.Path,
 ) -> None:
     # Setup config file
@@ -404,28 +396,24 @@ def test_detect_manual(
     config_file = tmp_path / ".mergify-ci.yml"
     config_file.write_text(yaml.dump(config_data))
 
-    # Setup mocks
-    mock_detect_base.return_value = detector.References(
-        "old",
-        "new",
-        is_merge_queue=False,
-    )
-
     # Capture output
     with pytest.raises(
         exceptions.ScopesError,
         match="source `manual` has been set, scopes must be sent with `scopes-send` or API",
     ):
-        cli.detect(str(config_file))
+        cli.detect(
+            str(config_file),
+            base="old",
+            head="new",
+            is_merge_queue=False,
+        )
 
 
-@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_no_matches(
     _: mock.Mock,
     mock_git_changed: mock.Mock,
-    mock_detect_base: mock.Mock,
     tmp_path: pathlib.Path,
 ) -> None:
     # Setup config file
@@ -436,16 +424,16 @@ def test_detect_no_matches(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = detector.References(
-        "old",
-        "new",
-        is_merge_queue=False,
-    )
     mock_git_changed.return_value = ["other.txt"]
 
     # Capture output
     with mock.patch("click.echo") as mock_echo:
-        result = cli.detect(str(config_file))
+        result = cli.detect(
+            str(config_file),
+            base="old",
+            head="new",
+            is_merge_queue=False,
+        )
 
     # Verify output
     calls = [call.args[0] for call in mock_echo.call_args_list]
@@ -453,15 +441,11 @@ def test_detect_no_matches(
     assert "Head: new" in calls
     assert "No scopes matched." in calls
     assert result.scopes == set()
-    assert result.base_ref == "old"
-    assert result.head_ref == "new"
 
 
-@mock.patch("mergify_cli.ci.git_refs.detector.detect")
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 def test_detect_debug_output(
     mock_git_changed: mock.Mock,
-    mock_detect_base: mock.Mock,
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -476,23 +460,21 @@ def test_detect_debug_output(
     config_file.write_text(yaml.dump(config_data))
 
     # Setup mocks
-    mock_detect_base.return_value = detector.References(
-        "main",
-        "HEAD",
-        is_merge_queue=False,
-    )
     mock_git_changed.return_value = ["api/models.py", "api/views.py"]
 
     # Capture output
     with mock.patch("click.echo") as mock_echo:
-        result = cli.detect(str(config_file))
-
+        result = cli.detect(
+            str(config_file),
+            base="old",
+            head="new",
+            is_merge_queue=False,
+        )
     # Verify debug output includes file details
     calls = [call.args[0] for call in mock_echo.call_args_list]
     assert any("    api/models.py" in call for call in calls)
     assert any("    api/views.py" in call for call in calls)
 
-    assert result.base_ref == "main"
     assert result.scopes == {"backend"}
 
 
@@ -535,12 +517,9 @@ async def test_upload_scopes(respx_mock: respx.MockRouter) -> None:
 def test_dump(tmp_path: pathlib.Path) -> None:
     config_file = tmp_path / "scopes.json"
     saved = cli.DetectedScope(
-        base_ref="base",
-        head_ref="head",
         scopes={"backend", "merge-queue"},
     )
     saved.save_to_file(str(config_file))
 
     loaded = cli.DetectedScope.load_from_file(str(config_file))
     assert loaded.scopes == saved.scopes
-    assert loaded.base_ref == saved.base_ref
