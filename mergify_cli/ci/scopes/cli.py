@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import glob
 import json
 import os
 import pathlib
+import re
 import typing
 import uuid
 
@@ -21,6 +23,20 @@ if typing.TYPE_CHECKING:
 GITHUB_ACTIONS_SCOPES_OUTPUT_NAME = "scopes"
 
 
+# NOTE: We convert the pattern to a compiled regex using `glob.translate`,
+# in order to avoid any potential inconsistency that could arise from
+# running `glob.glob` or pathlib.PurePath.full_match` on a different OS.
+def convert_pattern_to_regex(pattern: str) -> re.Pattern[str]:
+    return re.compile(
+        glob.translate(
+            pattern,
+            recursive=True,
+            include_hidden=True,
+            seps=["/", "\\"],
+        ),
+    )
+
+
 def match_scopes(
     files: abc.Iterable[str],
     filters: dict[config.ScopeName, config.FileFilters],
@@ -28,8 +44,6 @@ def match_scopes(
     scopes_hit: set[str] = set()
     per_scope: dict[str, list[str]] = {s: [] for s in filters}
     for f in files:
-        # NOTE(sileht): we use pathlib.full_match to support **, as fnmatch does not
-        p = pathlib.PurePosixPath(f)
         for scope, scope_config in filters.items():
             if not scope_config.include and not scope_config.exclude:
                 continue
@@ -37,13 +51,17 @@ def match_scopes(
             # Check if file matches any include
             if scope_config.include:
                 matches_positive = any(
-                    p.full_match(pat) for pat in scope_config.include
+                    convert_pattern_to_regex(pat).fullmatch(f)
+                    for pat in scope_config.include
                 )
             else:
                 matches_positive = True
 
             # Check if file matches any exclude
-            matches_negative = any(p.full_match(pat) for pat in scope_config.exclude)
+            matches_negative = any(
+                convert_pattern_to_regex(pat).fullmatch(f)
+                for pat in scope_config.exclude
+            )
 
             # File matches the scope if it matches positive patterns and doesn't match negative patterns
             if matches_positive and not matches_negative:
