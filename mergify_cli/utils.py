@@ -21,7 +21,6 @@ import functools
 import json
 import os
 import pathlib
-import sys
 import typing
 from urllib import parse
 
@@ -53,22 +52,13 @@ async def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
 
-    if response.status_code < 500:
-        await response.aread()
-        data = response.json()
-        console.print(f"url: {response.request.url}", style="red")
-        console.print(f"data: {response.request.content.decode()}", style="red")
-        console.print(
-            f"HTTPError {response.status_code}: {data['message']}",
-            style="red",
-        )
-        if "errors" in data:
-            console.print(
-                "\n".join(f"* {e.get('message') or e}" for e in data["errors"]),
-                style="red",
-            )
-        sys.exit(1)
-
+    await response.aread()
+    console.print(f"url: {response.request.url}", style="red")
+    console.print(f"data: {response.request.content.decode()}", style="red")
+    console.print(
+        f"HTTPError {response.status_code}: {response.text}",
+        style="red",
+    )
     response.raise_for_status()
 
 
