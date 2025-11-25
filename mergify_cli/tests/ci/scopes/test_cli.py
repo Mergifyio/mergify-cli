@@ -409,6 +409,44 @@ def test_detect_manual(
         )
 
 
+@mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
+def test_detect_no_base(
+    _: mock.Mock,
+    tmp_path: pathlib.Path,
+) -> None:
+    # Setup config file
+    config_data = {
+        "scopes": {
+            "source": {
+                "files": {
+                    "backend": {"include": ["api/**/*.py"]},
+                    "frontend": {"include": ["web/**/*.js"]},
+                },
+            },
+        },
+    }
+    config_file = tmp_path / ".mergify-ci.yml"
+    config_file.write_text(yaml.dump(config_data))
+
+    # Capture output
+    with mock.patch("click.echo") as mock_echo:
+        result = cli.detect(
+            str(config_file),
+            base=None,
+            head="HEAD",
+            is_merge_queue=False,
+        )
+
+    # Verify output
+    calls = [call.args[0] for call in mock_echo.call_args_list]
+    assert "Head: HEAD" in calls
+    assert "Scopes touched:" in calls
+    assert "- backend" in calls
+    assert "- frontend" in calls
+    assert "No base provided, selecting all scopes" in calls
+    assert result.scopes == {"backend", "frontend"}
+
+
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_no_matches(
