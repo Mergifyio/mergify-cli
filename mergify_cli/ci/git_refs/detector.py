@@ -109,7 +109,7 @@ def _detect_base_from_push_event(ev: dict[str, typing.Any]) -> str | None:
 
 @dataclasses.dataclass
 class References:
-    base: str
+    base: str | None
     head: str
     is_merge_queue: bool
 
@@ -163,9 +163,9 @@ def detect() -> References:
             event_sha = _detect_default_branch_from_event(event)
             if event_sha:
                 return References(event_sha, "HEAD", is_merge_queue=False)
+
         else:
-            msg = "Unhandled GITHUB_EVENT_NAME"
-            raise BaseNotFoundError(msg)
+            return References(None, "HEAD", is_merge_queue=False)
 
     msg = "Could not detect base SHA. Provide GITHUB_EVENT_NAME / GITHUB_EVENT_PATH."
     raise BaseNotFoundError(msg)

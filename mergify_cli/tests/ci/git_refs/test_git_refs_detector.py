@@ -179,3 +179,19 @@ More text"""
     result = detector._yaml_docs_from_fenced_blocks(body)
 
     assert result is None
+
+
+def test_detect_unhandled_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    event_data: dict[str, str] = {}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    result = detector.detect()
+
+    assert result == detector.References(None, "HEAD", is_merge_queue=False)

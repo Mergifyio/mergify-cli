@@ -93,7 +93,7 @@ def maybe_write_github_outputs(
 
 
 def maybe_write_github_step_summary(
-    base: str,
+    base: str | None,
     head: str,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
@@ -102,7 +102,10 @@ def maybe_write_github_step_summary(
     if not gha:
         return
     # Build a pretty Markdown table with emojis
-    markdown = f"## Mergify CI Scope Matching Results for `{base}...{head}`\n\n"
+    markdown = "## Mergify CI Scope Matching Results"
+    if base is not None:
+        markdown += f" for `{base}...{head}`"
+    markdown += "\n\n"
     markdown += "| 🎯 Scope | ✅ Match |\n|:--|:--|\n"
     for scope in sorted(all_scopes):
         emoji = "✅" if scope in scopes_hit else "❌"
@@ -135,13 +138,14 @@ class DetectedScope(pydantic.BaseModel):
 def detect(
     config_path: str,
     *,
-    base: str,
+    base: str | None,
     head: str,
     is_merge_queue: bool,
 ) -> DetectedScope:
     cfg = config.Config.from_yaml(config_path)
 
-    click.echo(f"Base: {base}")
+    if base is not None:
+        click.echo(f"Base: {base}")
     click.echo(f"Head: {head}")
 
     scopes_hit: set[str]
@@ -153,12 +157,17 @@ def detect(
         scopes_hit = set()
         per_scope = {}
     elif isinstance(source, config.SourceFiles):
-        changed = changed_files.git_changed_files(base, head)
-        click.echo("Changed files detected:")
-        for file in changed:
-            click.echo(f"- {file}")
         all_scopes = set(source.files.keys())
-        scopes_hit, per_scope = match_scopes(changed, source.files)
+        if base is None:
+            click.echo("No base provided, selecting all scopes")
+            scopes_hit = set(source.files.keys())
+            per_scope = {}
+        else:
+            changed = changed_files.git_changed_files(base, head)
+            click.echo("Changed files detected:")
+            for file in changed:
+                click.echo(f"- {file}")
+            scopes_hit, per_scope = match_scopes(changed, source.files)
     elif isinstance(source, config.SourceManual):
         msg = "source `manual` has been set, scopes must be sent with `scopes-send` or API"
         raise exceptions.ScopesError(msg)
