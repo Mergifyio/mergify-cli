@@ -22,12 +22,13 @@ jobs:
         with:
           python-version: 3.14
 
-      - name: Install build
-        run: |
-          pip install poetry
-          poetry self add poetry-dynamic-versioning[plugin]
-          poetry sync
-          poetry build
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version-file: requirements-uv.txt
+
+      - name: 
+        run: uv build
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

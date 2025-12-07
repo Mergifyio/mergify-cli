@@ -17,16 +17,14 @@ jobs:
         with:
           python-version: 3.14
 
-      - name: Setup
-        shell: bash
-        run: |
-          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
-          pip install -r requirements-poetry.txt
-          poetry sync
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version-file: requirements-uv.txt
 
       - name: Linters
         shell: bash
-        run: poetry run poe linters
+        run: uv run --frozen poe linters
 
   test:
     timeout-minutes: 5
@@ -41,23 +39,21 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Setup
-        shell: bash
-        run: |
-          # nosemgrep: generic.ci.security.use-frozen-lockfile.use-frozen-lockfile-pip
-          pip install -r requirements-poetry.txt
-          poetry sync
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version-file: requirements-uv.txt
 
       - name: Tests
         shell: bash
         env:
           _MERGIFY_TEST_NEW_FLAKY_DETECTION: "true"
           PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
-        run: poetry run poe test
+        run: uv run --frozen poe test
 
       - name: Build
         shell: bash
-        run: poetry build
+        run: uv build
 
       - name: Tests build
         shell: bash
