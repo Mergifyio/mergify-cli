@@ -1,33 +1,14 @@
 [tool.poe.executor]
-type = "poetry"
+type = "uv"
 
 [tool.poe.tasks.test]
-deps = ["setup"]
 cmd = "pytest -v --pyargs mergify_cli"
-
 
 [tool.poe.tasks.linters]
 help = "Run linters"
-deps = ["setup"]
 default_item_type = "cmd"
 sequence = [
   "ruff check .",
   "ruff format --check .",
   "mypy",
 ]
-
-[tool.poe.tasks.setup]
-env.CI.default = ""
-help = "Sync poetry virtualenv"
-control.expr = "${CI}.strip().lower()"
-
-    [[tool.poe.tasks.setup.switch]]
-    case = ["true", "1", "y", "yes"]
-    env = { POETRY_VIRTUALENVS_OPTIONS_NO_PIP = "true", POETRY_VIRTUALENVS_OPTIONS_NO_SETUPTOOLS = "true" }
-    executor = { type  = "simple" }
-    cmd = "poetry sync --no-cache"
-
-    [[tool.poe.tasks.setup.switch]]
-    case = ["", "false", "0", "n", "no"]
-    executor = { type  = "simple" }
-    cmd = "poetry sync"
