@@ -163,28 +163,3 @@ def test_get_github_pull_request_number_unsupported_ci(
 
     result = detector.get_github_pull_request_number()
     assert result is None
-
-
-@pytest.mark.parametrize(
-    ("env_value", "expected"),
-    [
-        ("true", True),
-        ("1", True),
-        ("yes", True),
-        ("", False),
-        ("false", False),
-    ],
-)
-def test_is_flaky_test_detection_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    env_value: str,
-    expected: bool,
-) -> None:
-    if env_value:
-        monkeypatch.setenv("MERGIFY_TEST_FLAKY_DETECTION", env_value)
-    else:
-        monkeypatch.delenv("MERGIFY_TEST_FLAKY_DETECTION", raising=False)
-
-    result = detector.is_flaky_test_detection_enabled()
-    assert result == expected

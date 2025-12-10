@@ -202,7 +202,3 @@ def get_github_repository() -> str | None:
             return _get_github_repository_from_env("GIT_URL")
         case _:
             return None
-
-
-def is_flaky_test_detection_enabled() -> bool:
-    return utils.get_boolean_env("MERGIFY_TEST_FLAKY_DETECTION")
