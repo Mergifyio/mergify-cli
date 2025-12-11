@@ -15,6 +15,8 @@ ScopeName = typing.Annotated[
 
 
 class FileFilters(pydantic.BaseModel):
+    # NOTE(sileht): we must be explicit as mergify-cli parent object use
+    # extra=ignore
     model_config = pydantic.ConfigDict(extra="forbid")
 
     include: tuple[str, ...] = pydantic.Field(
@@ -36,6 +38,8 @@ class FileFilters(pydantic.BaseModel):
 
 
 class SourceFiles(pydantic.BaseModel):
+    # NOTE(sileht): we must be explicit as mergify-cli parent object use
+    # extra=ignore
     model_config = pydantic.ConfigDict(extra="forbid")
 
     files: dict[ScopeName, FileFilters] = pydantic.Field(
@@ -48,6 +52,8 @@ class SourceFiles(pydantic.BaseModel):
 
 
 class SourceManual(pydantic.BaseModel):
+    # NOTE(sileht): we must be explicit as mergify-cli parent object use
+    # extra=ignore
     model_config = pydantic.ConfigDict(extra="forbid")
 
     manual: None = pydantic.Field(
