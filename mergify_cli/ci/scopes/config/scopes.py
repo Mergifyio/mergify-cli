@@ -15,6 +15,8 @@ ScopeName = typing.Annotated[
 
 
 class FileFilters(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     include: tuple[str, ...] = pydantic.Field(
         default_factory=lambda: ("**/*",),
         description=(
@@ -34,6 +36,8 @@ class FileFilters(pydantic.BaseModel):
 
 
 class SourceFiles(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     files: dict[ScopeName, FileFilters] = pydantic.Field(
         description=(
             "Mapping of scope name to its file filters. "
@@ -44,6 +48,8 @@ class SourceFiles(pydantic.BaseModel):
 
 
 class SourceManual(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     manual: None = pydantic.Field(
         description="Scopes are manually sent via API or `mergify scopes-send`",
     )

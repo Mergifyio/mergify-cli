@@ -106,7 +106,7 @@ def test_from_yaml_invalid_config(tmp_path: pathlib.Path) -> None:
     )
 
     # Bad name and missing dict
-    with pytest.raises(config.ConfigInvalidError, match="3 validation errors"):
+    with pytest.raises(config.ConfigInvalidError, match="4 validation errors"):
         config.Config.from_yaml(str(config_file))
 
 
@@ -479,6 +479,22 @@ def test_detect_no_matches(
     assert "Head: new" in calls
     assert "No scopes matched." in calls
     assert result.scopes == set()
+
+
+def test_match_scopes_invalid() -> None:
+    with pytest.raises(config.ConfigInvalidError, match="4 validation errors"):
+        config.Config.from_dict(
+            {
+                "scopes": {
+                    "source": {
+                        "files": {
+                            "backend": {"includes": ("api/**/*.py",)},
+                            "frontend": {"includes": ("ui/**/*.js",)},
+                        },
+                    },
+                },
+            },
+        )
 
 
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
