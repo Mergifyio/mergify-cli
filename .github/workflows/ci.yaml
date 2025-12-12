@@ -24,7 +24,7 @@ jobs:
 
       - name: Linters
         shell: bash
-        run: uv run --frozen poe linters
+        run: uv run --locked poe linters
 
   test:
     timeout-minutes: 5
@@ -49,7 +49,7 @@ jobs:
         env:
           _MERGIFY_TEST_NEW_FLAKY_DETECTION: "true"
           PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
-        run: uv run --frozen poe test
+        run: uv run --locked poe test
 
       - name: Build
         shell: bash
