@@ -27,7 +27,10 @@ def test_detect_base_from_repository_default_branch(
 
     result = detector.detect()
 
-    assert result == detector.References("main", "HEAD", is_merge_queue=False)
+    expected_base_source: detector.ReferencesSource = (
+        "github_event_push" if event_name == "push" else "github_event_pull_request"
+    )
+    assert result == detector.References("main", "HEAD", expected_base_source)
 
 
 def test_maybe_write_github_outputs(
@@ -71,7 +74,7 @@ def test_detect_base_from_push_event(
     assert result == detector.References(
         "abc123",
         "xyz987",
-        is_merge_queue=False,
+        "github_event_push",
     )
 
 
@@ -96,7 +99,7 @@ def test_detect_base_from_pull_request_event_path(
     assert result == detector.References(
         "abc123",
         "xyz987",
-        is_merge_queue=False,
+        "github_event_pull_request",
     )
 
 
@@ -119,7 +122,7 @@ def test_detect_base_merge_queue_override(
 
     result = detector.detect()
 
-    assert result == detector.References("xyz789", "HEAD", is_merge_queue=True)
+    assert result == detector.References("xyz789", "HEAD", "merge_queue")
 
 
 def test_detect_base_no_info(
@@ -194,4 +197,4 @@ def test_detect_unhandled_event(
 
     result = detector.detect()
 
-    assert result == detector.References(None, "HEAD", is_merge_queue=False)
+    assert result == detector.References(None, "HEAD", "github_event_other")
