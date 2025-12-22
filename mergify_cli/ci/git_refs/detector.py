@@ -107,11 +107,21 @@ def _detect_base_from_push_event(ev: dict[str, typing.Any]) -> str | None:
     return None
 
 
+ReferencesSource = typing.Literal[
+    "manual",
+    "merge_queue",
+    "fallback_last_commit",
+    "github_event_other",
+    "github_event_pull_request",
+    "github_event_push",
+]
+
+
 @dataclasses.dataclass
 class References:
     base: str | None
     head: str
-    is_merge_queue: bool
+    source: ReferencesSource
 
     def maybe_write_to_github_outputs(self) -> None:
         gha = os.environ.get("GITHUB_OUTPUT")
@@ -135,37 +145,41 @@ def detect() -> References:
         event_name, event = utils.get_github_event()
     except utils.GitHubEventNotFoundError:
         # fallback to last commit
-        return References("HEAD^", "HEAD", is_merge_queue=False)
+        return References("HEAD^", "HEAD", "fallback_last_commit")
     else:
         if event_name in PULL_REQUEST_EVENTS:
             head = _detect_head_from_event(event) or "HEAD"
             # 0) merge-queue PR override
             mq_sha = _detect_base_from_merge_queue_payload(event)
             if mq_sha:
-                return References(mq_sha, head, is_merge_queue=True)
+                return References(mq_sha, head, "merge_queue")
 
             # 1) standard event payload
             event_sha = _detect_base_from_event(event)
             if event_sha:
-                return References(event_sha, head, is_merge_queue=False)
+                return References(event_sha, head, "github_event_pull_request")
 
             # 2) standard event payload
             event_sha = _detect_default_branch_from_event(event)
             if event_sha:
-                return References(event_sha, head, is_merge_queue=False)
+                return References(
+                    event_sha,
+                    head,
+                    "github_event_pull_request",
+                )
 
         elif event_name == "push":
             head_sha = _detect_head_from_push_event(event) or "HEAD"
             base_sha = _detect_base_from_push_event(event)
             if base_sha:
-                return References(base_sha, head_sha, is_merge_queue=False)
+                return References(base_sha, head_sha, "github_event_push")
 
             event_sha = _detect_default_branch_from_event(event)
             if event_sha:
-                return References(event_sha, "HEAD", is_merge_queue=False)
+                return References(event_sha, "HEAD", "github_event_push")
 
         else:
-            return References(None, "HEAD", is_merge_queue=False)
+            return References(None, "HEAD", "github_event_other")
 
     msg = "Could not detect base SHA. Provide GITHUB_EVENT_NAME / GITHUB_EVENT_PATH."
     raise BaseNotFoundError(msg)

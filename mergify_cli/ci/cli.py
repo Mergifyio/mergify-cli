@@ -237,13 +237,19 @@ def scopes(
     head: str | None = None,
     base: str | None = None,
 ) -> None:
-    ref = git_refs_detector.detect()
+    if base or head:
+        ref = git_refs_detector.References(
+            base=base,
+            head=head or "HEAD",
+            source="manual",
+        )
+    else:
+        ref = git_refs_detector.detect()
+
     try:
         scopes = scopes_cli.detect(
             config_path=config_path,
-            base=base or ref.base,
-            head=head or ref.head,
-            is_merge_queue=ref.is_merge_queue,
+            references=ref,
         )
     except scopes_exc.ScopesError as e:
         raise click.ClickException(str(e)) from e

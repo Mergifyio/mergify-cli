@@ -20,6 +20,8 @@ from mergify_cli.ci.scopes import exceptions
 if typing.TYPE_CHECKING:
     from collections import abc
 
+    from mergify_cli.ci.git_refs import detector as git_refs_detector
+
 GITHUB_ACTIONS_SCOPES_OUTPUT_NAME = "scopes"
 
 
@@ -93,8 +95,7 @@ def maybe_write_github_outputs(
 
 
 def maybe_write_github_step_summary(
-    base: str | None,
-    head: str,
+    references: git_refs_detector.References,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
 ) -> None:
@@ -103,8 +104,8 @@ def maybe_write_github_step_summary(
         return
     # Build a pretty Markdown table with emojis
     markdown = "## Mergify CI Scope Matching Results"
-    if base is not None:
-        markdown += f" for `{base}...{head}`"
+    if references.base is not None:
+        markdown += f" for `{references.base[:7]}...{references.head[:7]}` (source: `{references.source}`)"
     markdown += "\n\n"
     markdown += "| 🎯 Scope | ✅ Match |\n|:--|:--|\n"
     for scope in sorted(all_scopes):
@@ -138,15 +139,14 @@ class DetectedScope(pydantic.BaseModel):
 def detect(
     config_path: str,
     *,
-    base: str | None,
-    head: str,
-    is_merge_queue: bool,
+    references: git_refs_detector.References,
 ) -> DetectedScope:
     cfg = config.Config.from_yaml(config_path)
 
-    if base is not None:
-        click.echo(f"Base: {base}")
-    click.echo(f"Head: {head}")
+    if references.base is not None:
+        click.echo(f"Base: {references.base}")
+    click.echo(f"Head: {references.head}")
+    click.echo(f"Source: {references.source}")
 
     scopes_hit: set[str]
     per_scope: dict[str, list[str]]
@@ -158,12 +158,12 @@ def detect(
         per_scope = {}
     elif isinstance(source, config.SourceFiles):
         all_scopes = set(source.files.keys())
-        if base is None:
+        if references.base is None:
             click.echo("No base provided, selecting all scopes")
             scopes_hit = set(source.files.keys())
             per_scope = {}
         else:
-            changed = changed_files.git_changed_files(base, head)
+            changed = changed_files.git_changed_files(references.base, references.head)
             click.echo("Changed files detected:")
             for file in changed:
                 click.echo(f"- {file}")
@@ -177,7 +177,7 @@ def detect(
 
     if cfg.scopes.merge_queue_scope is not None:
         all_scopes.add(cfg.scopes.merge_queue_scope)
-        if is_merge_queue:
+        if references.source == "merge_queue":
             scopes_hit.add(cfg.scopes.merge_queue_scope)
 
     if scopes_hit:
@@ -192,8 +192,7 @@ def detect(
 
     maybe_write_github_outputs(all_scopes, scopes_hit)
     maybe_write_github_step_summary(
-        base,
-        head,
+        references,
         all_scopes,
         scopes_hit,
     )

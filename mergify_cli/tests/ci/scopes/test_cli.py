@@ -8,6 +8,7 @@ import pytest
 import respx
 import yaml
 
+from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.scopes import cli
 from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
@@ -313,10 +314,18 @@ def test_maybe_write_github_step_summary(
     all_scopes = ["backend", "frontend", "docs"]
     scopes_hit = {"backend", "docs"}
 
-    cli.maybe_write_github_step_summary("da26838", "HEAD", all_scopes, scopes_hit)
+    cli.maybe_write_github_step_summary(
+        git_refs_detector.References(
+            "da26838azertyuiopqsdfghjkxcvbn",
+            "HEAD",
+            "github_event_pull_request",
+        ),
+        all_scopes,
+        scopes_hit,
+    )
 
     content = output_file.read_text()
-    expected = """## Mergify CI Scope Matching Results for `da26838...HEAD`
+    expected = """## Mergify CI Scope Matching Results for `da26838...HEAD` (source: `github_event_pull_request`)
 
 | 🎯 Scope | ✅ Match |
 |:--|:--|
@@ -364,9 +373,7 @@ def test_detect_with_matches(
     with mock.patch("click.echo") as mock_echo:
         result = cli.detect(
             str(config_file),
-            base="old",
-            head="new",
-            is_merge_queue=True,
+            references=git_refs_detector.References("old", "new", "merge_queue"),
         )
 
     # Verify calls
@@ -403,9 +410,11 @@ def test_detect_manual(
     ):
         cli.detect(
             str(config_file),
-            base="old",
-            head="new",
-            is_merge_queue=False,
+            references=git_refs_detector.References(
+                "old",
+                "new",
+                "github_event_pull_request",
+            ),
         )
 
 
@@ -432,14 +441,17 @@ def test_detect_no_base(
     with mock.patch("click.echo") as mock_echo:
         result = cli.detect(
             str(config_file),
-            base=None,
-            head="HEAD",
-            is_merge_queue=False,
+            references=git_refs_detector.References(
+                None,
+                "HEAD",
+                "fallback_last_commit",
+            ),
         )
 
     # Verify output
     calls = [call.args[0] for call in mock_echo.call_args_list]
     assert "Head: HEAD" in calls
+    assert "Source: fallback_last_commit" in calls
     assert "Scopes touched:" in calls
     assert "- backend" in calls
     assert "- frontend" in calls
@@ -468,9 +480,11 @@ def test_detect_no_matches(
     with mock.patch("click.echo") as mock_echo:
         result = cli.detect(
             str(config_file),
-            base="old",
-            head="new",
-            is_merge_queue=False,
+            references=git_refs_detector.References(
+                "old",
+                "new",
+                "github_event_pull_request",
+            ),
         )
 
     # Verify output
@@ -520,9 +534,11 @@ def test_detect_debug_output(
     with mock.patch("click.echo") as mock_echo:
         result = cli.detect(
             str(config_file),
-            base="old",
-            head="new",
-            is_merge_queue=False,
+            references=git_refs_detector.References(
+                "old",
+                "new",
+                "github_event_pull_request",
+            ),
         )
     # Verify debug output includes file details
     calls = [call.args[0] for call in mock_echo.call_args_list]
