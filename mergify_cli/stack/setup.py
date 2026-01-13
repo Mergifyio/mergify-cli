@@ -26,12 +26,11 @@ from mergify_cli import console
 from mergify_cli import utils
 
 
-async def stack_setup() -> None:
-    hooks_dir = pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
-    installed_hook_file = hooks_dir / "commit-msg"
+async def _install_hook(hooks_dir: pathlib.Path, hook_name: str) -> None:
+    installed_hook_file = hooks_dir / hook_name
 
     new_hook_file = str(
-        importlib.resources.files(__package__).joinpath("hooks/commit-msg"),
+        importlib.resources.files(__package__).joinpath(f"hooks/{hook_name}"),
     )
 
     if installed_hook_file.exists():
@@ -40,7 +39,7 @@ async def stack_setup() -> None:
         async with aiofiles.open(new_hook_file) as f:
             data_new = await f.read()
         if data_installed == data_new:
-            console.log("Git commit-msg hook is up to date")
+            console.log(f"Git {hook_name} hook is up to date")
         else:
             console.print(
                 f"error: {installed_hook_file} differ from mergify_cli hook",
@@ -49,6 +48,12 @@ async def stack_setup() -> None:
             sys.exit(1)
 
     else:
-        console.log("Installation of git commit-msg hook")
+        console.log(f"Installation of git {hook_name} hook")
         shutil.copy(new_hook_file, installed_hook_file)
         installed_hook_file.chmod(0o755)
+
+
+async def stack_setup() -> None:
+    hooks_dir = pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
+    await _install_hook(hooks_dir, "commit-msg")
+    await _install_hook(hooks_dir, "prepare-commit-msg")
