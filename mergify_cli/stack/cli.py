@@ -95,19 +95,19 @@ stack = click_default_group.DefaultGroup(
 )
 
 
-@stack.command(help="Configure the required git commit-msg hooks")  # type:ignore[misc]
+@stack.command(help="Configure the required git commit-msg hooks")  # type: ignore[untyped-decorator]
 @utils.run_with_asyncio
 async def setup() -> None:
     await stack_setup_mod.stack_setup()
 
 
-@stack.command(help="Edit the stack history")  # type:ignore[misc]
+@stack.command(help="Edit the stack history")  # type: ignore[untyped-decorator]
 @utils.run_with_asyncio
 async def edit() -> None:
     await stack_edit_mod.stack_edit()
 
 
-@stack.command(help="Push/sync the pull requests stack")  # type:ignore[misc]
+@stack.command(help="Push/sync the pull requests stack")  # type: ignore[untyped-decorator]
 @click.pass_context
 @click.option(
     "--setup",
@@ -206,7 +206,7 @@ async def push(
     )
 
 
-@stack.command(help="Checkout the pull requests stack")  # type: ignore[misc]
+@stack.command(help="Checkout the pull requests stack")  # type: ignore[untyped-decorator]
 @click.pass_context
 @click.option(
     "--author",
@@ -266,7 +266,7 @@ async def checkout(
     )
 
 
-@stack.command(help="Autorebase a pull requests stack")  # type:ignore[misc]
+@stack.command(help="Autorebase a pull requests stack")  # type: ignore[untyped-decorator]
 @click.pass_context
 @utils.run_with_asyncio
 async def github_action_auto_rebase(ctx: click.Context) -> None:
