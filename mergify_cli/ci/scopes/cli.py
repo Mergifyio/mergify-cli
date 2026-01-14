@@ -124,16 +124,16 @@ class DetectedScope(pydantic.BaseModel):
     scopes: set[str]
 
     def save_to_file(self, file: str) -> None:
-        with pathlib.Path(file).open("w", encoding="utf-8") as f:
-            f.write(self.model_dump_json())
+        pathlib.Path(file).write_text(self.model_dump_json(), encoding="utf-8")
 
     @classmethod
     def load_from_file(cls, filename: str) -> DetectedScope:
-        with pathlib.Path(filename).open("r", encoding="utf-8") as f:
-            try:
-                return cls.model_validate_json(f.read())
-            except pydantic.ValidationError as e:
-                raise InvalidDetectedScopeError(str(e))
+        try:
+            return cls.model_validate_json(
+                pathlib.Path(filename).read_text(encoding="utf-8"),
+            )
+        except pydantic.ValidationError as e:
+            raise InvalidDetectedScopeError(str(e)) from e
 
 
 def detect(
