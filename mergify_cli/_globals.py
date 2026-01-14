@@ -15,5 +15,11 @@
 
 from __future__ import annotations
 
-from mergify_cli._globals import VERSION as VERSION
-from mergify_cli._globals import console as console
+import importlib.metadata
+
+import rich.console
+
+
+console = rich.console.Console(log_path=False, log_time=False)
+
+VERSION = importlib.metadata.version("mergify-cli")
