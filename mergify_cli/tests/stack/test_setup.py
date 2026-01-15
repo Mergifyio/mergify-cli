@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import typing
-
-import pytest
 
 from mergify_cli.stack import setup
 from mergify_cli.stack.changes import CHANGEID_RE
@@ -13,6 +10,8 @@ from mergify_cli.stack.changes import CHANGEID_RE
 
 if typing.TYPE_CHECKING:
     import pathlib
+
+    import pytest
 
     from mergify_cli.tests import utils as test_utils
 
@@ -31,42 +30,6 @@ async def test_setup(
 
     prepare_commit_msg_hook = hooks_dir / "prepare-commit-msg"
     assert prepare_commit_msg_hook.exists()
-
-
-@pytest.fixture
-def git_repo_with_hooks(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Create a real git repo with the hooks installed."""
-    import importlib.resources
-
-    subprocess.run(
-        ["git", "init", "--initial-branch=main"],
-        check=True,
-        cwd=tmp_path,
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        check=True,
-        cwd=tmp_path,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        check=True,
-        cwd=tmp_path,
-    )
-
-    # Install hooks
-    hooks_dir = tmp_path / ".git" / "hooks"
-    for hook_name in ("commit-msg", "prepare-commit-msg"):
-        hook_source = str(
-            importlib.resources.files("mergify_cli.stack").joinpath(
-                f"hooks/{hook_name}",
-            ),
-        )
-        hook_dest = hooks_dir / hook_name
-        shutil.copy(hook_source, hook_dest)
-        hook_dest.chmod(0o755)
-
-    return tmp_path
 
 
 def get_commit_message(repo_path: pathlib.Path) -> str:

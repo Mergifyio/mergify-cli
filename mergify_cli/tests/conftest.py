@@ -14,6 +14,7 @@
 # under the License.
 from __future__ import annotations
 
+import shutil
 import subprocess
 from typing import TYPE_CHECKING
 from unittest import mock
@@ -96,3 +97,39 @@ def git_mock(
 @pytest.fixture
 def mock_subprocess() -> abc.Generator[test_utils.SubprocessMocks]:
     yield from test_utils.subprocess_mocked()
+
+
+@pytest.fixture
+def git_repo_with_hooks(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Create a real git repo with the stack hooks installed."""
+    import importlib.resources
+
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        check=True,
+        cwd=tmp_path,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        check=True,
+        cwd=tmp_path,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        check=True,
+        cwd=tmp_path,
+    )
+
+    # Install hooks
+    hooks_dir = tmp_path / ".git" / "hooks"
+    for hook_name in ("commit-msg", "prepare-commit-msg"):
+        hook_source = str(
+            importlib.resources.files("mergify_cli.stack").joinpath(
+                f"hooks/{hook_name}",
+            ),
+        )
+        hook_dest = hooks_dir / hook_name
+        shutil.copy(hook_source, hook_dest)
+        hook_dest.chmod(0o755)
+
+    return tmp_path

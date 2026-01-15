@@ -30,8 +30,10 @@ if typing.TYPE_CHECKING:
 
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
+CLAUDE_SESSION_ID_RE = re.compile(r"Claude-Session-Id:\s*(\S+)")
 
 ChangeId = typing.NewType("ChangeId", str)
+ClaudeSessionId = typing.NewType("ClaudeSessionId", str)
 RemoteChanges = typing.NewType(
     "RemoteChanges",
     dict[ChangeId, github_types.PullRequest],

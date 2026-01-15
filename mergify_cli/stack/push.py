@@ -59,6 +59,7 @@ def format_pull_description(
         depends_on_header = f"\n\nDepends-On: #{depends_on['number']}"
 
     message = changes.CHANGEID_RE.sub("", message).rstrip("\n")
+    message = changes.CLAUDE_SESSION_ID_RE.sub("", message).rstrip("\n")
     message = DEPENDS_ON_RE.sub("", message).rstrip("\n")
 
     return message + depends_on_header
