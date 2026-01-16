@@ -214,7 +214,7 @@ def git_refs() -> None:
     "config_path",
     required=True,
     type=click.Path(exists=True),
-    default=".mergify.yml",
+    default=detector.get_mergify_config_path,
     help="Path to YAML config file.",
 )
 @click.option(
