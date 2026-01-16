@@ -212,9 +212,8 @@ def git_refs() -> None:
 @click.option(
     "--config",
     "config_path",
-    required=True,
-    type=click.Path(exists=True),
-    default=".mergify.yml",
+    type=click.Path(),
+    default=detector.get_mergify_config_path,
     help="Path to YAML config file.",
 )
 @click.option(
@@ -232,11 +231,16 @@ def git_refs() -> None:
     help="Write the detected scopes to a file (json).",
 )
 def scopes(
-    config_path: str,
+    config_path: str | None,
     write: str | None = None,
     head: str | None = None,
     base: str | None = None,
 ) -> None:
+    if config_path is None:
+        locations = ", ".join(detector.MERGIFY_CONFIG_PATHS)
+        msg = f"Mergify configuration file not found. Looked in: {locations}"
+        raise click.ClickException(msg)
+
     if base or head:
         ref = git_refs_detector.References(
             base=base,

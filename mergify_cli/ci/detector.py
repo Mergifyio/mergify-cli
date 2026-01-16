@@ -202,3 +202,26 @@ def get_github_repository() -> str | None:
             return _get_github_repository_from_env("GIT_URL")
         case _:
             return None
+
+
+MERGIFY_CONFIG_PATHS = (
+    ".mergify.yml",
+    ".mergify/config.yml",
+    ".github/mergify.yml",
+)
+
+
+def get_mergify_config_path() -> str | None:
+    """Detect the Mergify configuration file path.
+
+    Looks for the config file in these locations in order:
+    - .mergify.yml
+    - .mergify/config.yml
+    - .github/mergify.yml
+
+    Returns None if no config file is found.
+    """
+    for config_path in MERGIFY_CONFIG_PATHS:
+        if pathlib.Path(config_path).is_file():
+            return config_path
+    return None
