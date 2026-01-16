@@ -163,3 +163,65 @@ def test_get_github_pull_request_number_unsupported_ci(
 
     result = detector.get_github_pull_request_number()
     assert result is None
+
+
+def test_get_mergify_config_path_default_file(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".mergify.yml").touch()
+
+    result = detector.get_mergify_config_path()
+    assert result == ".mergify.yml"
+
+
+def test_get_mergify_config_path_mergify_dir(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".mergify").mkdir()
+    (tmp_path / ".mergify" / "config.yml").touch()
+
+    result = detector.get_mergify_config_path()
+    assert result == ".mergify/config.yml"
+
+
+def test_get_mergify_config_path_github_dir(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "mergify.yml").touch()
+
+    result = detector.get_mergify_config_path()
+    assert result == ".github/mergify.yml"
+
+
+def test_get_mergify_config_path_priority(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that .mergify.yml takes priority over other locations."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".mergify.yml").touch()
+    (tmp_path / ".mergify").mkdir()
+    (tmp_path / ".mergify" / "config.yml").touch()
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "mergify.yml").touch()
+
+    result = detector.get_mergify_config_path()
+    assert result == ".mergify.yml"
+
+
+def test_get_mergify_config_path_none_when_missing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that None is returned when no config file exists."""
+    monkeypatch.chdir(tmp_path)
+
+    result = detector.get_mergify_config_path()
+    assert result is None
