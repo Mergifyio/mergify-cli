@@ -15,6 +15,7 @@ from mergify_cli.stack import (
     github_action_auto_rebase as stack_github_action_auto_rebase_mod,
 )
 from mergify_cli.stack import push as stack_push_mod
+from mergify_cli.stack import session as stack_session_mod
 from mergify_cli.stack import setup as stack_setup_mod
 
 
@@ -274,3 +275,30 @@ async def github_action_auto_rebase(ctx: click.Context) -> None:
         ctx.obj["github_server"],
         ctx.obj["token"],
     )
+
+
+@stack.command(help="Get Claude session ID from a commit")  # type: ignore[untyped-decorator]
+@click.option(
+    "--commit",
+    "-c",
+    default="HEAD",
+    help="Commit to extract session ID from (default: HEAD)",
+)
+@click.option(
+    "--launch",
+    "-l",
+    is_flag=True,
+    help="Launch Claude with the extracted session ID",
+)
+@utils.run_with_asyncio
+async def session(*, commit: str, launch: bool) -> None:
+    """Extract and optionally launch Claude session from commit."""
+    session_id = await stack_session_mod.get_session_id_from_commit(commit)
+    if session_id is None:
+        console.print(f"No Claude-Session-Id found in commit {commit}", style="yellow")
+        return
+
+    console.print(f"Claude-Session-Id: {session_id}")
+
+    if launch:
+        stack_session_mod.launch_claude_session(session_id)

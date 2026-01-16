@@ -62,3 +62,18 @@ if ! mv "${dest}" "$1" ; then
   echo "cannot mv ${dest} to $1"
   exit 1
 fi
+
+# Add Claude-Session-Id if CLAUDE_SESSION_ID env var is set and not already present
+if test -n "$CLAUDE_SESSION_ID"; then
+  if ! grep -q "^Claude-Session-Id:" "$1"; then
+    if ! git -c trailer.ifexists=doNothing interpret-trailers \
+          --trailer "Claude-Session-Id: ${CLAUDE_SESSION_ID}" < "$1" > "${dest}" ; then
+      echo "cannot insert Claude-Session-Id line in $1"
+      exit 1
+    fi
+    if ! mv "${dest}" "$1" ; then
+      echo "cannot mv ${dest} to $1"
+      exit 1
+    fi
+  fi
+fi
