@@ -47,6 +47,16 @@ def get_job_name() -> str | None:
             return None
 
 
+def get_github_actions_head_ref_name() -> str | None:
+    """Get the branch name for GitHub Actions.
+
+    `GITHUB_HEAD_REF` contains the actual branch name for PRs, while
+    `GITHUB_REF_NAME` contains `<pr_number>/merge`. However, `GITHUB_HEAD_REF`
+    is only set for PR events, so we fall back to `GITHUB_REF_NAME`.
+    """
+    return os.getenv("GITHUB_HEAD_REF") or os.getenv("GITHUB_REF_NAME")
+
+
 def get_jenkins_head_ref_name() -> str | None:
     branch = os.getenv("GIT_BRANCH")
     if branch:
@@ -63,7 +73,7 @@ def get_jenkins_head_ref_name() -> str | None:
 def get_head_ref_name() -> str | None:
     match get_ci_provider():
         case "github_actions":
-            return os.getenv("GITHUB_REF_NAME")
+            return get_github_actions_head_ref_name()
         case "circleci":
             return os.getenv("CIRCLE_BRANCH")
         case "jenkins":

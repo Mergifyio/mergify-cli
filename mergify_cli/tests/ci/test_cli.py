@@ -151,6 +151,35 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
             "refs/tags/v1.0.0",
             id="GITHUB_REF with refs/tags/ prefix (should not be stripped)",
         ),
+        pytest.param(
+            {
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_ACTIONS": "true",
+                "MERGIFY_API_URL": "https://api.mergify.com",
+                "MERGIFY_TOKEN": "abc",
+                "GITHUB_REPOSITORY": "user/repo",
+                "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+                "GITHUB_WORKFLOW": "JOB",
+                "GITHUB_HEAD_REF": "feature-branch",
+                "GITHUB_REF_NAME": "123/merge",
+            },
+            "feature-branch",
+            id="GITHUB_HEAD_REF takes precedence over GITHUB_REF_NAME",
+        ),
+        pytest.param(
+            {
+                "GITHUB_EVENT_NAME": "push",
+                "GITHUB_ACTIONS": "true",
+                "MERGIFY_API_URL": "https://api.mergify.com",
+                "MERGIFY_TOKEN": "abc",
+                "GITHUB_REPOSITORY": "user/repo",
+                "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+                "GITHUB_WORKFLOW": "JOB",
+                "GITHUB_REF_NAME": "main",
+            },
+            "main",
+            id="GITHUB_REF_NAME fallback when GITHUB_HEAD_REF is not set",
+        ),
     ],
 )
 def test_tests_target_branch_environment_variable_processing(
@@ -162,6 +191,7 @@ def test_tests_target_branch_environment_variable_processing(
     for key in [
         "GITHUB_REF",
         "GITHUB_REF_NAME",
+        "GITHUB_HEAD_REF",
         "GITHUB_BASE_REF",
     ]:  # Override value from CI runner
         monkeypatch.delenv(key, raising=False)
