@@ -22,6 +22,53 @@ def test_get_head_branch_jenkins(monkeypatch: pytest.MonkeyPatch) -> None:
     assert detector.get_jenkins_head_ref_name() == "main"
 
 
+@pytest.mark.parametrize(
+    ("head_ref", "ref_name", "expected"),
+    [
+        pytest.param(
+            "feature-branch",
+            "123/merge",
+            "feature-branch",
+            id="GITHUB_HEAD_REF takes precedence",
+        ),
+        pytest.param(
+            None,
+            "main",
+            "main",
+            id="GITHUB_REF_NAME fallback when GITHUB_HEAD_REF is not set",
+        ),
+        pytest.param(
+            "",
+            "main",
+            "main",
+            id="GITHUB_REF_NAME fallback when GITHUB_HEAD_REF is empty",
+        ),
+        pytest.param(
+            None,
+            None,
+            None,
+            id="None when neither GITHUB_HEAD_REF nor GITHUB_REF_NAME is set",
+        ),
+    ],
+)
+def test_get_github_actions_head_ref_name(
+    monkeypatch: pytest.MonkeyPatch,
+    head_ref: str | None,
+    ref_name: str | None,
+    expected: str | None,
+) -> None:
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+
+    if head_ref:
+        monkeypatch.setenv("GITHUB_HEAD_REF", head_ref)
+    if ref_name:
+        monkeypatch.setenv("GITHUB_REF_NAME", ref_name)
+
+    result = detector.get_github_actions_head_ref_name()
+    assert result == expected
+
+
 def test_get_head_sha_github_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")

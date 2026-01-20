@@ -92,7 +92,7 @@ ci = click.Group(
     "-ttb",
     help="The branch used to check if failing tests can be ignored with Mergify's Quarantine.",
     required=True,
-    envvar=["GITHUB_BASE_REF", "GITHUB_REF_NAME", "GITHUB_REF"],
+    envvar=["GITHUB_BASE_REF", "GITHUB_HEAD_REF", "GITHUB_REF_NAME", "GITHUB_REF"],
     callback=_process_tests_target_branch,
 )
 @click.argument(
@@ -163,7 +163,7 @@ async def junit_upload(
     "-ttb",
     help="The branch used to check if failing tests can be ignored with Mergify's Quarantine.",
     required=True,
-    envvar=["GITHUB_BASE_REF", "GITHUB_REF_NAME", "GITHUB_REF"],
+    envvar=["GITHUB_BASE_REF", "GITHUB_HEAD_REF", "GITHUB_REF_NAME", "GITHUB_REF"],
     callback=_process_tests_target_branch,
 )
 @click.argument(
