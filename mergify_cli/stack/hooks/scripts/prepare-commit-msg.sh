@@ -1,4 +1,7 @@
 #!/bin/sh
+# Mergify CLI Hook Script
+# This file is managed by mergify-cli and will be auto-upgraded.
+# Do not modify - add custom logic to the wrapper file instead.
 #
 #  Copyright © 2021-2024 Mergify SAS
 #
