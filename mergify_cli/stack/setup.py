@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-import importlib.metadata
+import importlib.resources
 import json
 import pathlib
 import shutil
@@ -25,6 +25,16 @@ import aiofiles
 
 from mergify_cli import console
 from mergify_cli import utils
+
+
+def _get_claude_hooks_dir() -> pathlib.Path:
+    """Get the global directory for Claude hook scripts."""
+    return pathlib.Path.home() / ".config" / "mergify-cli" / "claude-hooks"
+
+
+def _get_claude_settings_file() -> pathlib.Path:
+    """Get the global Claude settings file path."""
+    return pathlib.Path.home() / ".claude" / "settings.json"
 
 
 async def _install_hook(hooks_dir: pathlib.Path, hook_name: str) -> None:
@@ -54,98 +64,94 @@ async def _install_hook(hooks_dir: pathlib.Path, hook_name: str) -> None:
         installed_hook_file.chmod(0o755)
 
 
-async def _install_claude_hooks(project_dir: pathlib.Path) -> None:
+def _install_claude_hooks() -> None:
     """Install Claude Code hooks for session ID tracking.
 
-    Uses settings.local.json (gitignored) rather than settings.json
-    so each user must run setup, similar to git hooks.
+    Installs hooks globally:
+    - Scripts: ~/.config/mergify-cli/claude-hooks/
+    - Settings: ~/.claude/settings.json
     """
-    claude_dir = project_dir / ".claude"
-    claude_hooks_dir = claude_dir / "hooks"
-
-    # Create directories if they don't exist
+    claude_hooks_dir = _get_claude_hooks_dir()
     claude_hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Ensure hooks directory is gitignored
-    gitignore_file = claude_dir / ".gitignore"
-    hooks_pattern = "hooks/"
-    if gitignore_file.exists():
-        async with aiofiles.open(gitignore_file) as f:
-            gitignore_content = await f.read()
-        if hooks_pattern not in gitignore_content.splitlines():
-            async with aiofiles.open(gitignore_file, "a") as f:
-                await f.write(f"{hooks_pattern}\n")
-            console.log("Added hooks/ to .claude/.gitignore")
-    else:
-        async with aiofiles.open(gitignore_file, "w") as f:
-            await f.write(f"{hooks_pattern}\n")
-        console.log("Created .claude/.gitignore with hooks/")
+    # Install hook scripts
+    claude_hooks_src = importlib.resources.files(__package__).joinpath("claude_hooks")
+    for src_file in claude_hooks_src.iterdir():
+        if not src_file.name.endswith(".sh"):
+            continue
 
-    # Load our hook configuration
-    new_settings_file = str(
-        importlib.resources.files(__package__).joinpath("claude_hooks/settings.json"),
-    )
-    async with aiofiles.open(new_settings_file) as f:
-        new_settings = json.loads(await f.read())
+        dest_file = claude_hooks_dir / src_file.name
+        src_path = str(src_file)
 
-    # Merge into settings.local.json (user-local, gitignored)
-    settings_file = claude_dir / "settings.local.json"
+        if dest_file.exists():
+            installed_content = dest_file.read_text(encoding="utf-8")
+            new_content = pathlib.Path(src_path).read_text(encoding="utf-8")
+            if installed_content == new_content:
+                console.log(f"Claude hook script is up to date: {src_file.name}")
+                continue
+
+        console.log(f"Installing Claude hook script: {src_file.name}")
+        shutil.copy(src_path, dest_file)
+        dest_file.chmod(0o755)
+
+    # Install/update Claude settings
+    settings_file = _get_claude_settings_file()
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+
     if settings_file.exists():
-        async with aiofiles.open(settings_file) as f:
-            try:
-                existing_settings = json.loads(await f.read())
-            except json.JSONDecodeError:
-                existing_settings = {}
+        try:
+            existing_settings = json.loads(
+                settings_file.read_text(encoding="utf-8"),
+            )
+        except json.JSONDecodeError:
+            existing_settings = {}
     else:
         existing_settings = {}
 
-    # Merge hooks - add our SessionStart hook if not already present
     if "hooks" not in existing_settings:
         existing_settings["hooks"] = {}
 
-    our_hook = new_settings["hooks"]["SessionStart"]
+    # Build our hook configuration with absolute path
+    hook_script_path = str(claude_hooks_dir / "session-start.sh")
+    our_hook = [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": hook_script_path,
+                },
+            ],
+        },
+    ]
+
     existing_hooks = existing_settings["hooks"].get("SessionStart", [])
 
     # Check if our hook is already installed (by checking the command)
-    our_command = our_hook[0]["hooks"][0]["command"]
     already_installed = any(
-        hook.get("hooks", [{}])[0].get("command") == our_command
+        hook.get("hooks", [{}])[0].get("command") == hook_script_path
         for hook in existing_hooks
         if hook.get("hooks")
     )
 
     if already_installed:
-        console.log("Claude settings.local.json hook is up to date")
+        console.log("Claude settings.json hook is up to date")
     else:
-        existing_settings["hooks"]["SessionStart"] = existing_hooks + our_hook
-        async with aiofiles.open(settings_file, "w") as f:
-            await f.write(json.dumps(existing_settings, indent=2) + "\n")
-        console.log("Installation of Claude settings.local.json hook")
-
-    # Install session-start.sh hook script
-    hook_file = claude_hooks_dir / "session-start.sh"
-    new_hook_file = str(
-        importlib.resources.files(__package__).joinpath(
-            "claude_hooks/session-start.sh",
-        ),
-    )
-
-    if hook_file.exists():
-        async with aiofiles.open(hook_file) as f:
-            data_installed = await f.read()
-        async with aiofiles.open(new_hook_file) as f:
-            data_new = await f.read()
-        if data_installed == data_new:
-            console.log("Claude session-start.sh hook is up to date")
-        else:
-            console.print(
-                f"warning: {hook_file} differs from mergify_cli hook, skipping",
-                style="yellow",
+        # Remove any old mergify-cli hooks that might reference different paths
+        filtered_hooks = [
+            hook
+            for hook in existing_hooks
+            if not (
+                hook.get("hooks", [{}])[0]
+                .get("command", "")
+                .endswith("session-start.sh")
             )
-    else:
-        console.log("Installation of Claude session-start.sh hook")
-        shutil.copy(new_hook_file, hook_file)
-        hook_file.chmod(0o755)
+        ]
+        existing_settings["hooks"]["SessionStart"] = filtered_hooks + our_hook
+        settings_file.write_text(
+            json.dumps(existing_settings, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        console.log("Installation of Claude settings.json hook")
 
 
 async def stack_setup() -> None:
@@ -154,6 +160,5 @@ async def stack_setup() -> None:
     await _install_hook(hooks_dir, "commit-msg")
     await _install_hook(hooks_dir, "prepare-commit-msg")
 
-    # Install Claude hooks for session ID tracking
-    project_dir = pathlib.Path(await utils.git("rev-parse", "--show-toplevel"))
-    await _install_claude_hooks(project_dir)
+    # Install Claude hooks for session ID tracking (global)
+    _install_claude_hooks()
