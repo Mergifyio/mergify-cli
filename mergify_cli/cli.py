@@ -30,7 +30,8 @@ from mergify_cli.stack import cli as stack_cli_mod
 @click.group(
     cls=click_default_group.DefaultGroup,
     default="stack",
-    default_if_no_args=True,
+    default_if_no_args=False,
+    invoke_without_command=True,
 )
 @click.option("--debug", is_flag=True, default=False, help="debug mode")
 @click.version_option(VERSION)
@@ -41,6 +42,8 @@ def cli(
     debug: bool,
 ) -> None:
     ctx.obj = {"debug": debug}
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 cli.add_command(stack_cli_mod.stack)
