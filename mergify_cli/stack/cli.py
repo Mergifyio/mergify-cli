@@ -14,6 +14,7 @@ from mergify_cli.stack import edit as stack_edit_mod
 from mergify_cli.stack import (
     github_action_auto_rebase as stack_github_action_auto_rebase_mod,
 )
+from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import session as stack_session_mod
 from mergify_cli.stack import setup as stack_setup_mod
@@ -302,3 +303,34 @@ async def session(*, commit: str, launch: bool) -> None:
 
     if launch:
         stack_session_mod.launch_claude_session(session_id)
+
+
+@stack.command(name="list", help="List the stack's commits and their associated PRs")  # type: ignore[untyped-decorator]
+@click.pass_context
+@click.option(
+    "--trunk",
+    "-t",
+    type=click.UNPROCESSED,
+    default=lambda: asyncio.run(utils.get_trunk()),
+    callback=trunk_type,
+    help="Change the target branch of the stack.",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output in JSON format for scripting",
+)
+@utils.run_with_asyncio
+async def list_cmd(
+    ctx: click.Context,
+    *,
+    trunk: tuple[str, str],
+    output_json: bool,
+) -> None:
+    await stack_list_mod.stack_list(
+        github_server=ctx.obj["github_server"],
+        token=ctx.obj["token"],
+        trunk=trunk,
+        output_json=output_json,
+    )
