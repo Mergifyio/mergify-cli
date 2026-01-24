@@ -50,6 +50,11 @@ def _get_git_hook_names() -> list[str]:
     ]
 
 
+async def _get_hooks_dir() -> pathlib.Path:
+    """Get the git hooks directory for the current repository."""
+    return pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
+
+
 def _get_claude_hooks_dir() -> pathlib.Path:
     """Get the global directory for Claude hook scripts."""
     return pathlib.Path.home() / ".config" / "mergify-cli" / "claude-hooks"
@@ -322,7 +327,7 @@ async def get_hooks_status() -> dict[str, Any]:
     Returns:
         Dictionary with 'git_hooks' and 'claude_hooks' status info.
     """
-    hooks_dir = pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
+    hooks_dir = await _get_hooks_dir()
     managed_dir = hooks_dir / "mergify-hooks"
 
     git_hooks = {}
@@ -362,7 +367,7 @@ async def stack_setup(*, force: bool = False) -> None:
     Args:
         force: If True, overwrite wrappers even if user modified them
     """
-    hooks_dir = pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
+    hooks_dir = await _get_hooks_dir()
 
     for hook_name in _get_git_hook_names():
         _install_git_hook(hooks_dir, hook_name, force=force)
@@ -376,7 +381,7 @@ async def ensure_hooks_updated() -> None:
 
     This only updates the managed scripts, never touches user's wrapper files.
     """
-    hooks_dir = pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
+    hooks_dir = await _get_hooks_dir()
     managed_dir = hooks_dir / "mergify-hooks"
 
     # Update git hook scripts
