@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any
 from urllib import parse
 
 import click
@@ -96,7 +97,109 @@ stack = click_default_group.DefaultGroup(
 )
 
 
-@stack.command(help="Configure the required git commit-msg hooks")  # type: ignore[untyped-decorator]
+def _print_hooks_status(status: dict[str, Any]) -> None:
+    """Print hooks status in a formatted table."""
+    needs_setup = False
+    needs_force = False
+
+    # Git hooks section
+    console.print("\nGit Hooks Status:\n")
+    git_hooks = status["git_hooks"]
+
+    for hook_name, info in git_hooks.items():
+        console.print(f"  {hook_name}:")
+
+        wrapper_status = info["wrapper_status"]
+        wrapper_path = info["wrapper_path"]
+
+        if wrapper_status == stack_setup_mod.WrapperStatus.INSTALLED:
+            console.print(f"    Wrapper: [green]installed[/] ({wrapper_path})")
+        elif wrapper_status == stack_setup_mod.WrapperStatus.LEGACY:
+            console.print(
+                "    Wrapper: [yellow]legacy[/] (needs --force to migrate)",
+            )
+            needs_force = True
+        else:  # MISSING
+            console.print("    Wrapper: [red]not installed[/]")
+            needs_setup = True
+
+        script_path = info["script_path"]
+        if info["script_installed"]:
+            if info["script_needs_update"]:
+                console.print(f"    Script:  [yellow]needs update[/] ({script_path})")
+                needs_setup = True
+            else:
+                console.print(f"    Script:  [green]up to date[/] ({script_path})")
+        else:
+            console.print("    Script:  [red]not installed[/]")
+            needs_setup = True
+
+        console.print()
+
+    # Claude hooks section
+    console.print("Claude Hooks Status:\n")
+    claude_hooks = status["claude_hooks"]
+
+    for script_name, script_info in claude_hooks["scripts"].items():
+        console.print(f"  {script_name}:")
+        if script_info["installed"]:
+            if script_info["needs_update"]:
+                console.print(
+                    f"    Script: [yellow]needs update[/] ({script_info['path']})",
+                )
+                needs_setup = True
+            else:
+                console.print(
+                    f"    Script: [green]up to date[/] ({script_info['path']})",
+                )
+        else:
+            console.print("    Script: [red]not installed[/]")
+            needs_setup = True
+        console.print()
+
+    console.print("  settings.json:")
+    if claude_hooks["settings_installed"]:
+        console.print(
+            f"    Hook: [green]configured[/] ({claude_hooks['settings_path']})",
+        )
+    else:
+        console.print("    Hook: [red]not configured[/]")
+        needs_setup = True
+    console.print()
+
+    if needs_setup or needs_force:
+        console.print("Run 'mergify stack hooks --setup' to install/upgrade hooks.")
+        if needs_force:
+            console.print(
+                "Run 'mergify stack hooks --setup --force' to force reinstall wrappers.",
+            )
+    else:
+        console.print("[green]All hooks are up to date.[/]")
+
+
+@stack.command(help="Show git hooks status and manage installation")  # type: ignore[untyped-decorator]
+@click.option(
+    "--setup",
+    "do_setup",
+    is_flag=True,
+    help="Install or upgrade hooks",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Force reinstall wrappers (use with --setup)",
+)
+@utils.run_with_asyncio
+async def hooks(*, do_setup: bool, force: bool) -> None:
+    if do_setup:
+        await stack_setup_mod.stack_setup(force=force)
+    else:
+        status = await stack_setup_mod.get_hooks_status()
+        _print_hooks_status(status)
+
+
+@stack.command(help="Configure git hooks (alias for 'stack hooks --setup')")  # type: ignore[untyped-decorator]
 @click.option(
     "--force",
     "-f",
@@ -106,11 +209,15 @@ stack = click_default_group.DefaultGroup(
 @click.option(
     "--check",
     is_flag=True,
-    help="Only check hook status without making changes",
+    help="Check status only (use 'stack hooks' instead)",
 )
 @utils.run_with_asyncio
 async def setup(*, force: bool, check: bool) -> None:
-    await stack_setup_mod.stack_setup(force=force, check_only=check)
+    if check:
+        status = await stack_setup_mod.get_hooks_status()
+        _print_hooks_status(status)
+    else:
+        await stack_setup_mod.stack_setup(force=force)
 
 
 @stack.command(help="Edit the stack history")  # type: ignore[untyped-decorator]
