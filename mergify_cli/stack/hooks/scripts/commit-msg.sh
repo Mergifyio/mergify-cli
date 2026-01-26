@@ -1,4 +1,8 @@
 #!/bin/sh
+# Mergify CLI Hook Script
+# This file is managed by mergify-cli and will be auto-upgraded.
+# Do not modify - add custom logic to the wrapper file instead.
+#
 # Based on Gerrit Code Review 3.1.3
 #
 # Part of Gerrit Code Review (https://www.gerritcodereview.com/)
@@ -27,11 +31,6 @@ if test ! -f "$1" ; then
   echo "file does not exist: $1"
   exit 1
 fi
-
-# Do not create a change id if requested
-#if test "false" = "`git config --bool --get gerrit.createChangeId`" ; then
-#  exit 0
-#fi
 
 # $RANDOM will be undefined if not using bash, so don't use set -u
 random=$( (whoami ; hostname ; date; cat $1 ; echo $RANDOM) | git hash-object --stdin)

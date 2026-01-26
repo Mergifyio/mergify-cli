@@ -101,7 +101,7 @@ def mock_subprocess() -> abc.Generator[test_utils.SubprocessMocks]:
 
 @pytest.fixture
 def git_repo_with_hooks(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Create a real git repo with the stack hooks installed."""
+    """Create a real git repo with the stack hooks installed (new sourcing architecture)."""
     import importlib.resources
 
     subprocess.run(
@@ -120,16 +120,30 @@ def git_repo_with_hooks(tmp_path: pathlib.Path) -> pathlib.Path:
         cwd=tmp_path,
     )
 
-    # Install hooks
+    # Install hooks with new sourcing architecture
     hooks_dir = tmp_path / ".git" / "hooks"
+    managed_dir = hooks_dir / "mergify-hooks"
+    managed_dir.mkdir(parents=True, exist_ok=True)
+
     for hook_name in ("commit-msg", "prepare-commit-msg"):
-        hook_source = str(
+        # Install wrapper
+        wrapper_source = str(
             importlib.resources.files("mergify_cli.stack").joinpath(
-                f"hooks/{hook_name}",
+                f"hooks/wrappers/{hook_name}",
             ),
         )
-        hook_dest = hooks_dir / hook_name
-        shutil.copy(hook_source, hook_dest)
-        hook_dest.chmod(0o755)
+        wrapper_dest = hooks_dir / hook_name
+        shutil.copy(wrapper_source, wrapper_dest)
+        wrapper_dest.chmod(0o755)
+
+        # Install managed script
+        script_source = str(
+            importlib.resources.files("mergify_cli.stack").joinpath(
+                f"hooks/scripts/{hook_name}.sh",
+            ),
+        )
+        script_dest = managed_dir / f"{hook_name}.sh"
+        shutil.copy(script_source, script_dest)
+        script_dest.chmod(0o755)
 
     return tmp_path

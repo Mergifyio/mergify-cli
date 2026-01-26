@@ -97,9 +97,20 @@ stack = click_default_group.DefaultGroup(
 
 
 @stack.command(help="Configure the required git commit-msg hooks")  # type: ignore[untyped-decorator]
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Force reinstall of hook wrappers, even if user modified them",
+)
+@click.option(
+    "--check",
+    is_flag=True,
+    help="Only check hook status without making changes",
+)
 @utils.run_with_asyncio
-async def setup() -> None:
-    await stack_setup_mod.stack_setup()
+async def setup(*, force: bool, check: bool) -> None:
+    await stack_setup_mod.stack_setup(force=force, check_only=check)
 
 
 @stack.command(help="Edit the stack history")  # type: ignore[untyped-decorator]
@@ -114,6 +125,11 @@ async def edit() -> None:
     "--setup",
     is_flag=True,
     hidden=True,
+)
+@click.option(
+    "--no-upgrade-hooks",
+    is_flag=True,
+    help="Skip automatic hook script upgrades",
 )
 @click.option("--dry-run", "-n", is_flag=True, default=False, help="dry run")
 @click.option(
@@ -177,6 +193,7 @@ async def push(
     ctx: click.Context,
     *,
     setup: bool,
+    no_upgrade_hooks: bool,
     dry_run: bool,
     next_only: bool,
     skip_rebase: bool,
@@ -191,6 +208,10 @@ async def push(
         # backward compat
         await stack_setup_mod.stack_setup()
         return
+
+    # Auto-upgrade hook scripts (not wrappers) unless disabled
+    if not no_upgrade_hooks:
+        await stack_setup_mod.ensure_hooks_updated()
 
     await stack_push_mod.stack_push(
         github_server=ctx.obj["github_server"],
