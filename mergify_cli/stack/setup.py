@@ -55,12 +55,17 @@ async def _get_hooks_dir() -> pathlib.Path:
     return pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
 
 
-def _get_script_resource_path(hook_name: str) -> str:
-    """Get the path to a hook script in package resources."""
-    return str(
-        importlib.resources.files(__package__).joinpath(
-            f"hooks/scripts/{hook_name}.sh",
-        ),
+def _get_script_resource(hook_name: str) -> importlib.resources.abc.Traversable:
+    """Get the Traversable resource for a hook script."""
+    return importlib.resources.files(__package__).joinpath(
+        f"hooks/scripts/{hook_name}.sh",
+    )
+
+
+def _get_wrapper_resource(hook_name: str) -> importlib.resources.abc.Traversable:
+    """Get the Traversable resource for a hook wrapper."""
+    return importlib.resources.files(__package__).joinpath(
+        f"hooks/wrappers/{hook_name}",
     )
 
 
@@ -143,14 +148,17 @@ def _get_wrapper_status(hook_path: pathlib.Path, hook_name: str) -> WrapperStatu
     return WrapperStatus.INSTALLED
 
 
-def _script_needs_update(script_path: pathlib.Path, new_script_path: str) -> bool:
+def _script_needs_update(
+    script_path: pathlib.Path,
+    new_script: importlib.resources.abc.Traversable,
+) -> bool:
     """Check if a managed script needs to be updated by comparing content."""
     if not script_path.exists():
         return True
 
     try:
         installed_content = script_path.read_text(encoding="utf-8")
-        new_content = pathlib.Path(new_script_path).read_text(encoding="utf-8")
+        new_content = new_script.read_text(encoding="utf-8")
     except OSError:
         return True
     else:
@@ -174,20 +182,17 @@ def _install_git_hook(
 
     managed_dir = hooks_dir / "mergify-hooks"
     script_path = managed_dir / f"{hook_name}.sh"
-    new_script_file = _get_script_resource_path(hook_name)
-    new_wrapper_file = str(
-        importlib.resources.files(__package__).joinpath(
-            f"hooks/wrappers/{hook_name}",
-        ),
-    )
+    new_script_resource = _get_script_resource(hook_name)
+    new_wrapper_resource = _get_wrapper_resource(hook_name)
 
     # Create mergify-hooks directory
     managed_dir.mkdir(exist_ok=True)
 
     # Always update managed script if content differs
-    if _script_needs_update(script_path, new_script_file):
+    if _script_needs_update(script_path, new_script_resource):
         console.log(f"Updating managed hook script: mergify-hooks/{hook_name}.sh")
-        shutil.copy(new_script_file, script_path)
+        with importlib.resources.as_file(new_script_resource) as src_path:
+            shutil.copy(src_path, script_path)
         script_path.chmod(0o755)
     elif utils.is_debug():
         console.log(f"Managed hook script is up to date: mergify-hooks/{hook_name}.sh")
@@ -195,13 +200,15 @@ def _install_git_hook(
     # Handle wrapper based on status
     if wrapper_status == WrapperStatus.MISSING:
         console.log(f"Installing hook wrapper: {hook_name}")
-        shutil.copy(new_wrapper_file, wrapper_path)
+        with importlib.resources.as_file(new_wrapper_resource) as src_path:
+            shutil.copy(src_path, wrapper_path)
         wrapper_path.chmod(0o755)
 
     elif wrapper_status == WrapperStatus.LEGACY:
         if force:
             console.log(f"Migrating legacy hook to new format: {hook_name}")
-            shutil.copy(new_wrapper_file, wrapper_path)
+            with importlib.resources.as_file(new_wrapper_resource) as src_path:
+                shutil.copy(src_path, wrapper_path)
             wrapper_path.chmod(0o755)
         else:
             console.print(
@@ -345,8 +352,8 @@ async def get_hooks_status() -> dict[str, Any]:
         script_needs_update = False
 
         if script_installed:
-            new_script_file = _get_script_resource_path(hook_name)
-            script_needs_update = _script_needs_update(script_path, new_script_file)
+            new_script_resource = _get_script_resource(hook_name)
+            script_needs_update = _script_needs_update(script_path, new_script_resource)
 
         git_hooks[hook_name] = {
             "wrapper_status": wrapper_status,
@@ -389,13 +396,14 @@ async def ensure_hooks_updated() -> None:
     if managed_dir.exists():
         for hook_name in _get_git_hook_names():
             script_path = managed_dir / f"{hook_name}.sh"
-            new_script_file = _get_script_resource_path(hook_name)
+            new_script_resource = _get_script_resource(hook_name)
 
-            if _script_needs_update(script_path, new_script_file):
+            if _script_needs_update(script_path, new_script_resource):
                 console.log(
                     f"Auto-updating managed hook script: mergify-hooks/{hook_name}.sh",
                 )
-                shutil.copy(new_script_file, script_path)
+                with importlib.resources.as_file(new_script_resource) as src_path:
+                    shutil.copy(src_path, script_path)
                 script_path.chmod(0o755)
 
     # Install/update Claude hook scripts (always, creates directory if needed)
