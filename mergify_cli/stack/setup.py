@@ -55,6 +55,15 @@ async def _get_hooks_dir() -> pathlib.Path:
     return pathlib.Path(await utils.git("rev-parse", "--git-path", "hooks"))
 
 
+def _get_script_resource_path(hook_name: str) -> str:
+    """Get the path to a hook script in package resources."""
+    return str(
+        importlib.resources.files(__package__).joinpath(
+            f"hooks/scripts/{hook_name}.sh",
+        ),
+    )
+
+
 def _get_claude_hooks_dir() -> pathlib.Path:
     """Get the global directory for Claude hook scripts."""
     return pathlib.Path.home() / ".config" / "mergify-cli" / "claude-hooks"
@@ -165,11 +174,7 @@ def _install_git_hook(
 
     managed_dir = hooks_dir / "mergify-hooks"
     script_path = managed_dir / f"{hook_name}.sh"
-    new_script_file = str(
-        importlib.resources.files(__package__).joinpath(
-            f"hooks/scripts/{hook_name}.sh",
-        ),
-    )
+    new_script_file = _get_script_resource_path(hook_name)
     new_wrapper_file = str(
         importlib.resources.files(__package__).joinpath(
             f"hooks/wrappers/{hook_name}",
@@ -340,11 +345,7 @@ async def get_hooks_status() -> dict[str, Any]:
         script_needs_update = False
 
         if script_installed:
-            new_script_file = str(
-                importlib.resources.files(__package__).joinpath(
-                    f"hooks/scripts/{hook_name}.sh",
-                ),
-            )
+            new_script_file = _get_script_resource_path(hook_name)
             script_needs_update = _script_needs_update(script_path, new_script_file)
 
         git_hooks[hook_name] = {
@@ -388,11 +389,7 @@ async def ensure_hooks_updated() -> None:
     if managed_dir.exists():
         for hook_name in _get_git_hook_names():
             script_path = managed_dir / f"{hook_name}.sh"
-            new_script_file = str(
-                importlib.resources.files(__package__).joinpath(
-                    f"hooks/scripts/{hook_name}.sh",
-                ),
-            )
+            new_script_file = _get_script_resource_path(hook_name)
 
             if _script_needs_update(script_path, new_script_file):
                 console.log(
