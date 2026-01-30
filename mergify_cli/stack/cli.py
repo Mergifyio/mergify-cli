@@ -15,6 +15,7 @@ from mergify_cli.stack import (
     github_action_auto_rebase as stack_github_action_auto_rebase_mod,
 )
 from mergify_cli.stack import list as stack_list_mod
+from mergify_cli.stack import new as stack_new_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import session as stack_session_mod
 from mergify_cli.stack import setup as stack_setup_mod
@@ -23,8 +24,10 @@ from mergify_cli.stack import setup as stack_setup_mod
 def trunk_type(
     _ctx: click.Context,
     _param: click.Parameter,
-    value: str,
-) -> tuple[str, str]:
+    value: str | None,
+) -> tuple[str, str] | None:
+    if value is None:
+        return None
     result = value.split("/", maxsplit=1)
     if len(result) != 2:
         msg = "Trunk is invalid. It must be origin/branch-name [/]"
@@ -224,6 +227,36 @@ async def setup(*, force: bool, check: bool) -> None:
 @utils.run_with_asyncio
 async def edit() -> None:
     await stack_edit_mod.stack_edit()
+
+
+@stack.command(help="Create a new stack branch")
+@click.argument("name")
+@click.option(
+    "--base",
+    "-b",
+    type=click.UNPROCESSED,
+    metavar="REMOTE/BRANCH",
+    default=None,
+    callback=trunk_type,
+    help="Base branch to create from (default: current trunk)",
+)
+@click.option(
+    "--checkout/--no-checkout",
+    default=True,
+    help="Whether to checkout the new branch after creation (default: checkout)",
+)
+@utils.run_with_asyncio
+async def new(
+    *,
+    name: str,
+    base: tuple[str, str] | None,
+    checkout: bool,
+) -> None:
+    await stack_new_mod.stack_new(
+        name=name,
+        base=base,
+        checkout=checkout,
+    )
 
 
 @stack.command(help="Push/sync the pull requests stack")
