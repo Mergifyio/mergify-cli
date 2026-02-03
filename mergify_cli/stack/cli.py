@@ -6,7 +6,6 @@ from typing import Any
 from urllib import parse
 
 import click
-import click_default_group
 
 from mergify_cli import console
 from mergify_cli import utils
@@ -76,26 +75,26 @@ def github_server_to_context(
     ctx.obj["github_server"] = value
 
 
-stack = click_default_group.DefaultGroup(
-    "stack",
-    default="push",
-    default_if_no_args=True,
+@click.group(
+    invoke_without_command=True,
     help="Manage pull requests stack",
-    params=[
-        click.Option(
-            param_decls=["--token"],
-            default=lambda: asyncio.run(get_default_token()),
-            help="GitHub personal access token",
-            callback=token_to_context,
-        ),
-        click.Option(
-            param_decls=["--github-server"],
-            default=lambda: asyncio.run(get_default_github_server()),
-            help="GitHub API server",
-            callback=github_server_to_context,
-        ),
-    ],
 )
+@click.option(
+    "--token",
+    default=lambda: asyncio.run(get_default_token()),
+    help="GitHub personal access token",
+    callback=token_to_context,
+)
+@click.option(
+    "--github-server",
+    default=lambda: asyncio.run(get_default_github_server()),
+    help="GitHub API server",
+    callback=github_server_to_context,
+)
+@click.pass_context
+def stack(ctx: click.Context, **_kwargs: object) -> None:
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 def _print_hooks_status(status: dict[str, Any]) -> None:
@@ -178,7 +177,7 @@ def _print_hooks_status(status: dict[str, Any]) -> None:
         console.print("[green]All hooks are up to date.[/]")
 
 
-@stack.command(help="Show git hooks status and manage installation")  # type: ignore[untyped-decorator]
+@stack.command(help="Show git hooks status and manage installation")
 @click.option(
     "--setup",
     "do_setup",
@@ -200,7 +199,7 @@ async def hooks(*, do_setup: bool, force: bool) -> None:
         _print_hooks_status(status)
 
 
-@stack.command(help="Configure git hooks (alias for 'stack hooks --setup')")  # type: ignore[untyped-decorator]
+@stack.command(help="Configure git hooks (alias for 'stack hooks --setup')")
 @click.option(
     "--force",
     "-f",
@@ -221,13 +220,13 @@ async def setup(*, force: bool, check: bool) -> None:
         await stack_setup_mod.stack_setup(force=force)
 
 
-@stack.command(help="Edit the stack history")  # type: ignore[untyped-decorator]
+@stack.command(help="Edit the stack history")
 @utils.run_with_asyncio
 async def edit() -> None:
     await stack_edit_mod.stack_edit()
 
 
-@stack.command(help="Push/sync the pull requests stack")  # type: ignore[untyped-decorator]
+@stack.command(help="Push/sync the pull requests stack")
 @click.pass_context
 @click.option(
     "--setup",
@@ -336,7 +335,7 @@ async def push(
     )
 
 
-@stack.command(help="Checkout the pull requests stack")  # type: ignore[untyped-decorator]
+@stack.command(help="Checkout the pull requests stack")
 @click.pass_context
 @click.option(
     "--author",
@@ -396,7 +395,7 @@ async def checkout(
     )
 
 
-@stack.command(help="Autorebase a pull requests stack")  # type: ignore[untyped-decorator]
+@stack.command(help="Autorebase a pull requests stack")
 @click.pass_context
 @utils.run_with_asyncio
 async def github_action_auto_rebase(ctx: click.Context) -> None:
@@ -406,7 +405,7 @@ async def github_action_auto_rebase(ctx: click.Context) -> None:
     )
 
 
-@stack.command(help="Get Claude session ID from a commit")  # type: ignore[untyped-decorator]
+@stack.command(help="Get Claude session ID from a commit")
 @click.option(
     "--commit",
     "-c",
@@ -433,7 +432,7 @@ async def session(*, commit: str, launch: bool) -> None:
         stack_session_mod.launch_claude_session(session_id)
 
 
-@stack.command(name="list", help="List the stack's commits and their associated PRs")  # type: ignore[untyped-decorator]
+@stack.command(name="list", help="List the stack's commits and their associated PRs")
 @click.pass_context
 @click.option(
     "--trunk",
