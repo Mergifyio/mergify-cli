@@ -14,3 +14,5 @@ def test_cli_shows_help_by_default() -> None:
     assert "Usage:" in result.output
     assert "Options:" in result.output
     assert "--help" in result.output
+    assert "stack*" not in result.output
+    assert "stack" in result.output
