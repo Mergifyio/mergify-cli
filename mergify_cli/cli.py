@@ -20,7 +20,6 @@ import subprocess
 import sys
 
 import click
-import click_default_group
 
 from mergify_cli import VERSION
 from mergify_cli.ci import cli as ci_cli_mod
@@ -28,9 +27,6 @@ from mergify_cli.stack import cli as stack_cli_mod
 
 
 @click.group(
-    cls=click_default_group.DefaultGroup,
-    default="stack",
-    default_if_no_args=False,
     invoke_without_command=True,
 )
 @click.option("--debug", is_flag=True, default=False, help="debug mode")
