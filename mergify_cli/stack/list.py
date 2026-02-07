@@ -123,16 +123,15 @@ def display_stack_list(output: StackListOutput) -> None:
             )
 
 
-async def stack_list(
+async def get_stack_list(
     github_server: str,
     token: str,
     *,
     trunk: tuple[str, str],
     branch_prefix: str | None = None,
     author: str | None = None,
-    output_json: bool = False,
-) -> None:
-    """List the current stack's commits and their associated PRs.
+) -> StackListOutput:
+    """Get the current stack's commits and their associated PRs.
 
     Args:
         github_server: GitHub API server URL
@@ -140,7 +139,9 @@ async def stack_list(
         trunk: Tuple of (remote, branch) for the trunk
         branch_prefix: Optional branch prefix for stack branches
         author: Optional author filter (defaults to token owner)
-        output_json: If True, output JSON instead of human-readable format
+
+    Returns:
+        StackListOutput containing branch info and list of entries
     """
     dest_branch = await utils.git_get_branch_name()
 
@@ -225,10 +226,38 @@ async def stack_list(
         )
         entries.append(entry)
 
-    output = StackListOutput(
+    return StackListOutput(
         branch=dest_branch,
         trunk=f"{remote}/{base_branch}",
         entries=entries,
+    )
+
+
+async def stack_list(
+    github_server: str,
+    token: str,
+    *,
+    trunk: tuple[str, str],
+    branch_prefix: str | None = None,
+    author: str | None = None,
+    output_json: bool = False,
+) -> None:
+    """List the current stack's commits and their associated PRs.
+
+    Args:
+        github_server: GitHub API server URL
+        token: GitHub personal access token
+        trunk: Tuple of (remote, branch) for the trunk
+        branch_prefix: Optional branch prefix for stack branches
+        author: Optional author filter (defaults to token owner)
+        output_json: If True, output JSON instead of human-readable format
+    """
+    output = await get_stack_list(
+        github_server=github_server,
+        token=token,
+        trunk=trunk,
+        branch_prefix=branch_prefix,
+        author=author,
     )
 
     if output_json:
