@@ -68,15 +68,6 @@ class GitMock:
 
         # Base commit SHA
         self.mock("merge-base", "--fork-point", "origin/main", output="base_commit_sha")
-        self.mock("branch", "mergify-cli-tmp", commit["sha"], output="")
-        self.mock("branch", "-D", "mergify-cli-tmp", output="")
-        self.mock(
-            "push",
-            "-f",
-            "origin",
-            f"mergify-cli-tmp:current-branch/{commit['change_id']}",
-            output="",
-        )
 
     def finalize(self) -> None:
         # Register batch log mock
@@ -91,6 +82,14 @@ class GitMock:
             "base_commit_sha..current-branch",
             output="\x1e".join(records) + "\x1e" if records else "",
         )
+
+        # Register batch push mock
+        refspecs = [
+            f"{c['sha']}:refs/heads/current-branch/{c['change_id']}"
+            for c in self._commits
+        ]
+        if refspecs:
+            self.mock("push", "-f", "origin", *refspecs, output="")
 
 
 @dataclasses.dataclass
