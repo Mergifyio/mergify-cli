@@ -80,15 +80,8 @@ def git_mock(
         "remote.origin.url",
         output="https://github.com/user/repo",
     )
-    # Mock pull and push commands
+    # Mock pull command
     git_mock_object.mock("pull", "--rebase", "origin", "main", output="")
-    git_mock_object.mock(
-        "push",
-        "-f",
-        "origin",
-        "current-branch:current-branch/aio",
-        output="",
-    )
 
     with mock.patch("mergify_cli.utils.git", git_mock_object):
         yield git_mock_object

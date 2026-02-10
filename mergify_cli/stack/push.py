@@ -33,7 +33,6 @@ if typing.TYPE_CHECKING:
     from mergify_cli import github_types
 
 DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
-TMP_STACK_BRANCH = "mergify-cli-tmp"
 
 
 @dataclasses.dataclass
@@ -63,6 +62,19 @@ def format_pull_description(
     message = DEPENDS_ON_RE.sub("", message).rstrip("\n")
 
     return message + depends_on_header
+
+
+async def push_branches(
+    remote: str,
+    local_changes: list[changes.LocalChange],
+) -> None:
+    refspecs = [
+        f"{c.commit_sha}:refs/heads/{c.dest_branch}"
+        for c in local_changes
+        if c.action in {"create", "update"}
+    ]
+    if refspecs:
+        await utils.git("push", "-f", remote, *refspecs)
 
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
@@ -173,6 +185,9 @@ async def stack_push(
             console.log("[orange]Finished (dry-run mode) :tada:[/]")
             sys.exit(0)
 
+        with console.status("Pushing stacked branches..."):
+            await push_branches(remote, planned_changes.locals)
+
         console.log("Updating and/or creating stacked pull requests:", style="green")
 
         pulls_to_comment: list[github_types.PullRequest] = []
@@ -180,11 +195,10 @@ async def stack_push(
             depends_on = pulls_to_comment[-1] if pulls_to_comment else None
 
             if change.action in {"create", "update"}:
-                pull = await create_or_update_stack(
+                pull = await create_or_update_pr(
                     client,
                     user=user,
                     repo=repo,
-                    remote=remote,
                     change=change,
                     depends_on=depends_on,
                     create_as_draft=create_as_draft,
@@ -289,84 +303,55 @@ async def delete_stack(
     console.log(change.get_log_from_orphan_change(dry_run=False))
 
 
-async def create_or_update_stack(
+async def create_or_update_pr(
     client: httpx.AsyncClient,
     *,
     user: str,
     repo: str,
-    remote: str,
     change: changes.LocalChange,
     depends_on: github_types.PullRequest | None,
     create_as_draft: bool,
     keep_pull_request_title_and_body: bool,
 ) -> github_types.PullRequest:
-    if change.pull is None:
-        status_message = f"* creating stacked branch `{change.dest_branch}` ({change.commit_short_sha})"
-    else:
-        status_message = f"* updating stacked branch `{change.dest_branch}` ({change.commit_short_sha}) - {change.pull['html_url'] if change.pull else '<stack branch without associated pull>'})"
-
-    with console.status(status_message):
-        await utils.git("branch", TMP_STACK_BRANCH, change.commit_sha)
-        try:
-            await utils.git(
-                "push",
-                "-f",
-                remote,
-                TMP_STACK_BRANCH + ":" + change.dest_branch,
-            )
-        finally:
-            await utils.git("branch", "-D", TMP_STACK_BRANCH)
-
     if change.action == "update":
         if change.pull is None:
             msg = "Can't update pull with change.pull unset"
             raise RuntimeError(msg)
 
-        with console.status(
-            f"* updating pull request `{change.title}` (#{change.pull['number']}) ({change.commit_short_sha})",
-        ):
-            pull_changes = {
+        pull_changes: dict[str, typing.Any] = {
+            "head": change.dest_branch,
+            "base": change.base_branch,
+        }
+        if keep_pull_request_title_and_body:
+            pull_changes["body"] = format_pull_description(
+                change.pull["body"] or "",
+                depends_on,
+            )
+        else:
+            pull_changes["title"] = change.title
+            pull_changes["body"] = format_pull_description(
+                change.message,
+                depends_on,
+            )
+
+        await client.patch(
+            f"/repos/{user}/{repo}/pulls/{change.pull['number']}",
+            json=pull_changes,
+        )
+        return change.pull
+
+    if change.action == "create":
+        r = await client.post(
+            f"/repos/{user}/{repo}/pulls",
+            json={
+                "title": change.title,
+                "body": format_pull_description(change.message, depends_on),
+                "draft": create_as_draft,
                 "head": change.dest_branch,
                 "base": change.base_branch,
-            }
-            if keep_pull_request_title_and_body:
-                pull_changes.update(
-                    {
-                        "body": format_pull_description(
-                            change.pull["body"] or "",
-                            depends_on,
-                        ),
-                    },
-                )
-            else:
-                pull_changes.update(
-                    {
-                        "title": change.title,
-                        "body": format_pull_description(change.message, depends_on),
-                    },
-                )
-
-            r = await client.patch(
-                f"/repos/{user}/{repo}/pulls/{change.pull['number']}",
-                json=pull_changes,
-            )
-            return change.pull
-
-    elif change.action == "create":
-        with console.status(
-            f"* creating stacked pull request `{change.title}` ({change.commit_short_sha})",
-        ):
-            r = await client.post(
-                f"/repos/{user}/{repo}/pulls",
-                json={
-                    "title": change.title,
-                    "body": format_pull_description(change.message, depends_on),
-                    "draft": create_as_draft,
-                    "head": change.dest_branch,
-                    "base": change.base_branch,
-                },
-            )
-            return typing.cast("github_types.PullRequest", r.json())
+            },
+        )
+        return typing.cast("github_types.PullRequest", r.json())
 
     msg = f"Unhandled action: {change.action}"
     raise RuntimeError(msg)
