@@ -54,6 +54,7 @@ async def test_stack_list_with_prs(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf51",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls
     respx_mock.get("/user").respond(200, json={"login": "author"})
@@ -140,6 +141,7 @@ async def test_stack_list_no_prs(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls - no PRs found
     respx_mock.get("/user").respond(200, json={"login": "author"})
@@ -191,6 +193,7 @@ async def test_stack_list_mixed_pr_states(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf52",
         ),
     )
+    git_mock.finalize()
 
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(
@@ -297,6 +300,7 @@ async def test_stack_list_json_output(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
+    git_mock.finalize()
 
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(
@@ -362,7 +366,8 @@ async def test_stack_list_empty_stack(
     git_mock.mock("merge-base", "--fork-point", "origin/main", output="base_commit_sha")
     git_mock.mock(
         "log",
-        "--format=%H",
+        "--reverse",
+        "--format=%H%x00%s%x00%b%x1e",
         "base_commit_sha..current-branch",
         output="",
     )

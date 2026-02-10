@@ -231,28 +231,30 @@ async def get_changes(
     only_update_existing_pulls: bool,
     next_only: bool,
 ) -> Changes:
-    commits = (
-        commit
-        for commit in reversed(
-            (
-                await utils.git(
-                    "log",
-                    "--format=%H",
-                    f"{base_commit_sha}..{dest_branch}",
-                )
-            ).split(
-                "\n",
-            ),
-        )
-        if commit
+    raw = await utils.git(
+        "log",
+        "--reverse",
+        "--format=%H%x00%s%x00%b%x1e",
+        f"{base_commit_sha}..{dest_branch}",
     )
+
+    commit_infos: list[tuple[str, str, str]] = []
+    for record in raw.split("\x1e"):
+        stripped = record.strip()
+        if not stripped:
+            continue
+        parts = stripped.split("\x00", 2)
+        if len(parts) != 3:
+            msg = f"Unexpected git log record format: {stripped!r}"
+            raise RuntimeError(msg)
+        commit_infos.append(
+            (parts[0].strip(), parts[1].strip(), parts[2].strip()),
+        )
+
     changes = Changes(stack_prefix)
     remaining_remote_changes = remote_changes.copy()
 
-    for idx, commit in enumerate(commits):
-        message = await utils.git("log", "-1", "--format=%b", commit)
-        title = await utils.git("log", "-1", "--format=%s", commit)
-
+    for idx, (commit, title, message) in enumerate(commit_infos):
         changeids = CHANGEID_RE.findall(message)
         if not changeids:
             console.print(
