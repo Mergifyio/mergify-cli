@@ -68,23 +68,6 @@ class GitMock:
 
         # Base commit SHA
         self.mock("merge-base", "--fork-point", "origin/main", output="base_commit_sha")
-        # Commit message
-        self.mock(
-            "log",
-            "-1",
-            "--format=%b",
-            commit["sha"],
-            output=f"{commit['message']}\n\nChange-Id: {commit['change_id']}",
-        )
-        # Commit title
-        self.mock("log", "-1", "--format=%s", commit["sha"], output=commit["title"])
-        # List of commit SHAs
-        self.mock(
-            "log",
-            "--format=%H",
-            "base_commit_sha..current-branch",
-            output="\n".join(c["sha"] for c in reversed(self._commits)),
-        )
         self.mock("branch", "mergify-cli-tmp", commit["sha"], output="")
         self.mock("branch", "-D", "mergify-cli-tmp", output="")
         self.mock(
@@ -93,6 +76,20 @@ class GitMock:
             "origin",
             f"mergify-cli-tmp:current-branch/{commit['change_id']}",
             output="",
+        )
+
+    def finalize(self) -> None:
+        # Register batch log mock
+        records = []
+        for c in self._commits:
+            body = f"{c['message']}\n\nChange-Id: {c['change_id']}"
+            records.append(f"{c['sha']}\x00{c['title']}\x00{body}")
+        self.mock(
+            "log",
+            "--reverse",
+            "--format=%H%x00%s%x00%b%x1e",
+            "base_commit_sha..current-branch",
+            output="\x1e".join(records) + "\x1e" if records else "",
         )
 
 

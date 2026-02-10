@@ -76,6 +76,7 @@ async def test_stack_create(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf51",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls
     respx_mock.get("/user").respond(200, json={"login": "author"})
@@ -186,6 +187,7 @@ async def test_stack_create_single_pull(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls
     respx_mock.get("/user").respond(200, json={"login": "author"})
@@ -244,6 +246,7 @@ async def test_stack_update_no_rebase(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
@@ -330,6 +333,7 @@ async def test_stack_update(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
@@ -416,6 +420,7 @@ async def test_stack_update_keep_title_and_body(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
+    git_mock.finalize()
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
