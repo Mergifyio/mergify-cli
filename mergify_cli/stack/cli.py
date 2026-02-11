@@ -16,6 +16,7 @@ from mergify_cli.stack import (
 )
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import new as stack_new_mod
+from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import session as stack_session_mod
 from mergify_cli.stack import setup as stack_setup_mod
@@ -493,4 +494,20 @@ async def list_cmd(
         token=ctx.obj["token"],
         trunk=trunk,
         output_json=output_json,
+    )
+
+
+@stack.command(name="open", help="Open a PR from the stack in the browser")
+@click.pass_context
+@click.argument("commit", required=False, default=None)
+@utils.run_with_asyncio
+async def open_cmd(
+    ctx: click.Context,
+    *,
+    commit: str | None,
+) -> None:
+    await stack_open_mod.stack_open(
+        github_server=ctx.obj["github_server"],
+        token=ctx.obj["token"],
+        commit=commit,
     )
