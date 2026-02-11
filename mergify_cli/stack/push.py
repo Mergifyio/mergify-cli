@@ -34,6 +34,8 @@ if typing.TYPE_CHECKING:
 
 DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
 
+MAX_CONCURRENT_API_CALLS = 5
+
 
 @dataclasses.dataclass
 class LocalBranchInvalidError(Exception):
@@ -75,6 +77,77 @@ async def push_branches(
     ]
     if refspecs:
         await utils.git("push", "-f", remote, *refspecs)
+
+
+@dataclasses.dataclass
+class ChangeTask:
+    index: int
+    change: changes.LocalChange
+    depends_on_index: int | None
+    pull_ready: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
+    resolved_pull: github_types.PullRequest | None = None
+
+
+def _build_change_tasks(
+    local_changes: list[changes.LocalChange],
+) -> list[ChangeTask]:
+    tasks: list[ChangeTask] = []
+    last_pull_index: int | None = None
+
+    for i, change in enumerate(local_changes):
+        task = ChangeTask(
+            index=i,
+            change=change,
+            depends_on_index=last_pull_index,
+        )
+
+        # For changes with existing pulls (update/skip-*), signal immediately
+        if change.action != "create" and change.pull is not None:
+            task.resolved_pull = change.pull
+            task.pull_ready.set()
+        elif change.action not in {"create", "update"}:
+            # skip-* without pull - no one should wait on this
+            task.pull_ready.set()
+
+        if change.pull is not None or change.action == "create":
+            last_pull_index = i
+
+        tasks.append(task)
+
+    return tasks
+
+
+async def _process_change_task(
+    task: ChangeTask,
+    tasks: list[ChangeTask],
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    *,
+    create_as_draft: bool,
+    keep_pull_request_title_and_body: bool,
+    sem: asyncio.Semaphore,
+) -> None:
+    # Wait for dependency's PR to be ready
+    depends_on_pull: github_types.PullRequest | None = None
+    if task.depends_on_index is not None:
+        dep_task = tasks[task.depends_on_index]
+        await dep_task.pull_ready.wait()
+        depends_on_pull = dep_task.resolved_pull
+
+    async with sem:
+        pull = await create_or_update_pr(
+            client,
+            user=user,
+            repo=repo,
+            change=task.change,
+            depends_on=depends_on_pull,
+            create_as_draft=create_as_draft,
+            keep_pull_request_title_and_body=keep_pull_request_title_and_body,
+        )
+    task.change.pull = pull
+    task.resolved_pull = pull
+    task.pull_ready.set()
 
 
 # TODO(charly): fix code to conform to linter (number of arguments, local
@@ -190,31 +263,37 @@ async def stack_push(
 
         console.log("Updating and/or creating stacked pull requests:", style="green")
 
-        pulls_to_comment: list[github_types.PullRequest] = []
-        for change in planned_changes.locals:
-            depends_on = pulls_to_comment[-1] if pulls_to_comment else None
+        tasks = _build_change_tasks(planned_changes.locals)
+        sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
-            if change.action in {"create", "update"}:
-                pull = await create_or_update_pr(
+        await asyncio.gather(
+            *(
+                _process_change_task(
+                    task,
+                    tasks,
                     client,
-                    user=user,
-                    repo=repo,
-                    change=change,
-                    depends_on=depends_on,
+                    user,
+                    repo,
                     create_as_draft=create_as_draft,
                     keep_pull_request_title_and_body=keep_pull_request_title_and_body,
+                    sem=sem,
                 )
-                change.pull = pull
+                for task in tasks
+                if task.change.action in {"create", "update"}
+            ),
+        )
 
-            if change.pull:
-                pulls_to_comment.append(change.pull)
-
+        for task in tasks:
             console.log(
-                change.get_log_from_local_change(
+                task.change.get_log_from_local_change(
                     dry_run=False,
                     create_as_draft=create_as_draft,
                 ),
             )
+
+        pulls_to_comment = [
+            task.change.pull for task in tasks if task.change.pull is not None
+        ]
 
         with console.status("Updating comments..."):
             await create_or_update_comments(client, user, repo, pulls_to_comment)
