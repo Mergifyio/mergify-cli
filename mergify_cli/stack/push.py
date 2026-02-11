@@ -336,6 +336,39 @@ class StackComment:
         return comment["body"].startswith(StackComment.STACK_COMMENT_FIRST_LINE)
 
 
+async def _update_comment_for_pull(
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    pull: github_types.PullRequest,
+    stack_comment: StackComment,
+    total_pulls: int,
+    sem: asyncio.Semaphore,
+) -> None:
+    new_body = stack_comment.body(pull)
+
+    async with sem:
+        r = await client.get(
+            f"/repos/{user}/{repo}/issues/{pull['number']}/comments",
+        )
+        comments = typing.cast("list[github_types.Comment]", r.json())
+        for comment in comments:
+            if StackComment.is_stack_comment(comment):
+                if comment["body"] != new_body:
+                    await client.patch(comment["url"], json={"body": new_body})
+                return
+
+        # NOTE(charly): don't create a stack comment if there is only one
+        # pull, it's not a stack
+        if total_pulls == 1:
+            return
+
+        await client.post(
+            f"/repos/{user}/{repo}/issues/{pull['number']}/comments",
+            json={"body": new_body},
+        )
+
+
 async def create_or_update_comments(
     client: httpx.AsyncClient,
     user: str,
@@ -343,30 +376,23 @@ async def create_or_update_comments(
     pulls: list[github_types.PullRequest],
 ) -> None:
     stack_comment = StackComment(pulls)
+    sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
-    for pull in pulls:
-        if pull["merged_at"]:
-            continue
-
-        new_body = stack_comment.body(pull)
-
-        r = await client.get(f"/repos/{user}/{repo}/issues/{pull['number']}/comments")
-        comments = typing.cast("list[github_types.Comment]", r.json())
-        for comment in comments:
-            if StackComment.is_stack_comment(comment):
-                if comment["body"] != new_body:
-                    await client.patch(comment["url"], json={"body": new_body})
-                break
-        else:
-            # NOTE(charly): dont't create a stack comment if there is only one
-            # pull, it's not a stack
-            if len(pulls) == 1:
-                continue
-
-            await client.post(
-                f"/repos/{user}/{repo}/issues/{pull['number']}/comments",
-                json={"body": new_body},
+    await asyncio.gather(
+        *(
+            _update_comment_for_pull(
+                client,
+                user,
+                repo,
+                pull,
+                stack_comment,
+                len(pulls),
+                sem,
             )
+            for pull in pulls
+            if not pull["merged_at"]
+        ),
+    )
 
 
 async def delete_stack(
