@@ -10,8 +10,8 @@ from xml.etree import ElementTree as ET  # noqa: S405
 from opentelemetry.sdk import resources
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
-from opentelemetry.semconv._incubating.attributes import (
-    cicd_attributes,  # noqa: PLC2701
+from opentelemetry.semconv._incubating.attributes import (  # noqa: PLC2701
+    cicd_attributes,
 )
 from opentelemetry.semconv._incubating.attributes import vcs_attributes  # noqa: PLC2701
 from opentelemetry.semconv.trace import SpanAttributes
