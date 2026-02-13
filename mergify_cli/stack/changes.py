@@ -262,7 +262,7 @@ async def get_changes(
                 style="red",
             )
             console.print(
-                "Did you run `mergify stack --setup` for this repository?",
+                "Did you run `mergify stack setup` for this repository?",
             )
             # TODO(sileht): we should raise an Exception and exit in main program
             sys.exit(1)
