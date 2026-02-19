@@ -109,7 +109,7 @@ def test_detect_base_merge_queue_override(
 ) -> None:
     event_data = {
         "pull_request": {
-            "title": "merge-queue: Merge group",
+            "title": "merge queue: embarking #1 together",
             "body": "```yaml\nchecking_base_sha: xyz789\n```",
             "base": {"sha": "abc123"},
         },

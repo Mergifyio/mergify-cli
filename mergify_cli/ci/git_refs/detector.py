@@ -56,7 +56,7 @@ def _detect_base_from_merge_queue_payload(ev: dict[str, typing.Any]) -> str | No
     title = pr.get("title") or ""
     if not isinstance(title, str):
         return None
-    if not title.startswith("merge-queue: "):
+    if not title.startswith("merge queue: "):
         return None
     body = pr.get("body") or ""
     content = _yaml_docs_from_fenced_blocks(body)
