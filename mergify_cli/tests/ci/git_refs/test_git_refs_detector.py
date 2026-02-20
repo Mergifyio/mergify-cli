@@ -143,47 +143,6 @@ def test_detect_base_no_info(
         detector.detect()
 
 
-def test_yaml_docs_from_fenced_blocks_valid() -> None:
-    body = """Some text
-```yaml
----
-checking_base_sha: xyz789
-pull_requests: [{"number": 1}]
-previous_failed_batches: []
-...
-```
-More text"""
-
-    result = detector._yaml_docs_from_fenced_blocks(body)
-
-    assert result == detector.MergeQueueMetadata(
-        {
-            "checking_base_sha": "xyz789",
-            "pull_requests": [{"number": 1}],
-            "previous_failed_batches": [],
-        },
-    )
-
-
-def test_yaml_docs_from_fenced_blocks_no_yaml() -> None:
-    body = "No yaml here"
-
-    result = detector._yaml_docs_from_fenced_blocks(body)
-
-    assert result is None
-
-
-def test_yaml_docs_from_fenced_blocks_empty_yaml() -> None:
-    body = """Some text
-```yaml
-```
-More text"""
-
-    result = detector._yaml_docs_from_fenced_blocks(body)
-
-    assert result is None
-
-
 def test_detect_unhandled_event(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,

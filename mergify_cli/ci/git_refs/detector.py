@@ -5,9 +5,8 @@ import os
 import pathlib
 import typing
 
-import yaml
-
 from mergify_cli import utils
+from mergify_cli.ci.queue import metadata as queue_metadata
 from mergify_cli.ci.scopes import exceptions
 
 
@@ -19,47 +18,8 @@ class BaseNotFoundError(exceptions.ScopesError):
     pass
 
 
-class MergeQueuePullRequest(typing.TypedDict):
-    number: int
-
-
-class MergeQueueBatchFailed(typing.TypedDict):
-    draft_pr_number: int
-    checked_pull_request: list[int]
-
-
-class MergeQueueMetadata(typing.TypedDict):
-    checking_base_sha: str
-    pull_requests: list[MergeQueuePullRequest]
-    previous_failed_batches: list[MergeQueueBatchFailed]
-
-
-def _yaml_docs_from_fenced_blocks(body: str) -> MergeQueueMetadata | None:
-    lines = []
-    found = False
-    for line in body.splitlines():
-        if line.startswith("```yaml"):
-            found = True
-        elif found:
-            if line.startswith("```"):
-                break
-            lines.append(line)
-    if lines:
-        return typing.cast("MergeQueueMetadata", yaml.safe_load("\n".join(lines)))
-    return None
-
-
 def _detect_base_from_merge_queue_payload(ev: dict[str, typing.Any]) -> str | None:
-    pr = ev.get("pull_request")
-    if not isinstance(pr, dict):
-        return None
-    title = pr.get("title") or ""
-    if not isinstance(title, str):
-        return None
-    if not title.startswith("merge queue: "):
-        return None
-    body = pr.get("body") or ""
-    content = _yaml_docs_from_fenced_blocks(body)
+    content = queue_metadata.extract_from_event(ev)
     if content:
         return content["checking_base_sha"]
     return None
@@ -132,14 +92,6 @@ class References:
             fh.write(f"{GITHUB_ACTIONS_HEAD_OUTPUT_NAME}={self.head}\n")
 
 
-PULL_REQUEST_EVENTS = {
-    "pull_request",
-    "pull_request_review",
-    "pull_request_review_comment",
-    "pull_request_target",
-}
-
-
 def detect() -> References:
     try:
         event_name, event = utils.get_github_event()
@@ -147,7 +99,7 @@ def detect() -> References:
         # fallback to last commit
         return References("HEAD^", "HEAD", "fallback_last_commit")
     else:
-        if event_name in PULL_REQUEST_EVENTS:
+        if event_name in queue_metadata.PULL_REQUEST_EVENTS:
             head = _detect_head_from_event(event) or "HEAD"
             # 0) merge-queue PR override
             mq_sha = _detect_base_from_merge_queue_payload(event)
