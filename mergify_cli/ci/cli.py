@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
+import pathlib
+import uuid
+
 import click
 
 from mergify_cli import utils
 from mergify_cli.ci import detector
 from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
+from mergify_cli.ci.queue import metadata as queue_metadata
 from mergify_cli.ci.scopes import cli as scopes_cli
 from mergify_cli.ci.scopes import exceptions as scopes_exc
 
@@ -325,3 +331,26 @@ async def scopes_send(
         pull_request,
         scopes,
     )
+
+
+@ci.command(
+    help="""Output merge queue batch metadata from the current pull request event""",
+    short_help="""Output merge queue batch metadata""",
+)
+def queue_info() -> None:
+    metadata = queue_metadata.detect()
+    if metadata is None:
+        raise click.ClickException(
+            "Not running in a merge queue context. "
+            "This command must be run on a merge queue draft pull request.",
+        )
+
+    click.echo(json.dumps(metadata, indent=2))
+
+    gha = os.environ.get("GITHUB_OUTPUT")
+    if gha:
+        delimiter = f"ghadelimiter_{uuid.uuid4()}"
+        with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
+            fh.write(
+                f"queue_metadata<<{delimiter}\n{json.dumps(metadata)}\n{delimiter}\n",
+            )

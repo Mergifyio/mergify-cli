@@ -513,3 +513,62 @@ def test_git_refs(
 head=xyz987
 """
     assert content == expected
+
+
+def test_queue_info(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {
+        "pull_request": {
+            "title": "merge queue: embarking #1 and #2 together",
+            "body": "```yaml\n---\nchecking_base_sha: xyz789\npull_requests:\n  - number: 1\n  - number: 2\nprevious_failed_batches: []\n...\n```",
+            "base": {"sha": "abc123"},
+        },
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    output_file = tmp_path / "github_output"
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.queue_info, [])
+    assert result.exit_code == 0, result.output
+
+    output = json.loads(result.output)
+    assert output["checking_base_sha"] == "xyz789"
+    assert output["pull_requests"] == [{"number": 1}, {"number": 2}]
+    assert output["previous_failed_batches"] == []
+
+    gha_content = output_file.read_text()
+    assert "queue_metadata<<ghadelimiter_" in gha_content
+    lines = gha_content.splitlines()
+    metadata_json = json.loads(lines[1])
+    assert metadata_json["checking_base_sha"] == "xyz789"
+
+
+def test_queue_info_not_merge_queue(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {
+        "pull_request": {
+            "title": "feat: add something",
+            "body": "Some description",
+            "base": {"sha": "abc123"},
+        },
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.queue_info, [])
+    assert result.exit_code == 1
+    assert "Not running in a merge queue context" in result.output
