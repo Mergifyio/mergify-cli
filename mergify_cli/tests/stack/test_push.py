@@ -492,6 +492,116 @@ async def test_stack_update_keep_title_and_body(
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_dry_run_does_not_rebase(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+    git_mock.mock("rev-list", "--count", "HEAD..origin/main", output="0")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+
+    with pytest.raises(SystemExit, match="0"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=True,
+            trunk=("origin", "main"),
+        )
+
+    # Dry-run never rebases.
+    assert not git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
+
+    # No branches are pushed.
+    assert not git_mock.has_been_called_with(
+        "push",
+        "-f",
+        "origin",
+        "commit1_sha:refs/heads/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_dry_run_warns_when_behind(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+    git_mock.mock("rev-list", "--count", "HEAD..origin/main", output="3")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+
+    with pytest.raises(SystemExit, match="0"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=True,
+            trunk=("origin", "main"),
+        )
+
+    # Dry-run never rebases.
+    assert not git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_dry_run_skip_rebase(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+
+    with pytest.raises(SystemExit, match="0"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=True,
+            next_only=False,
+            branch_prefix="",
+            dry_run=True,
+            trunk=("origin", "main"),
+        )
+
+    # Rebase check is skipped when --skip-rebase is passed.
+    assert not git_mock.has_been_called_with("rev-list", "--count", "HEAD..origin/main")
+    assert not git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
 async def test_stack_on_destination_branch_raises_an_error(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,

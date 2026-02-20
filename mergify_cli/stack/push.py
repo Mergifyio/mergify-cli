@@ -205,15 +205,28 @@ async def stack_push(
 
     stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
 
-    if not dry_run:
-        if skip_rebase:
-            console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
-        else:
-            with console.status(
-                f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
-            ):
-                await utils.git("pull", "--rebase", remote, base_branch)
-            console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
+    if dry_run:
+        if not skip_rebase:
+            # Check if branch needs rebasing without mutating the tree.
+            behind = await utils.git(
+                "rev-list",
+                "--count",
+                f"HEAD..{remote}/{base_branch}",
+            )
+            if behind != "0":
+                console.log(
+                    f"[orange]branch `{dest_branch}` is behind `{remote}/{base_branch}` "
+                    f"by {behind} {'commit' if behind == '1' else 'commits'}, "
+                    f"commit SHAs may differ after rebase[/]",
+                )
+    elif skip_rebase:
+        console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
+    else:
+        with console.status(
+            f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
+        ):
+            await utils.git("pull", "--rebase", remote, base_branch)
+        console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
 
     base_commit_sha = await utils.git(
         "merge-base",
