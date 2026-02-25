@@ -521,6 +521,7 @@ def test_queue_info(
 ) -> None:
     event_data = {
         "pull_request": {
+            "number": 10,
             "title": "merge queue: embarking #1 and #2 together",
             "body": "```yaml\n---\nchecking_base_sha: xyz789\npull_requests:\n  - number: 1\n  - number: 2\nprevious_failed_batches: []\n...\n```",
             "base": {"sha": "abc123"},
@@ -557,6 +558,7 @@ def test_queue_info_not_merge_queue(
 ) -> None:
     event_data = {
         "pull_request": {
+            "number": 5,
             "title": "feat: add something",
             "body": "Some description",
             "base": {"sha": "abc123"},
