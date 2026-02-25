@@ -2,6 +2,11 @@ extends: .github
 shared:
   check_runs: &CheckRuns
     - check-success=ci-gate
+  default_review_cond: &DefaultReviewCond
+    - "#approved-reviews-by>=2"
+    - author = dependabot[bot]
+    - author = renovate[bot]
+    - author = mergify-ci-bot
 
 queue_rules:
   - name: dependencies
@@ -38,9 +43,10 @@ pull_request_rules:
       - -merged
       - -closed
       - and: *CheckRuns
-      - "#approved-reviews-by=0"
       - "#changes-requested-reviews-by=0"
-      - "review-requested!=@devs"
+      - review-requested!=@devs
+      - not:
+          or: *DefaultReviewCond
     actions:
       request_reviews:
         teams:
@@ -56,11 +62,7 @@ merge_protections:
   - name: 👀 Review Requirements
     if: []
     success_conditions:
-      - or:
-        - "#approved-reviews-by>=2"
-        - author = dependabot[bot]
-        - author = renovate[bot]
-        - author = mergify-ci-bot
+      - or: *DefaultReviewCond
 
 
 merge_queue:
