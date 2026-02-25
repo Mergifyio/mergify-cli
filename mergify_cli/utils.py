@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-import json
 import os
 import pathlib
 import typing
@@ -28,6 +27,7 @@ import httpx
 
 from mergify_cli import VERSION
 from mergify_cli import console
+from mergify_cli.ci import github_event
 
 
 if typing.TYPE_CHECKING:
@@ -312,15 +312,16 @@ class GitHubEventNotFoundError(Exception):
     pass
 
 
-def get_github_event() -> tuple[str, typing.Any]:
+def get_github_event() -> tuple[str, github_event.GitHubEvent]:
     event_name = os.environ.get("GITHUB_EVENT_NAME")
     if not event_name:
         raise GitHubEventNotFoundError
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if event_path and pathlib.Path(event_path).is_file():
         try:
-            with pathlib.Path(event_path).open("r", encoding="utf-8") as f:
-                return event_name, json.load(f)
+            return event_name, github_event.GitHubEvent.model_validate_json(
+                pathlib.Path(event_path).read_text(encoding="utf-8"),
+            )
         except FileNotFoundError:
             pass
     raise GitHubEventNotFoundError

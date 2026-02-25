@@ -84,6 +84,7 @@ def test_detect_base_from_pull_request_event_path(
 ) -> None:
     event_data = {
         "pull_request": {
+            "number": 1,
             "base": {"sha": "abc123"},
             "head": {"sha": "xyz987"},
         },
@@ -109,6 +110,7 @@ def test_detect_base_merge_queue_override(
 ) -> None:
     event_data = {
         "pull_request": {
+            "number": 1,
             "title": "merge queue: embarking #1 together",
             "body": "```yaml\nchecking_base_sha: xyz789\n```",
             "base": {"sha": "abc123"},
@@ -134,6 +136,35 @@ def test_detect_base_no_info(
     event_file.write_text(json.dumps(event_data))
 
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    with pytest.raises(
+        detector.BaseNotFoundError,
+        match="Could not detect base SHA",
+    ):
+        detector.detect()
+
+
+def test_detect_no_github_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    result = detector.detect()
+
+    assert result == detector.References("HEAD^", "HEAD", "fallback_last_commit")
+
+
+def test_detect_push_event_no_info(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data: dict[str, str] = {}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
 
     with pytest.raises(

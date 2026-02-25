@@ -57,6 +57,7 @@ def test_detect_merge_queue(
 ) -> None:
     event_data = {
         "pull_request": {
+            "number": 10,
             "title": "merge queue: embarking #1 and #2 together",
             "body": "```yaml\n---\nchecking_base_sha: xyz789\npull_requests:\n  - number: 1\n  - number: 2\nprevious_failed_batches:\n  - draft_pr_number: 5\n    checked_pull_requests:\n      - 1\n      - 3\n...\n```",
             "base": {"sha": "abc123"},
@@ -78,12 +79,52 @@ def test_detect_merge_queue(
     ]
 
 
+def test_detect_merge_queue_no_body(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    event_data = {
+        "pull_request": {
+            "number": 10,
+            "title": "merge queue: embarking #1 together",
+        },
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    assert metadata.detect() is None
+
+
+def test_detect_merge_queue_body_without_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    event_data = {
+        "pull_request": {
+            "number": 10,
+            "title": "merge queue: embarking #1 together",
+            "body": "No yaml metadata here",
+        },
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    assert metadata.detect() is None
+
+
 def test_detect_not_merge_queue(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
     event_data = {
         "pull_request": {
+            "number": 5,
             "title": "feat: add something",
             "body": "Some description",
             "base": {"sha": "abc123"},
