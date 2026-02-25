@@ -1,0 +1,46 @@
+{
+  "ref": "refs/heads/main",
+  "before": "773db6b5c5f77d0c70c75e6dacef1684cb03495f",
+  "after": "10068d193546082d802676bb310a570d0898e061",
+  "created": false,
+  "deleted": false,
+  "forced": false,
+  "pusher": {
+    "name": "mergify[bot]",
+    "email": "37929162+mergify[bot]@users.noreply.github.com"
+  },
+  "repository": {
+    "id": 368096773,
+    "node_id": "MDEwOlJlcG9zaXRvcnkzNjgwOTY3NzM=",
+    "name": "mergify-cli",
+    "full_name": "Mergifyio/mergify-cli",
+    "private": false,
+    "owner": {
+      "login": "Mergifyio",
+      "id": 37838584,
+      "node_id": "MDEyOk9yZ2FuaXphdGlvbjM3ODM4NTg0",
+      "type": "Organization",
+      "site_admin": false
+    },
+    "html_url": "https://github.com/Mergifyio/mergify-cli",
+    "description": "Mergify CLI tool",
+    "fork": false,
+    "url": "https://api.github.com/repos/Mergifyio/mergify-cli",
+    "default_branch": "main",
+    "visibility": "public"
+  },
+  "head_commit": {
+    "id": "10068d193546082d802676bb310a570d0898e061",
+    "message": "chore(deps): update dependency uv to v0.10.6",
+    "timestamp": "2026-02-25T07:34:33Z",
+    "author": {
+      "name": "renovate[bot]",
+      "email": "29139614+renovate[bot]@users.noreply.github.com"
+    }
+  },
+  "sender": {
+    "login": "mergify[bot]",
+    "id": 37929162,
+    "type": "Bot"
+  }
+}

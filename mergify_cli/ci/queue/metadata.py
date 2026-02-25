@@ -8,6 +8,10 @@ import yaml
 from mergify_cli import utils
 
 
+if typing.TYPE_CHECKING:
+    from mergify_cli.ci import github_event
+
+
 class MergeQueuePullRequest(typing.TypedDict):
     number: int
 
@@ -46,23 +50,20 @@ def _yaml_docs_from_fenced_blocks(body: str) -> MergeQueueMetadata | None:
     return None
 
 
-def extract_from_event(ev: dict[str, typing.Any]) -> MergeQueueMetadata | None:
-    pr = ev.get("pull_request")
-    if not isinstance(pr, dict):
+def extract_from_event(ev: github_event.GitHubEvent) -> MergeQueueMetadata | None:
+    if ev.pull_request is None:
         return None
-    title = pr.get("title") or ""
-    if not isinstance(title, str):
+    if not ev.pull_request.title or not ev.pull_request.title.startswith(
+        "merge queue: ",
+    ):
         return None
-    if not title.startswith("merge queue: "):
-        return None
-    body = pr.get("body")
-    if not body:
+    if not ev.pull_request.body:
         click.echo(
             "WARNING: MQ pull request without body, skipping metadata extraction",
             err=True,
         )
         return None
-    ref = _yaml_docs_from_fenced_blocks(body)
+    ref = _yaml_docs_from_fenced_blocks(ev.pull_request.body)
     if ref is None:
         click.echo(
             "WARNING: MQ pull request body without Mergify metadata, skipping metadata extraction",
