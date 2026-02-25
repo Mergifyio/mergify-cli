@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import pathlib
 import re
@@ -84,11 +83,13 @@ def get_head_ref_name() -> str | None:
 
 def get_github_actions_head_sha() -> str | None:
     if os.getenv("GITHUB_EVENT_NAME") == "pull_request":
-        # NOTE(leo): we want the head sha of pull request
-        event_raw_path = os.getenv("GITHUB_EVENT_PATH")
-        if event_raw_path and ((event_path := pathlib.Path(event_raw_path)).is_file()):
-            event = json.loads(event_path.read_bytes())
-            return str(event["pull_request"]["head"]["sha"])
+        try:
+            _, event = utils.get_github_event()
+        except utils.GitHubEventNotFoundError:
+            pass
+        else:
+            if event.pull_request and event.pull_request.head:
+                return event.pull_request.head.sha
     return os.getenv("GITHUB_SHA")
 
 
@@ -193,10 +194,9 @@ def get_github_pull_request_number() -> int | None:
                 _, event = utils.get_github_event()
             except utils.GitHubEventNotFoundError:
                 return None
-            pr = event.get("pull_request")
-            if not isinstance(pr, dict):
+            if event.pull_request is None:
                 return None
-            return typing.cast("int", pr["number"])
+            return event.pull_request.number
 
         case _:
             return None
