@@ -3,7 +3,7 @@
 # This file is managed by mergify-cli and will be auto-upgraded.
 # Do not modify - add custom logic to the wrapper file instead.
 #
-#  Copyright © 2021-2024 Mergify SAS
+#  Copyright © 2021-2026 Mergify SAS
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
