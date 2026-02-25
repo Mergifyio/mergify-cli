@@ -50,8 +50,8 @@ def extract_from_event(ev: dict[str, typing.Any]) -> MergeQueueMetadata | None:
     pr = ev.get("pull_request")
     if not isinstance(pr, dict):
         return None
-    title = pr.get("title") or ""
-    if not isinstance(title, str):
+    title = pr.get("title")
+    if not title:
         return None
     if not title.startswith("merge queue: "):
         return None
