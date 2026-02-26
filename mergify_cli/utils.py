@@ -308,6 +308,43 @@ def run_with_asyncio[**P, R](
     return wrapper
 
 
+async def get_default_token() -> str | None:
+    token = os.environ.get("MERGIFY_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        try:
+            token = await run_command("gh", "auth", "token")
+        except CommandError:
+            console.print(
+                "error: please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, "
+                "or make sure that gh client is installed and you are authenticated",
+                style="red",
+            )
+            return None
+    return token
+
+
+async def get_default_repository() -> str | None:
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if repo:
+        return repo
+
+    try:
+        remote_url = await git(
+            "config",
+            "--get",
+            "remote.origin.url",
+        )
+    except CommandError:
+        return None
+
+    try:
+        user, repo_name = get_slug(remote_url)
+    except (ValueError, IndexError):
+        return None
+
+    return f"{user}/{repo_name}"
+
+
 class GitHubEventNotFoundError(Exception):
     pass
 
