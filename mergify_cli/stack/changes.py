@@ -203,6 +203,11 @@ class Changes:
     locals: list[LocalChange] = dataclasses.field(default_factory=list)
     orphans: list[OrphanChange] = dataclasses.field(default_factory=list)
 
+    def replace_local_action(self, old: ActionT, new: ActionT) -> None:
+        for change in self.locals:
+            if change.action == old:
+                change.action = new
+
 
 def display_plan(
     changes: Changes,

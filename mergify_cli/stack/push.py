@@ -215,6 +215,20 @@ async def stack_push(
                 await utils.git("pull", "--rebase", remote, base_branch)
             console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
 
+    rebase_required = False
+    if dry_run and not skip_rebase:
+        commits_behind = int(
+            await utils.git("rev-list", "--count", f"HEAD..{remote}/{base_branch}"),
+        )
+        rebase_required = commits_behind > 0
+
+        if rebase_required:
+            console.log(
+                f"[orange]branch `{dest_branch}` is behind `{remote}/{base_branch}` "
+                f"by {commits_behind} {'commit' if commits_behind == 1 else 'commits'}, "
+                f"commit SHAs will differ after rebase[/]",
+            )
+
     base_commit_sha = await utils.git(
         "merge-base",
         "--fork-point",
@@ -248,6 +262,12 @@ async def stack_push(
                 only_update_existing_pulls=only_update_existing_pulls,
                 next_only=next_only,
             )
+
+        if rebase_required:
+            # If the branch is behind, we know for sure that all the existing
+            # pull requests will need to be updated, so we can directly plan
+            # them as "update" instead of "skip-up-to-date".
+            planned_changes.replace_local_action(old="skip-up-to-date", new="update")
 
         changes.display_plan(
             planned_changes,
