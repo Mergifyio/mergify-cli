@@ -218,7 +218,8 @@ def git_refs() -> None:
 @click.option(
     "--config",
     "config_path",
-    type=click.Path(),
+    type=click.Path(dir_okay=False),
+    envvar="MERGIFY_CONFIG_PATH",
     default=detector.get_mergify_config_path,
     help="Path to YAML config file.",
 )
@@ -242,9 +243,17 @@ def scopes(
     head: str | None = None,
     base: str | None = None,
 ) -> None:
+    # Empty envvar (MERGIFY_CONFIG_PATH="") should fall back to autodetect
+    if config_path is not None and not config_path:
+        config_path = detector.get_mergify_config_path()
+
     if config_path is None:
         locations = ", ".join(detector.MERGIFY_CONFIG_PATHS)
         msg = f"Mergify configuration file not found. Looked in: {locations}"
+        raise click.ClickException(msg)
+
+    if not pathlib.Path(config_path).is_file():
+        msg = f"Config file '{config_path}' does not exist."
         raise click.ClickException(msg)
 
     if base or head:
