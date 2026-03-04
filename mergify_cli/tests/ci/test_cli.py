@@ -490,6 +490,25 @@ def test_scopes_send(
     assert sorted(payload["scopes"]) == ["backend", "foobar", "frontend"]
 
 
+def test_scopes_empty_mergify_config_env_uses_autodetection(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When MERGIFY_CONFIG is set but empty, the config should be auto-detected."""
+    config_file = tmp_path / ".mergify.yml"
+    config_file.write_text("scopes:\n  source:\n    manual:\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MERGIFY_CONFIG", "")
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.scopes, ["--base", "old", "--head", "new"])
+
+    # The command found the auto-detected config and ran (source is manual so exit 1)
+    assert result.exit_code == 1
+    assert "source `manual` has been set" in result.output
+
+
 def test_git_refs(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

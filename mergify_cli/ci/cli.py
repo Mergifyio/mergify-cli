@@ -218,7 +218,8 @@ def git_refs() -> None:
 @click.option(
     "--config",
     "config_path",
-    type=click.Path(),
+    type=click.Path(exists=True, dir_okay=False),
+    envvar="MERGIFY_CONFIG",
     default=detector.get_mergify_config_path,
     help="Path to YAML config file.",
 )
