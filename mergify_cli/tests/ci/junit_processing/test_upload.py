@@ -125,5 +125,4 @@ async def test_junit_upload_http_error_console(
         "• ❌ Error uploading spans: Failed to export span batch code: 422, reason:"
         in captured.out
     )
-    # Open Telemetry does not render JSON the same way between Windows and Linux
     assert "Not enabled on this repository" in captured.out
