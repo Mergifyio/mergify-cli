@@ -17,6 +17,11 @@ Upload and analyze CI results to get better visibility into your CI pipeline.
 Learn more about [CI Insights in the
 documentation](https://docs.mergify.com/ci-insights/).
 
+### Scheduled Freezes
+
+Create and manage scheduled freezes to temporarily halt merging of pull requests
+matching specific conditions.
+
 ## Installation
 
 ```shell
@@ -34,6 +39,9 @@ mergify stack --help
 
 # Upload CI results
 mergify ci --help
+
+# Manage scheduled freezes
+mergify freeze --help
 ```
 
 ## Contributing
