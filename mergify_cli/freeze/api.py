@@ -117,12 +117,8 @@ async def delete_freeze(
     *,
     delete_reason: str | None = None,
 ) -> None:
-    url = f"/v1/repos/{repository}/scheduled_freeze/{freeze_id}"
+    url = f"/v1/repos/{repository}/scheduled_freeze/{freeze_id}/delete"
+    payload: dict[str, str] = {}
     if delete_reason is not None:
-        await client.request(
-            "DELETE",
-            url,
-            json={"delete_reason": delete_reason},
-        )
-    else:
-        await client.delete(url)
+        payload["delete_reason"] = delete_reason
+    await client.post(url, json=payload)
