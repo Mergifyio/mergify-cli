@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 import click
+import httpx
 
 from mergify_cli import VERSION
 from mergify_cli.ci import cli as ci_cli_mod
@@ -69,4 +70,8 @@ def main() -> None:
         print(f"utf8_mode={int(sys.flags.utf8_mode)}")  # noqa: T201
         print("✅")  # noqa: T201
 
-    cli()
+    try:
+        cli()
+    except httpx.HTTPStatusError:
+        # Error details already printed by check_for_status
+        raise SystemExit(1) from None
