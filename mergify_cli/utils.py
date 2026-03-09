@@ -53,12 +53,28 @@ async def check_for_status(response: httpx.Response) -> None:
         return
 
     await response.aread()
-    console.print(f"url: {response.request.url}", style="red")
-    console.print(f"data: {response.request.content.decode()}", style="red")
+
+    detail = response.text
+    try:
+        data = response.json()
+        if isinstance(data, dict) and "detail" in data:
+            detail = data["detail"]
+    except ValueError:
+        pass
+
     console.print(
-        f"HTTPError {response.status_code}: {response.text}",
+        f"error: API error (HTTP {response.status_code}): {detail}",
         style="red",
     )
+    console.print(f"url: {response.request.url}", style="red")
+
+    if is_debug():
+        console.print(
+            f"request data: {response.request.content.decode('utf-8', errors='replace')}",
+            style="red",
+        )
+        console.print(f"response body: {response.text}", style="red")
+
     response.raise_for_status()
 
 
