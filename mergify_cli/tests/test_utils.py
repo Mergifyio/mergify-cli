@@ -18,8 +18,10 @@ import json
 from typing import TYPE_CHECKING
 from unittest import mock
 
+import httpx
 import pytest
 
+from mergify_cli import console
 from mergify_cli import utils
 
 
@@ -157,3 +159,99 @@ def test_get_mergify_http_client() -> None:
     assert client.headers["Authorization"] == "Bearer test-token"
     assert client.headers["Accept"] == "application/json"
     assert client.base_url == "https://api.mergify.com"
+
+
+class TestCheckForStatus:
+    async def test_success_does_nothing(self) -> None:
+        request = httpx.Request("GET", "https://api.mergify.com/v1/repos/owner/repo")
+        response = httpx.Response(200, request=request)
+        await utils.check_for_status(response)
+
+    async def test_error_with_json_detail(self) -> None:
+        request = httpx.Request(
+            "GET",
+            "https://api.mergify.com/v1/repos/jd/home/scheduled_freeze",
+        )
+        response = httpx.Response(
+            404,
+            json={"detail": "Not Found"},
+            request=request,
+        )
+        with (
+            mock.patch.object(console, "print") as mock_print,
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            await utils.check_for_status(response)
+
+        mock_print.assert_any_call(
+            "error: API error (HTTP 404): Not Found",
+            style="red",
+        )
+        mock_print.assert_any_call(
+            "url: https://api.mergify.com/v1/repos/jd/home/scheduled_freeze",
+            style="red",
+        )
+
+    async def test_error_with_plain_text(self) -> None:
+        request = httpx.Request("GET", "https://api.mergify.com/v1/test")
+        response = httpx.Response(
+            500,
+            text="Internal Server Error",
+            request=request,
+        )
+        with (
+            mock.patch.object(console, "print") as mock_print,
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            await utils.check_for_status(response)
+
+        mock_print.assert_any_call(
+            "error: API error (HTTP 500): Internal Server Error",
+            style="red",
+        )
+
+    async def test_error_hides_request_data_by_default(self) -> None:
+        request = httpx.Request(
+            "POST",
+            "https://api.mergify.com/v1/test",
+            content=b'{"key": "value"}',
+        )
+        response = httpx.Response(
+            400,
+            json={"detail": "Bad Request"},
+            request=request,
+        )
+        with (
+            mock.patch.object(console, "print") as mock_print,
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            await utils.check_for_status(response)
+
+        printed_args = [str(call) for call in mock_print.call_args_list]
+        assert not any("request data" in arg for arg in printed_args)
+
+    async def test_error_shows_request_data_in_debug(self) -> None:
+        request = httpx.Request(
+            "POST",
+            "https://api.mergify.com/v1/test",
+            content=b'{"key": "value"}',
+        )
+        response = httpx.Response(
+            400,
+            json={"detail": "Bad Request"},
+            request=request,
+        )
+        utils.set_debug(debug=True)
+        try:
+            with (
+                mock.patch.object(console, "print") as mock_print,
+                pytest.raises(httpx.HTTPStatusError),
+            ):
+                await utils.check_for_status(response)
+
+            mock_print.assert_any_call(
+                'request data: {"key": "value"}',
+                style="red",
+            )
+        finally:
+            utils.set_debug(debug=False)
