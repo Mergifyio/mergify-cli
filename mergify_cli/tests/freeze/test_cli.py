@@ -211,13 +211,34 @@ def test_create_multiple_conditions() -> None:
         assert body["matching_conditions"] == ["base=main", "base=release"]
 
 
-def test_create_missing_required() -> None:
-    runner = CliRunner()
-    result = runner.invoke(
-        freeze,
-        [*BASE_ARGS, "create", "--reason", "test"],
-    )
-    assert result.exit_code != 0
+def test_create_without_conditions() -> None:
+    fake_freeze_no_conditions = {
+        **FAKE_FREEZE,
+        "matching_conditions": [],
+    }
+    with respx.mock(base_url="https://api.mergify.com") as mock:
+        mock.post("/v1/repos/owner/repo/scheduled_freeze").mock(
+            return_value=Response(201, json=fake_freeze_no_conditions),
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            freeze,
+            [
+                *BASE_ARGS,
+                "create",
+                "--reason",
+                "Emergency freeze",
+                "--timezone",
+                "UTC",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Freeze created successfully" in result.output
+
+        request = mock.calls.last.request
+        body = json.loads(request.content)
+        assert "matching_conditions" not in body
 
 
 def test_update() -> None:
