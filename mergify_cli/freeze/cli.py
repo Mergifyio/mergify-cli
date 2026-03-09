@@ -197,7 +197,6 @@ async def list_cmd(ctx: click.Context, *, output_json: bool) -> None:
     "-c",
     "conditions",
     multiple=True,
-    required=True,
     help="Matching condition (repeatable, e.g. -c 'base=main')",
 )
 @click.option(
@@ -240,7 +239,7 @@ async def create(
             ctx.obj["repository"],
             reason=reason,
             timezone=timezone,
-            matching_conditions=list(conditions),
+            matching_conditions=list(conditions) if conditions else None,
             start=start,
             end=end,
             exclude_conditions=list(excludes) if excludes else None,
