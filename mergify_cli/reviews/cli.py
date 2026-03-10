@@ -31,7 +31,7 @@ from mergify_cli.reviews import api as reviews_api
 @click.option(
     "--query",
     "-q",
-    default="draft:false is:open is:pr review-requested:@me status:success",
+    default="draft:false is:open is:pr review-requested:@me sort:updated-desc",
     show_default=True,
     help="GitHub search query for filtering PRs",
 )
