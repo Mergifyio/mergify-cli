@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import pathlib
+import re
 
 import click
 import httpx
+from rich.markdown import Markdown
 from rich.markup import escape
 import yaml
 
 from mergify_cli import console
+from mergify_cli import utils
 from mergify_cli.ci.detector import MERGIFY_CONFIG_PATHS
 from mergify_cli.ci.detector import get_mergify_config_path
 from mergify_cli.config import validate as config_validate
@@ -83,3 +87,61 @@ def validate(ctx: click.Context) -> None:
         )
 
     raise SystemExit(1)
+
+
+_PR_URL_RE = re.compile(
+    r"https?://[^/]+/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)",
+)
+
+
+def _parse_pr_url(url: str) -> tuple[str, int]:
+    m = _PR_URL_RE.match(url)
+    if not m:
+        msg = f"Invalid pull request URL: {url}"
+        raise click.ClickException(msg)
+    return f"{m.group('owner')}/{m.group('repo')}", int(m.group("number"))
+
+
+@config.command(
+    help="Simulate Mergify actions on a pull request using the local configuration",
+)
+@click.argument("pull_request_url")
+@click.option(
+    "--token",
+    "-t",
+    help="Mergify or GitHub token",
+    envvar=["MERGIFY_TOKEN", "GITHUB_TOKEN"],
+    required=True,
+    default=lambda: asyncio.run(utils.get_default_token()),
+)
+@click.option(
+    "--api-url",
+    "-u",
+    help="URL of the Mergify API",
+    envvar="MERGIFY_API_URL",
+    default="https://api.mergify.com",
+    show_default=True,
+)
+@click.pass_context
+@utils.run_with_asyncio
+async def simulate(
+    ctx: click.Context,
+    *,
+    pull_request_url: str,
+    token: str,
+    api_url: str,
+) -> None:
+    repository, pull_number = _parse_pr_url(pull_request_url)
+    config_path = _resolve_config_path(ctx.obj["config_file"])
+    mergify_yml = config_validate.read_raw(config_path)
+
+    async with utils.get_mergify_http_client(api_url, token) as client:
+        result = await config_validate.simulate_pr(
+            client,
+            repository,
+            pull_number,
+            mergify_yml,
+        )
+
+    console.print(f"[bold]{escape(result.title)}[/]")
+    console.print(Markdown(result.summary))

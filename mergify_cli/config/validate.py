@@ -40,6 +40,10 @@ def load_yaml(path: str) -> dict[str, typing.Any]:
     return data
 
 
+def read_raw(path: str) -> str:
+    return pathlib.Path(path).read_text(encoding="utf-8")
+
+
 def fetch_schema(client: httpx.Client) -> dict[str, typing.Any]:
     response = client.get(SCHEMA_URL)
     response.raise_for_status()
@@ -62,3 +66,23 @@ def validate_config(
         path = ".".join(str(p) for p in error.absolute_path) or "(root)"
         errors.append(ValidationError(path=path, message=error.message))
     return ValidationResult(errors=errors)
+
+
+@dataclasses.dataclass
+class SimulatorResult:
+    title: str
+    summary: str
+
+
+async def simulate_pr(
+    client: httpx.AsyncClient,
+    repository: str,
+    pull_number: int,
+    mergify_yml: str,
+) -> SimulatorResult:
+    response = await client.post(
+        f"/v1/repos/{repository}/pulls/{pull_number}/simulator",
+        json={"mergify_yml": mergify_yml},
+    )
+    data = response.json()
+    return SimulatorResult(title=data["title"], summary=data["summary"])
