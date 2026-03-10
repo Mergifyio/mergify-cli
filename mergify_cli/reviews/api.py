@@ -12,6 +12,7 @@ query($author_login: String!, $search_query: String!) {
   search(query: $search_query, type: ISSUE, first: 50) {
     nodes {
       ... on PullRequest {
+        id
         number
         title
         url
@@ -28,12 +29,40 @@ query($author_login: String!, $search_query: String!) {
 }
 """
 
+_REQUIRED_CHECKS_PR_FRAGMENT = """
+  pr_{index}: node(id: "{node_id}") {{
+    ... on PullRequest {{
+      commits(last: 1) {{
+        nodes {{
+          commit {{
+            statusCheckRollup {{
+              contexts(first: 100) {{
+                nodes {{
+                  ... on CheckRun {{
+                    conclusion
+                    isRequired(pullRequestId: "{node_id}")
+                  }}
+                  ... on StatusContext {{
+                    state
+                    isRequired(pullRequestId: "{node_id}")
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+"""
+
 
 class _GraphQLError(Exception):
     """Raised when the GitHub GraphQL API returns query-level errors."""
 
 
 class _PullRequest(typing.TypedDict):
+    node_id: str
     repository: str
     number: int
     title: str
@@ -75,6 +104,7 @@ def _parse_default_branch_pull_requests(
 
         result.append(
             _PullRequest(
+                node_id=node["id"],
                 repository=node["repository"]["nameWithOwner"],
                 number=node["number"],
                 title=node["title"],
@@ -84,6 +114,72 @@ def _parse_default_branch_pull_requests(
         )
 
     return result
+
+
+_FAILING_CHECK_RUN_CONCLUSIONS = frozenset(
+    {
+        "ACTION_REQUIRED",
+        "CANCELLED",
+        "FAILURE",
+        "STARTUP_FAILURE",
+        "TIMED_OUT",
+    },
+)
+
+_FAILING_STATUS_CONTEXT_STATES = frozenset({"ERROR", "FAILURE"})
+
+
+def _has_failing_required_checks(pr_node: dict[str, typing.Any]) -> bool:
+    commits = pr_node.get("commits", {}).get("nodes") or []
+    if not commits:
+        return False
+
+    rollup = commits[0].get("commit", {}).get("statusCheckRollup")
+    if rollup is None:
+        return False
+
+    for context in rollup.get("contexts", {}).get("nodes") or []:
+        if not context.get("isRequired"):
+            continue
+
+        # CheckRun
+        if "conclusion" in context:
+            if context["conclusion"] in _FAILING_CHECK_RUN_CONCLUSIONS:
+                return True
+        # StatusContext
+        elif "state" in context and context["state"] in _FAILING_STATUS_CONTEXT_STATES:
+            return True
+
+    return False
+
+
+async def _get_pr_ids_with_failing_required_checks(
+    client: httpx.AsyncClient,
+    pull_requests: list[_PullRequest],
+) -> set[str]:
+    """Return node IDs of PRs that have at least one failing required check."""
+    if not pull_requests:
+        return set()
+
+    fragments = [
+        _REQUIRED_CHECKS_PR_FRAGMENT.format(index=i, node_id=pr["node_id"])
+        for i, pr in enumerate(pull_requests)
+    ]
+    query = "query {" + "".join(fragments) + "\n}"
+
+    response = await client.post("/graphql", json={"query": query})
+    response.raise_for_status()
+
+    data = response.json()
+    _raise_on_graphql_errors(data)
+
+    failing: set[str] = set()
+    for i, pr in enumerate(pull_requests):
+        pr_data = data["data"].get(f"pr_{i}")
+        if not pr_data or _has_failing_required_checks(pr_data):
+            failing.add(pr["node_id"])
+
+    return failing
 
 
 def _group_pull_requests_by_repository(
@@ -114,6 +210,13 @@ async def get_default_branch_pending_reviews(
     data = response.json()
     _raise_on_graphql_errors(data)
 
+    pull_requests = _parse_default_branch_pull_requests(data)
+
+    failing_ids = await _get_pr_ids_with_failing_required_checks(
+        client,
+        pull_requests,
+    )
+
     return _group_pull_requests_by_repository(
-        pull_requests=_parse_default_branch_pull_requests(data),
+        pull_requests=[pr for pr in pull_requests if pr["node_id"] not in failing_ids],
     )

@@ -9,6 +9,22 @@ import respx
 from mergify_cli.reviews.cli import reviews
 
 
+def _make_no_failing_checks_response(count: int) -> dict[str, object]:
+    """Build a required-checks GraphQL response where no required check fails."""
+    return {
+        "data": {
+            f"pr_{i}": {
+                "commits": {
+                    "nodes": [
+                        {"commit": {"statusCheckRollup": None}},
+                    ],
+                },
+            }
+            for i in range(count)
+        },
+    }
+
+
 _GRAPHQL_RESPONSE_EMPTY: dict[str, object] = {
     "data": {"search": {"nodes": []}},
 }
@@ -18,6 +34,7 @@ _GRAPHQL_RESPONSE_WITH_PRS: dict[str, object] = {
         "search": {
             "nodes": [
                 {
+                    "id": "PR_42",
                     "number": 42,
                     "title": "Add feature X",
                     "url": "https://github.com/owner/repo/pull/42",
@@ -31,6 +48,7 @@ _GRAPHQL_RESPONSE_WITH_PRS: dict[str, object] = {
                     "reviews": {"totalCount": 0},
                 },
                 {
+                    "id": "PR_99",
                     "number": 99,
                     "title": "Fix bug Y",
                     "url": "https://github.com/org/other/pull/99",
@@ -53,6 +71,7 @@ _GRAPHQL_RESPONSE_ALREADY_APPROVED: dict[str, object] = {
         "search": {
             "nodes": [
                 {
+                    "id": "PR_10",
                     "number": 10,
                     "title": "Already approved",
                     "url": "https://github.com/owner/repo/pull/10",
@@ -75,6 +94,7 @@ _GRAPHQL_RESPONSE_NON_DEFAULT_BRANCH: dict[str, object] = {
         "search": {
             "nodes": [
                 {
+                    "id": "PR_20",
                     "number": 20,
                     "title": "Feature branch PR",
                     "url": "https://github.com/owner/repo/pull/20",
@@ -97,6 +117,7 @@ _GRAPHQL_RESPONSE_CONFLICTING: dict[str, object] = {
         "search": {
             "nodes": [
                 {
+                    "id": "PR_30",
                     "number": 30,
                     "title": "Conflicting PR",
                     "url": "https://github.com/owner/repo/pull/30",
@@ -140,7 +161,10 @@ def test_pending_reviews() -> None:
     with respx.mock(base_url="https://api.github.com") as rsp:
         rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
         rsp.post("/graphql").mock(
-            return_value=Response(200, json=_GRAPHQL_RESPONSE_WITH_PRS),
+            side_effect=[
+                Response(200, json=_GRAPHQL_RESPONSE_WITH_PRS),
+                Response(200, json=_make_no_failing_checks_response(2)),
+            ],
         )
 
         result = CliRunner().invoke(reviews, _BASE_ARGS)
@@ -183,7 +207,10 @@ def test_browse_opens_urls() -> None:
     with respx.mock(base_url="https://api.github.com") as rsp:
         rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
         rsp.post("/graphql").mock(
-            return_value=Response(200, json=_GRAPHQL_RESPONSE_WITH_PRS),
+            side_effect=[
+                Response(200, json=_GRAPHQL_RESPONSE_WITH_PRS),
+                Response(200, json=_make_no_failing_checks_response(2)),
+            ],
         )
 
         with mock.patch("mergify_cli.reviews.cli.webbrowser.open") as mock_open:
@@ -204,6 +231,7 @@ def test_null_author_hidden() -> None:
             "search": {
                 "nodes": [
                     {
+                        "id": "PR_7",
                         "number": 7,
                         "title": "Ghost PR",
                         "url": "https://github.com/owner/repo/pull/7",
@@ -224,7 +252,10 @@ def test_null_author_hidden() -> None:
     with respx.mock(base_url="https://api.github.com") as rsp:
         rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
         rsp.post("/graphql").mock(
-            return_value=Response(200, json=graphql_response),
+            side_effect=[
+                Response(200, json=graphql_response),
+                Response(200, json=_make_no_failing_checks_response(1)),
+            ],
         )
 
         result = CliRunner().invoke(reviews, _BASE_ARGS)
@@ -247,6 +278,201 @@ def test_filters_conflicting_prs() -> None:
         result = CliRunner().invoke(reviews, _BASE_ARGS)
         assert result.exit_code == 0, result.output
         assert result.output == "No PRs awaiting your review.\n"
+
+
+def test_filters_prs_with_failing_required_checks() -> None:
+    search_response: dict[str, object] = {
+        "data": {
+            "search": {
+                "nodes": [
+                    {
+                        "id": "PR_50",
+                        "number": 50,
+                        "title": "Failing required checks",
+                        "url": "https://github.com/owner/repo/pull/50",
+                        "baseRefName": "main",
+                        "author": {"login": "frank"},
+                        "repository": {
+                            "nameWithOwner": "owner/repo",
+                            "defaultBranchRef": {"name": "main"},
+                        },
+                        "mergeable": "MERGEABLE",
+                        "reviews": {"totalCount": 0},
+                    },
+                ],
+            },
+        },
+    }
+    checks_response: dict[str, object] = {
+        "data": {
+            "pr_0": {
+                "commits": {
+                    "nodes": [
+                        {
+                            "commit": {
+                                "statusCheckRollup": {
+                                    "contexts": {
+                                        "nodes": [
+                                            {
+                                                "conclusion": "FAILURE",
+                                                "isRequired": True,
+                                            },
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    }
+
+    with respx.mock(base_url="https://api.github.com") as rsp:
+        rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
+        rsp.post("/graphql").mock(
+            side_effect=[
+                Response(200, json=search_response),
+                Response(200, json=checks_response),
+            ],
+        )
+
+        result = CliRunner().invoke(reviews, _BASE_ARGS)
+        assert result.exit_code == 0, result.output
+        assert result.output == "No PRs awaiting your review.\n"
+
+
+def test_filters_prs_with_failing_required_status_context() -> None:
+    search_response: dict[str, object] = {
+        "data": {
+            "search": {
+                "nodes": [
+                    {
+                        "id": "PR_55",
+                        "number": 55,
+                        "title": "Failing required status",
+                        "url": "https://github.com/owner/repo/pull/55",
+                        "baseRefName": "main",
+                        "author": {"login": "hank"},
+                        "repository": {
+                            "nameWithOwner": "owner/repo",
+                            "defaultBranchRef": {"name": "main"},
+                        },
+                        "mergeable": "MERGEABLE",
+                        "reviews": {"totalCount": 0},
+                    },
+                ],
+            },
+        },
+    }
+    checks_response: dict[str, object] = {
+        "data": {
+            "pr_0": {
+                "commits": {
+                    "nodes": [
+                        {
+                            "commit": {
+                                "statusCheckRollup": {
+                                    "contexts": {
+                                        "nodes": [
+                                            {
+                                                "state": "FAILURE",
+                                                "isRequired": True,
+                                            },
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    }
+
+    with respx.mock(base_url="https://api.github.com") as rsp:
+        rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
+        rsp.post("/graphql").mock(
+            side_effect=[
+                Response(200, json=search_response),
+                Response(200, json=checks_response),
+            ],
+        )
+
+        result = CliRunner().invoke(reviews, _BASE_ARGS)
+        assert result.exit_code == 0, result.output
+        assert result.output == "No PRs awaiting your review.\n"
+
+
+def test_keeps_prs_with_failing_non_required_checks() -> None:
+    search_response: dict[str, object] = {
+        "data": {
+            "search": {
+                "nodes": [
+                    {
+                        "id": "PR_60",
+                        "number": 60,
+                        "title": "Non-required check failing",
+                        "url": "https://github.com/owner/repo/pull/60",
+                        "baseRefName": "main",
+                        "author": {"login": "grace"},
+                        "repository": {
+                            "nameWithOwner": "owner/repo",
+                            "defaultBranchRef": {"name": "main"},
+                        },
+                        "mergeable": "MERGEABLE",
+                        "reviews": {"totalCount": 0},
+                    },
+                ],
+            },
+        },
+    }
+    checks_response: dict[str, object] = {
+        "data": {
+            "pr_0": {
+                "commits": {
+                    "nodes": [
+                        {
+                            "commit": {
+                                "statusCheckRollup": {
+                                    "contexts": {
+                                        "nodes": [
+                                            {
+                                                "conclusion": "SUCCESS",
+                                                "isRequired": True,
+                                            },
+                                            {
+                                                "conclusion": "FAILURE",
+                                                "isRequired": False,
+                                            },
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    }
+
+    with respx.mock(base_url="https://api.github.com") as rsp:
+        rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
+        rsp.post("/graphql").mock(
+            side_effect=[
+                Response(200, json=search_response),
+                Response(200, json=checks_response),
+            ],
+        )
+
+        result = CliRunner().invoke(reviews, _BASE_ARGS)
+        assert result.exit_code == 0, result.output
+        assert (
+            result.output
+            == """owner/repo
+  #60 Non-required check failing by grace
+"""
+        )
 
 
 def test_graphql_errors() -> None:
