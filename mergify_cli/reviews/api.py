@@ -18,6 +18,7 @@ query($author_login: String!, $search_query: String!) {
         baseRefName
         author { login }
         repository { nameWithOwner defaultBranchRef { name } }
+        mergeable
         reviews(author: $author_login, last: 1, states: [APPROVED]) {
           totalCount
         }
@@ -62,10 +63,12 @@ def _parse_default_branch_pull_requests(
 ) -> list[_PullRequest]:
     result: list[_PullRequest] = []
     for node in data["data"]["search"]["nodes"]:
-        # Filter out approved PRs and PRs not targeting the default branch.
+        # Filter out approved PRs, conflicting PRs, and PRs not targeting
+        # the default branch.
         if (
             not node
             or node["reviews"]["totalCount"] > 0
+            or node["mergeable"] == "CONFLICTING"
             or node["baseRefName"] != node["repository"]["defaultBranchRef"]["name"]
         ):
             continue
