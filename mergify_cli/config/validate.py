@@ -40,6 +40,10 @@ def load_yaml(path: str) -> dict[str, typing.Any]:
     return data
 
 
+def read_raw(path: str) -> str:
+    return pathlib.Path(path).read_text(encoding="utf-8")
+
+
 def fetch_schema(client: httpx.Client) -> dict[str, typing.Any]:
     response = client.get(SCHEMA_URL)
     response.raise_for_status()
@@ -62,3 +66,35 @@ def validate_config(
         path = ".".join(str(p) for p in error.absolute_path) or "(root)"
         errors.append(ValidationError(path=path, message=error.message))
     return ValidationResult(errors=errors)
+
+
+@dataclasses.dataclass
+class SimulatorResult:
+    success: bool
+    message: str
+
+
+async def simulate_config(
+    client: httpx.AsyncClient,
+    repository: str,
+    mergify_yml: str,
+) -> SimulatorResult:
+    import httpx as httpx_mod
+
+    try:
+        response = await client.post(
+            f"/v1/repos/{repository}/configuration-simulator",
+            json={"mergify_yml": mergify_yml},
+        )
+    except httpx_mod.HTTPStatusError as e:
+        if e.response.status_code == 422:
+            try:
+                data = e.response.json()
+                detail = data.get("detail", str(data))
+            except ValueError:
+                detail = e.response.text
+            return SimulatorResult(success=False, message=str(detail))
+        raise
+
+    data = response.json()
+    return SimulatorResult(success=True, message=data["message"])

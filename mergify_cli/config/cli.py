@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pathlib
 
 import click
@@ -8,6 +9,7 @@ from rich.markup import escape
 import yaml
 
 from mergify_cli import console
+from mergify_cli import utils
 from mergify_cli.ci.detector import MERGIFY_CONFIG_PATHS
 from mergify_cli.ci.detector import get_mergify_config_path
 from mergify_cli.config import validate as config_validate
@@ -32,7 +34,43 @@ def config(ctx: click.Context) -> None:
     default=None,
     help="Path to the Mergify configuration file (auto-detected if not provided)",
 )
-def validate(*, config_path: str | None) -> None:
+@click.option(
+    "--online",
+    is_flag=True,
+    default=False,
+    help="Also validate using the Mergify API simulator (requires token and repository)",
+)
+@click.option(
+    "--token",
+    "-t",
+    help="Mergify or GitHub token (for --online)",
+    envvar=["MERGIFY_TOKEN", "GITHUB_TOKEN"],
+    required=False,
+    default=lambda: asyncio.run(utils.get_default_token()),
+)
+@click.option(
+    "--repository",
+    "-r",
+    help="Repository full name owner/repo (for --online)",
+    required=False,
+    default=lambda: asyncio.run(utils.get_default_repository()),
+)
+@click.option(
+    "--api-url",
+    "-u",
+    help="URL of the Mergify API",
+    envvar="MERGIFY_API_URL",
+    default="https://api.mergify.com",
+    show_default=True,
+)
+def validate(
+    *,
+    config_path: str | None,
+    online: bool,
+    token: str | None,
+    repository: str | None,
+    api_url: str,
+) -> None:
     if config_path is None:
         config_path = get_mergify_config_path()
 
@@ -62,16 +100,51 @@ def validate(*, config_path: str | None) -> None:
 
     escaped_path = escape(config_path)
 
-    if result.is_valid:
+    if not result.is_valid:
+        console.print(
+            f"[red]Configuration file '{escaped_path}' has {len(result.errors)} error(s):[/]",
+        )
+        for error in result.errors:
+            console.print(
+                f"  [red]- {escape(error.path)}: {escape(error.message)}[/]",
+            )
+        raise SystemExit(1)
+
+    if not online:
         console.print(f"[green]Configuration file '{escaped_path}' is valid.[/]")
         return
 
-    console.print(
-        f"[red]Configuration file '{escaped_path}' has {len(result.errors)} error(s):[/]",
-    )
-    for error in result.errors:
-        console.print(
-            f"  [red]- {escape(error.path)}: {escape(error.message)}[/]",
+    if not token:
+        raise click.ClickException(
+            "--online requires a token (set MERGIFY_TOKEN, GITHUB_TOKEN, or use --token)",
         )
 
-    raise SystemExit(1)
+    if not repository:
+        raise click.ClickException(
+            "--online requires a repository (set GITHUB_REPOSITORY or use --repository)",
+        )
+
+    raw_content = config_validate.read_raw(config_path)
+    sim_result = asyncio.run(_run_simulator(api_url, token, repository, raw_content))
+
+    if sim_result.success:
+        console.print(
+            f"[green]Configuration file '{escaped_path}' is valid.[/]",
+        )
+        console.print(f"[green]Simulator: {escape(sim_result.message)}[/]")
+    else:
+        console.print(
+            f"[red]Configuration file '{escaped_path}' failed simulator validation:[/]",
+        )
+        console.print(f"  [red]{escape(sim_result.message)}[/]")
+        raise SystemExit(1)
+
+
+async def _run_simulator(
+    api_url: str,
+    token: str,
+    repository: str,
+    mergify_yml: str,
+) -> config_validate.SimulatorResult:
+    async with utils.get_mergify_http_client(api_url, token) as client:
+        return await config_validate.simulate_config(client, repository, mergify_yml)
