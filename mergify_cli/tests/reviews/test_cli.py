@@ -27,6 +27,7 @@ _GRAPHQL_RESPONSE_WITH_PRS: dict[str, object] = {
                         "nameWithOwner": "owner/repo",
                         "defaultBranchRef": {"name": "main"},
                     },
+                    "mergeable": "MERGEABLE",
                     "reviews": {"totalCount": 0},
                 },
                 {
@@ -39,6 +40,7 @@ _GRAPHQL_RESPONSE_WITH_PRS: dict[str, object] = {
                         "nameWithOwner": "org/other",
                         "defaultBranchRef": {"name": "main"},
                     },
+                    "mergeable": "MERGEABLE",
                     "reviews": {"totalCount": 0},
                 },
             ],
@@ -60,6 +62,7 @@ _GRAPHQL_RESPONSE_ALREADY_APPROVED: dict[str, object] = {
                         "nameWithOwner": "owner/repo",
                         "defaultBranchRef": {"name": "main"},
                     },
+                    "mergeable": "MERGEABLE",
                     "reviews": {"totalCount": 1},
                 },
             ],
@@ -81,6 +84,29 @@ _GRAPHQL_RESPONSE_NON_DEFAULT_BRANCH: dict[str, object] = {
                         "nameWithOwner": "owner/repo",
                         "defaultBranchRef": {"name": "main"},
                     },
+                    "mergeable": "MERGEABLE",
+                    "reviews": {"totalCount": 0},
+                },
+            ],
+        },
+    },
+}
+
+_GRAPHQL_RESPONSE_CONFLICTING: dict[str, object] = {
+    "data": {
+        "search": {
+            "nodes": [
+                {
+                    "number": 30,
+                    "title": "Conflicting PR",
+                    "url": "https://github.com/owner/repo/pull/30",
+                    "baseRefName": "main",
+                    "author": {"login": "eve"},
+                    "repository": {
+                        "nameWithOwner": "owner/repo",
+                        "defaultBranchRef": {"name": "main"},
+                    },
+                    "mergeable": "CONFLICTING",
                     "reviews": {"totalCount": 0},
                 },
             ],
@@ -187,6 +213,7 @@ def test_null_author_hidden() -> None:
                             "nameWithOwner": "owner/repo",
                             "defaultBranchRef": {"name": "main"},
                         },
+                        "mergeable": "MERGEABLE",
                         "reviews": {"totalCount": 0},
                     },
                 ],
@@ -208,6 +235,18 @@ def test_null_author_hidden() -> None:
   #7 Ghost PR
 """
         )
+
+
+def test_filters_conflicting_prs() -> None:
+    with respx.mock(base_url="https://api.github.com") as rsp:
+        rsp.get("/user").mock(return_value=Response(200, json=_USER_RESPONSE))
+        rsp.post("/graphql").mock(
+            return_value=Response(200, json=_GRAPHQL_RESPONSE_CONFLICTING),
+        )
+
+        result = CliRunner().invoke(reviews, _BASE_ARGS)
+        assert result.exit_code == 0, result.output
+        assert result.output == "No PRs awaiting your review.\n"
 
 
 def test_graphql_errors() -> None:
