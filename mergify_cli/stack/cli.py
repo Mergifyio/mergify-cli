@@ -10,6 +10,7 @@ import click
 from mergify_cli import console
 from mergify_cli import utils
 from mergify_cli.stack import checkout as stack_checkout_mod
+from mergify_cli.stack import dashboard as stack_dashboard_mod
 from mergify_cli.stack import edit as stack_edit_mod
 from mergify_cli.stack import (
     github_action_auto_rebase as stack_github_action_auto_rebase_mod,
@@ -464,6 +465,50 @@ async def session(*, commit: str, launch: bool) -> None:
 
     if launch:
         stack_session_mod.launch_claude_session(session_id)
+
+
+@stack.command(
+    name="dashboard",
+    help="Show a cross-repo dashboard of your PRs and review requests",
+)
+@click.option(
+    "--org",
+    required=False,
+    default=lambda: asyncio.run(stack_dashboard_mod.get_default_dashboard_org()),
+    help="GitHub organization (configurable via git config mergify-cli.dashboard-org)",
+)
+@click.option(
+    "--author",
+    default=None,
+    help="GitHub username (default: authenticated gh user)",
+)
+@click.option(
+    "--exclude-label",
+    multiple=True,
+    default=lambda: asyncio.run(stack_dashboard_mod.get_default_exclude_labels()),
+    help="Labels to exclude from 'Awaiting My Review' (repeatable, "
+    "configurable via git config mergify-cli.dashboard-exclude-labels)",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output in JSON format",
+)
+@utils.run_with_asyncio
+async def dashboard(
+    *,
+    org: str,
+    author: str | None,
+    exclude_label: tuple[str, ...],
+    output_json: bool,
+) -> None:
+    await stack_dashboard_mod.stack_dashboard(
+        org=org,
+        author=author,
+        exclude_labels=list(exclude_label),
+        output_json=output_json,
+    )
 
 
 @stack.command(name="list", help="List the stack's commits and their associated PRs")
