@@ -110,7 +110,7 @@ async def _gh_search_prs(query: str) -> list[DashboardPR]:
             repo=r["repository"]["nameWithOwner"],  # type: ignore[index]
             is_draft=r["isDraft"],  # type: ignore[arg-type]
             body=r.get("body") or "",  # type: ignore[arg-type]
-            labels=[l["name"] for l in r.get("labels", [])],  # type: ignore[union-attr]
+            labels=[label["name"] for label in r.get("labels", [])],  # type: ignore[union-attr]
         )
         for r in results
     ]
@@ -189,8 +189,7 @@ def _build_stacks(prs: list[DashboardPR]) -> list[list[DashboardPR]]:
         if ra != rb:
             root_of[ra] = rb
 
-    for num in by_number:
-        root_of[num] = num
+    root_of.update({num: num for num in by_number})
 
     for child, parent in parent_of.items():
         union(child, parent)
@@ -226,9 +225,7 @@ def _build_stacks(prs: list[DashboardPR]) -> list[list[DashboardPR]]:
 
         # Add any remaining members that weren't reached (shouldn't happen normally)
         reached = {pr.number for pr in ordered}
-        for num in members:
-            if num not in reached:
-                ordered.append(by_number[num])
+        ordered.extend(by_number[num] for num in members if num not in reached)
 
         stacks.append(ordered)
 
@@ -255,13 +252,13 @@ async def _filter_awaiting_review(
 
     Returns (visible_prs, hidden_count).
     """
-    exclude_labels_lower = {l.lower() for l in exclude_labels}
+    exclude_labels_lower = {label.lower() for label in exclude_labels}
 
     # First pass: filter by labels
     label_ok: list[DashboardPR] = []
     hidden = 0
     for pr in prs:
-        pr_labels_lower = {l.lower() for l in pr.labels}
+        pr_labels_lower = {label.lower() for label in pr.labels}
         if pr_labels_lower & exclude_labels_lower:
             hidden += 1
         else:
@@ -300,12 +297,9 @@ def _display_section(section: DashboardSection) -> None:
             if len(stack) == 1:
                 pr = stack[0]
                 console.print(
-                    f"    {pr.title}  [link={pr.url}]{pr.url}[/link]",
+                    f"    #{pr.number} {pr.title}  [link={pr.url}]{pr.url}[/link]",
                 )
             else:
-                # Stack header: title of the top PR
-                top = stack[-1]
-                console.print(f"    {top.title}")
                 for i, pr in enumerate(stack):
                     is_last = i == len(stack) - 1
                     connector = "└──" if is_last else "├──"
@@ -328,7 +322,7 @@ async def get_default_exclude_labels() -> tuple[str, ...]:
             "--get",
             "mergify-cli.dashboard-exclude-labels",
         )
-        return tuple(l.strip() for l in result.split(",") if l.strip())
+        return tuple(part.strip() for part in result.split(",") if part.strip())
     except utils.CommandError:
         return ()
 

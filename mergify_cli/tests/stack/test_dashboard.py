@@ -39,7 +39,7 @@ def _make_gh_pr(
         "repository": {"nameWithOwner": repo},
         "isDraft": is_draft,
         "body": body,
-        "labels": [{"name": l} for l in (labels or [])],
+        "labels": [{"name": label} for label in (labels or [])],
     }
 
 
@@ -72,30 +72,26 @@ class _RunCommandMock:
 
     def register_gh_search(self, query: str, results: list[dict[str, object]]) -> None:
         self.responses[
-            (
-                "gh",
-                "search",
-                "prs",
-                "--json",
-                "number,title,url,repository,isDraft,body,labels",
-                "--limit",
-                "200",
-                query,
-            )
+            "gh",
+            "search",
+            "prs",
+            "--json",
+            "number,title,url,repository,isDraft,body,labels",
+            "--limit",
+            "200",
+            query,
         ] = json.dumps(results)
 
     def register_gh_ci(self, repo: str, pr_number: int, *, success: bool) -> None:
         self.responses[
-            (
-                "gh",
-                "pr",
-                "view",
-                str(pr_number),
-                "--repo",
-                repo,
-                "--json",
-                "statusCheckRollup",
-            )
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--json",
+            "statusCheckRollup",
         ] = _make_ci_response(success=success)
 
     async def __call__(self, *args: str) -> str:
