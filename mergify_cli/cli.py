@@ -26,7 +26,6 @@ from mergify_cli import VERSION
 from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.config import cli as config_cli_mod
 from mergify_cli.freeze import cli as freeze_cli_mod
-from mergify_cli.reviews import cli as reviews_cli_mod
 from mergify_cli.stack import cli as stack_cli_mod
 
 
@@ -50,7 +49,6 @@ cli.add_command(stack_cli_mod.stack)
 cli.add_command(ci_cli_mod.ci)
 cli.add_command(config_cli_mod.config)
 cli.add_command(freeze_cli_mod.freeze)
-cli.add_command(reviews_cli_mod.reviews)
 
 
 def main() -> None:
