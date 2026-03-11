@@ -66,3 +66,23 @@ def validate_config(
         path = ".".join(str(p) for p in error.absolute_path) or "(root)"
         errors.append(ValidationError(path=path, message=error.message))
     return ValidationResult(errors=errors)
+
+
+@dataclasses.dataclass
+class SimulatorResult:
+    title: str
+    summary: str
+
+
+async def simulate_pr(
+    client: httpx.AsyncClient,
+    repository: str,
+    pull_number: int,
+    mergify_yml: str,
+) -> SimulatorResult:
+    response = await client.post(
+        f"/v1/repos/{repository}/pulls/{pull_number}/simulator",
+        json={"mergify_yml": mergify_yml},
+    )
+    data = response.json()
+    return SimulatorResult(title=data["title"], summary=data["summary"])
