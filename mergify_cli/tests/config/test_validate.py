@@ -26,6 +26,7 @@ _MINIMAL_SCHEMA: dict[str, object] = {
 }
 
 _SCHEMA_URL = "https://docs.mergify.com/mergify-configuration-schema.json"
+_PR_URL = "https://github.com/owner/repo/pull/42"
 
 
 def _write_config(tmp_path: pathlib.Path, content: str) -> str:
@@ -157,3 +158,81 @@ def test_empty_config(tmp_path: pathlib.Path) -> None:
         )
         assert result.exit_code == 0, result.output
         assert "is valid" in result.output
+
+
+def test_simulate_pr(tmp_path: pathlib.Path) -> None:
+    config_path = _write_config(tmp_path, "pull_request_rules: []\n")
+
+    with respx.mock(base_url="https://api.mergify.com") as rsp:
+        rsp.post("/v1/repos/owner/repo/pulls/42/simulator").mock(
+            return_value=Response(
+                200,
+                json={
+                    "title": "The configuration is valid",
+                    "summary": "No actions will be triggered",
+                },
+            ),
+        )
+
+        result = CliRunner().invoke(
+            config,
+            [
+                "--config-file",
+                config_path,
+                "simulate",
+                _PR_URL,
+                "--token",
+                "test-token",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "The configuration is valid" in result.output
+        assert "No actions will be triggered" in result.output
+
+
+def test_simulate_invalid_pr_url() -> None:
+    result = CliRunner().invoke(
+        config,
+        ["simulate", "not-a-url", "--token", "test-token"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid pull request URL" in result.output
+
+
+def test_simulate_api_failure(tmp_path: pathlib.Path) -> None:
+    config_path = _write_config(tmp_path, "pull_request_rules: []\n")
+
+    with respx.mock(base_url="https://api.mergify.com") as rsp:
+        rsp.post("/v1/repos/owner/repo/pulls/42/simulator").mock(
+            return_value=Response(500),
+        )
+
+        result = CliRunner().invoke(
+            config,
+            [
+                "--config-file",
+                config_path,
+                "simulate",
+                _PR_URL,
+                "--token",
+                "test-token",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Traceback" not in result.output
+
+
+def test_simulate_config_not_found() -> None:
+    result = CliRunner().invoke(
+        config,
+        [
+            "--config-file",
+            "/nonexistent/.mergify.yml",
+            "simulate",
+            _PR_URL,
+            "--token",
+            "test-token",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "not found" in result.output.lower()
