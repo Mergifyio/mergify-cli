@@ -9,6 +9,7 @@ from rich.table import Table
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.dym import DYMGroup
 from mergify_cli.freeze import api as freeze_api
 
 
@@ -119,6 +120,7 @@ def _print_freeze(freeze: freeze_api.ScheduledFreezeResponse) -> None:
 
 
 @click.group(
+    cls=DYMGroup,
     invoke_without_command=True,
     help="Manage scheduled freezes",
 )
