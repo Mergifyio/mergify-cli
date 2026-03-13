@@ -695,3 +695,33 @@ def test_replace_local_action_flips_up_to_date() -> None:
 
     assert planned.locals[0].action == "update"
     assert planned.locals[1].action == "create"
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_get_remote_changes_search_query_uses_trailing_slash(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """Ensure the search query uses `head:<prefix>/` (trailing slash) to avoid
+    matching branches from similarly-named stacks (e.g. `my-stack` matching
+    `my-stack-2/...`)."""
+    import httpx
+
+    search_mock = respx_mock.get("/search/issues").respond(
+        200,
+        json={"items": []},
+    )
+
+    async with httpx.AsyncClient(base_url="https://api.github.com/") as client:
+        await changes.get_remote_changes(
+            client,
+            user="user",
+            repo="repo",
+            stack_prefix="my-stack",
+            author="author",
+        )
+
+    assert len(search_mock.calls) == 1
+    query = search_mock.calls.last.request.url.params["q"]
+    assert "head:my-stack/" in query, (
+        f"Expected 'head:my-stack/' (with trailing slash) in query, got: {query}"
+    )
