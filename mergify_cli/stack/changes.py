@@ -79,7 +79,7 @@ async def get_remote_changes(
     r = await client.get(
         "/search/issues",
         params={
-            "q": f"repo:{user}/{repo} author:{author} is:pull-request head:{stack_prefix}",
+            "q": f"repo:{user}/{repo} author:{author} is:pull-request head:{stack_prefix}/",
             "per_page": 100,
             "sort": "updated",
         },
