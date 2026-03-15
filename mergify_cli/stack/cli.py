@@ -9,6 +9,7 @@ import click
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.dym import DYMGroup
 from mergify_cli.stack import checkout as stack_checkout_mod
 from mergify_cli.stack import edit as stack_edit_mod
 from mergify_cli.stack import (
@@ -80,6 +81,7 @@ def github_server_to_context(
 
 
 @click.group(
+    cls=DYMGroup,
     invoke_without_command=True,
     help="Manage pull requests stack",
 )
