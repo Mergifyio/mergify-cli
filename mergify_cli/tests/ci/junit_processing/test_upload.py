@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pathlib
-import re
 
 from opentelemetry.sdk.trace import ReadableSpan
 import opentelemetry.trace.span
@@ -12,7 +11,8 @@ from mergify_cli.ci.junit_processing import junit
 from mergify_cli.ci.junit_processing import upload
 
 
-REPORT_XML = pathlib.Path(__file__).parent.parent / "report.xml"
+FIXTURES_DIR = pathlib.Path(__file__).parent.parent / "fixtures"
+REPORT_XML = FIXTURES_DIR / "report.xml"
 
 
 @responses.activate(assert_all_requests_are_fired=True)
@@ -47,10 +47,9 @@ REPORT_XML = pathlib.Path(__file__).parent.parent / "report.xml"
 )
 async def test_junit_upload(
     env: dict[str, str],
-    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    spans = await junit.files_to_spans(files=(str(REPORT_XML),))
+    run_id, spans = await junit.files_to_spans(files=(str(REPORT_XML),))
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -65,16 +64,7 @@ async def test_junit_upload(
         spans,
     )
 
-    captured = capsys.readouterr()
-    matched = re.search(
-        r"^🛠️ MERGIFY_TEST_RUN_ID=(.+)",
-        captured.out,
-        re.MULTILINE,
-    )
-    assert matched is not None
-    assert len(bytes.fromhex(matched.group(1))) == 8
-
-    assert "🎉 File(s) uploaded" in captured.out
+    assert len(bytes.fromhex(run_id)) == 8
 
 
 @responses.activate(assert_all_requests_are_fired=True)
@@ -104,25 +94,18 @@ def test_junit_upload_http_error() -> None:
 
 
 @responses.activate(assert_all_requests_are_fired=True)
-async def test_junit_upload_http_error_console(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+async def test_junit_upload_http_error_raises() -> None:
     responses.post(
         "https://api.mergify.com/v1/repos/user/repo/ci/traces",
         status=422,
         json={"detail": "Not enabled on this repository"},
     )
 
-    spans = await junit.files_to_spans(files=(str(REPORT_XML),))
-    upload.upload(
-        "https://api.mergify.com",
-        "token",
-        "user/repo",
-        spans,
-    )
-    captured = capsys.readouterr()
-    assert (
-        "• ❌ Error uploading spans: Failed to export span batch code: 422, reason:"
-        in captured.out
-    )
-    assert "Not enabled on this repository" in captured.out
+    _run_id, spans = await junit.files_to_spans(files=(str(REPORT_XML),))
+    with pytest.raises(upload.UploadError, match="422"):
+        upload.upload(
+            "https://api.mergify.com",
+            "token",
+            "user/repo",
+            spans,
+        )
