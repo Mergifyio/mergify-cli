@@ -48,7 +48,7 @@ async def test_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("_MERGIFY_TEST_JOB_NAME", "foobar")
-    filename = pathlib.Path(__file__).parent / "junit_example.xml"
+    filename = pathlib.Path(__file__).parent / "fixtures" / "junit_example.xml"
     run_id = (32312).to_bytes(8, "big").hex()
     spans = await junit.junit_to_spans(
         run_id,
@@ -539,7 +539,7 @@ async def test_traceparent_injection(
         "00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01",
     )
     monkeypatch.setenv("_MERGIFY_TEST_JOB_NAME", "foobar")
-    filename = pathlib.Path(__file__).parent / "junit_example.xml"
+    filename = pathlib.Path(__file__).parent / "fixtures" / "junit_example.xml"
     run_id = (32312).to_bytes(8, "big").hex()
     spans = await junit.junit_to_spans(
         run_id,

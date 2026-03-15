@@ -18,7 +18,6 @@ from opentelemetry.semconv.trace import SpanAttributes
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 import opentelemetry.trace.span
 
-from mergify_cli import console
 from mergify_cli.ci import detector
 
 
@@ -37,11 +36,10 @@ async def files_to_spans(
     files: tuple[str, ...],
     test_language: str | None = None,
     test_framework: str | None = None,
-) -> list[ReadableSpan]:
+) -> tuple[str, list[ReadableSpan]]:
     spans = []
 
     run_id = ID_GENERATOR.generate_span_id().to_bytes(8, "big").hex()
-    console.print(f"🛠️ MERGIFY_TEST_RUN_ID={run_id}")
 
     for filename in files:
         spans.extend(
@@ -53,7 +51,7 @@ async def files_to_spans(
             ),
         )
 
-    return spans
+    return run_id, spans
 
 
 async def junit_to_spans(

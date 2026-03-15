@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import typing
 
-import click
 import httpx
 import opentelemetry.trace
 import tenacity
@@ -20,10 +19,12 @@ class QuarantineFailedError(Exception):
     message: str
 
 
-QUARANTINE_INFO_ERROR_MSG = (
-    "This error occurred because there are failed tests in your CI pipeline and will disappear once your CI passes successfully.\n\n"
-    "If you're unsure why this is happening or need assistance, please contact Mergify to report the issue."
-)
+@dataclasses.dataclass(frozen=True)
+class QuarantineResult:
+    failing_spans: list[ReadableSpan]
+    quarantined_spans: list[ReadableSpan]
+    non_quarantined_spans: list[ReadableSpan]
+    failing_tests_not_quarantined_count: int
 
 
 async def check_and_update_failing_spans(
@@ -32,17 +33,13 @@ async def check_and_update_failing_spans(
     repository: str,
     tests_target_branch: str,
     spans: list[ReadableSpan],
-) -> int:
+) -> QuarantineResult:
     """
     Check all the `spans` with CI Insights Quarantine by:
-        - logging the failed and quarantined test
-        - logging the failed and non-quarantined test as error message
         - updating the `spans` of quarantined tests by setting the attribute `cicd.test.quarantined` to `true`
 
-    Returns the number of failing tests that are not quarantined.
+    Returns a QuarantineResult with the categorized spans.
     """
-
-    click.echo("\n🛡️ Quarantine")
 
     failing_spans = [
         span
@@ -52,13 +49,15 @@ async def check_and_update_failing_spans(
         and span.attributes.get("test.scope") == "case"
     ]
 
-    failing_spans_name = [fspan.name for fspan in failing_spans]
     if not failing_spans:
-        click.echo(
-            "• No quarantine check required since no failed tests were detected",
+        return QuarantineResult(
+            failing_spans=[],
+            quarantined_spans=[],
+            non_quarantined_spans=[],
+            failing_tests_not_quarantined_count=0,
         )
-        return 0
 
+    failing_spans_name = [fspan.name for fspan in failing_spans]
     failing_tests_not_quarantined_count: int = 0
     quarantined_tests_tuple = await fetch_quarantined_tests_from_failing_spans(
         api_url,
@@ -85,32 +84,24 @@ async def check_and_update_failing_spans(
         ):
             failing_tests_not_quarantined_count += 1
 
-    quarantined_tests_spans = [
+    quarantined_spans = [
         span
         for span in failing_spans
         if span.name in quarantined_tests_tuple.quarantined_tests_names
     ]
 
-    non_quarantined_tests_spans = [
+    non_quarantined_spans = [
         span
         for span in failing_spans
         if span.name in quarantined_tests_tuple.non_quarantined_tests_names
     ]
 
-    click.echo(
-        f"• Quarantined failures matched: {len(quarantined_tests_spans)}/{len(failing_spans)}",
+    return QuarantineResult(
+        failing_spans=failing_spans,
+        quarantined_spans=quarantined_spans,
+        non_quarantined_spans=non_quarantined_spans,
+        failing_tests_not_quarantined_count=failing_tests_not_quarantined_count,
     )
-    if quarantined_tests_spans:
-        click.echo("  - 🔒 Quarantined:")
-        for qt_span in quarantined_tests_spans:
-            click.echo(f"      · {qt_span.name}")
-
-    if non_quarantined_tests_spans:
-        click.echo("  - ❌ Unquarantined:")
-        for nqt_span in non_quarantined_tests_spans:
-            click.echo(f"      · {nqt_span.name}")
-
-    return failing_tests_not_quarantined_count
 
 
 class QuarantinedTests(typing.NamedTuple):
@@ -149,7 +140,7 @@ async def fetch_quarantined_tests_from_failing_spans(
 
         if response.status_code != 200:
             raise QuarantineFailedError(
-                message=f"HTTP error {response.status_code} while checking quarantined tests: {response.text}",
+                message=f"HTTP {response.status_code}: {response.text}",
             )
 
         return QuarantinedTests(
