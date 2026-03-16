@@ -15,6 +15,7 @@ from mergify_cli import utils
 from mergify_cli.ci.detector import MERGIFY_CONFIG_PATHS
 from mergify_cli.ci.detector import get_mergify_config_path
 from mergify_cli.config import validate as config_validate
+from mergify_cli.dym import DYMGroup
 
 
 def _resolve_config_path(config_path: str | None) -> str:
@@ -34,6 +35,7 @@ def _resolve_config_path(config_path: str | None) -> str:
 
 
 @click.group(
+    cls=DYMGroup,
     invoke_without_command=True,
     help="Manage Mergify configuration",
 )
