@@ -6,8 +6,6 @@ from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import export
 
-from mergify_cli import console
-
 
 if typing.TYPE_CHECKING:
     from opentelemetry.sdk.trace import ReadableSpan
@@ -61,15 +59,6 @@ def upload(
     repository: str,
     spans: list[ReadableSpan],
 ) -> None:
-    console.log("")
-    console.log("☁️ Upload")
-    console.log(f"• Owner/Repo: {repository}")
-    if spans:
-        try:
-            upload_spans(api_url, token, repository, spans)
-        except UploadError as e:
-            console.log(f"• ❌ Error uploading spans: {e}", style="red")
-        else:
-            console.log("• [green]🎉 File(s) uploaded[/]")
-    else:
-        console.log("• [orange]🟠 No tests were detected in the JUnit file(s)[/]")
+    if not spans:
+        return
+    upload_spans(api_url, token, repository, spans)

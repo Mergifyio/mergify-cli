@@ -68,14 +68,16 @@ async def test_no_failing_tests_quarantined(
         ),
     ]
 
-    failed_tests_quarantined_test_count = await check_and_update_failing_spans(
+    result = await check_and_update_failing_spans(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",
         "main",
         spans,
     )
-    assert failed_tests_quarantined_test_count == 1
+    assert result.failing_tests_not_quarantined_count == 1
+    assert len(result.quarantined_spans) == 0
+    assert len(result.non_quarantined_spans) == 1
     assert spans[0].attributes is not None
     assert "cicd.test.quarantined" in spans[0].attributes
     assert spans[0].attributes["cicd.test.quarantined"] is False
@@ -116,14 +118,16 @@ async def test_some_failing_tests_quarantined(
         ),
     ]
 
-    failed_tests_quarantined_count = await check_and_update_failing_spans(
+    result = await check_and_update_failing_spans(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",
         "main",
         spans,
     )
-    assert failed_tests_quarantined_count == 1
+    assert result.failing_tests_not_quarantined_count == 1
+    assert len(result.quarantined_spans) == 1
+    assert len(result.non_quarantined_spans) == 1
 
     assert spans[0].attributes is not None
     assert spans[1].attributes is not None
@@ -173,14 +177,16 @@ async def test_all_failing_tests_quarantined(
         ),
     ]
 
-    failed_tests_quarantined_count = await check_and_update_failing_spans(
+    result = await check_and_update_failing_spans(
         API_MERGIFY_BASE_URL,
         "token",
         "foo/bar",
         "main",
         spans,
     )
-    assert failed_tests_quarantined_count == 0
+    assert result.failing_tests_not_quarantined_count == 0
+    assert len(result.quarantined_spans) == 3
+    assert len(result.non_quarantined_spans) == 0
 
     assert spans[0].attributes is not None
     assert spans[1].attributes is not None
@@ -193,3 +199,25 @@ async def test_all_failing_tests_quarantined(
     assert spans[0].attributes["cicd.test.quarantined"] is True
     assert spans[1].attributes["cicd.test.quarantined"] is True
     assert spans[2].attributes["cicd.test.quarantined"] is True
+
+
+async def test_no_failed_tests_result() -> None:
+    spans = [
+        ReadableSpan(
+            name="test_me.py::test_ok",
+            status=Status(status_code=StatusCode.OK, description=""),
+            attributes={"test.scope": "case"},
+        ),
+    ]
+
+    result = await check_and_update_failing_spans(
+        API_MERGIFY_BASE_URL,
+        "token",
+        "foo/bar",
+        "main",
+        spans,
+    )
+    assert result.failing_tests_not_quarantined_count == 0
+    assert result.failing_spans == []
+    assert result.quarantined_spans == []
+    assert result.non_quarantined_spans == []
