@@ -20,7 +20,8 @@ if TYPE_CHECKING:
     import respx
 
 
-REPORT_XML = pathlib.Path(__file__).parent / "report.xml"
+FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
+REPORT_XML = FIXTURES_DIR / "report.xml"
 
 
 @pytest.mark.parametrize(
@@ -69,7 +70,12 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         mock.patch.object(
             quarantine,
             "check_and_update_failing_spans",
-            return_value=0,
+            return_value=quarantine.QuarantineResult(
+                failing_spans=[],
+                quarantined_spans=[],
+                non_quarantined_spans=[],
+                failing_tests_not_quarantined_count=0,
+            ),
         ),
     ):
         result_process = runner.invoke(
@@ -217,147 +223,6 @@ def test_tests_target_branch_environment_variable_processing(
     assert mocked_process_junit_files.call_count == 1
     call_kwargs = mocked_process_junit_files.call_args.kwargs
     assert call_kwargs["tests_target_branch"] == expected_branch
-
-
-def test_quarantine_unhandled_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key, value in {
-        "GITHUB_EVENT_NAME": "push",
-        "GITHUB_ACTIONS": "true",
-        "MERGIFY_API_URL": "https://api.mergify.com",
-        "MERGIFY_TOKEN": "abc",
-        "GITHUB_REPOSITORY": "user/repo",
-        "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-        "GITHUB_WORKFLOW": "JOB",
-        "GITHUB_BASE_REF": "main",
-    }.items():
-        monkeypatch.setenv(key, value)
-
-    runner = testing.CliRunner()
-
-    with (
-        mock.patch.object(
-            upload,
-            "upload",
-            mock.Mock(),
-        ),
-        mock.patch.object(
-            quarantine,
-            "check_and_update_failing_spans",
-            side_effect=Exception("API crashed"),
-        ) as mocked_quarantine,
-    ):
-        result = runner.invoke(
-            ci_cli.junit_process,
-            [str(REPORT_XML)],
-        )
-
-    assert result.exit_code == 1, (result.stdout, result.stderr)
-    assert (
-        result.stderr
-        == """❌ An unexpected error occurred when checking quarantined tests: API crashed
-This error occurred because there are failed tests in your CI pipeline and will disappear once your CI passes successfully.
-
-If you're unsure why this is happening or need assistance, please contact Mergify to report the issue.
-"""
-    )
-    assert (
-        "FAIL — Unable to determine quarantined failures due to above error"
-        in result.stdout
-    )
-    assert "MERGIFY_TEST_RUN_ID=" in result.stdout
-    assert mocked_quarantine.call_count == 1
-
-
-def test_quarantine_handled_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key, value in {
-        "GITHUB_EVENT_NAME": "push",
-        "GITHUB_ACTIONS": "true",
-        "MERGIFY_API_URL": "https://api.mergify.com",
-        "MERGIFY_TOKEN": "abc",
-        "GITHUB_REPOSITORY": "user/repo",
-        "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-        "GITHUB_WORKFLOW": "JOB",
-        "GITHUB_BASE_REF": "main",
-    }.items():
-        monkeypatch.setenv(key, value)
-
-    runner = testing.CliRunner()
-
-    with (
-        mock.patch.object(
-            upload,
-            "upload",
-            mock.Mock(),
-        ),
-        mock.patch.object(
-            quarantine,
-            "check_and_update_failing_spans",
-            side_effect=quarantine.QuarantineFailedError("It's not OK"),
-        ) as mocked_quarantine,
-    ):
-        result = runner.invoke(
-            ci_cli.junit_process,
-            [str(REPORT_XML)],
-        )
-    assert result.exit_code == 1, (result.stdout, result.stderr)
-    assert (
-        result.stderr
-        == """It's not OK
-This error occurred because there are failed tests in your CI pipeline and will disappear once your CI passes successfully.
-
-If you're unsure why this is happening or need assistance, please contact Mergify to report the issue.
-"""
-    )
-    assert (
-        "FAIL — Unable to determine quarantined failures due to above error"
-        in result.stdout
-    )
-    assert "MERGIFY_TEST_RUN_ID=" in result.stdout
-    assert mocked_quarantine.call_count == 1
-
-
-def test_upload_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key, value in {
-        "GITHUB_EVENT_NAME": "push",
-        "GITHUB_ACTIONS": "true",
-        "MERGIFY_API_URL": "https://api.mergify.com",
-        "MERGIFY_TOKEN": "abc",
-        "GITHUB_REPOSITORY": "user/repo",
-        "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-        "GITHUB_WORKFLOW": "JOB",
-        "GITHUB_BASE_REF": "main",
-    }.items():
-        monkeypatch.setenv(key, value)
-
-    runner = testing.CliRunner()
-
-    with (
-        mock.patch.object(
-            upload,
-            "upload",
-            mock.Mock(),
-        ) as mocked_upload,
-        mock.patch.object(
-            quarantine,
-            "check_and_update_failing_spans",
-            return_value=0,
-        ),
-    ):
-        mocked_upload.side_effect = Exception("Upload failed")
-        result = runner.invoke(
-            ci_cli.junit_process,
-            [str(REPORT_XML)],
-        )
-    assert result.exit_code == 0, (result.stdout, result.stderr)
-    assert result.stderr == "❌ Error uploading JUnit XML reports: Upload failed\n"
-    assert "MERGIFY_TEST_RUN_ID=" in result.stdout
-    assert mocked_upload.call_count == 1
-    assert mocked_upload.call_args.kwargs == {
-        "api_url": "https://api.mergify.com",
-        "token": "abc",
-        "repository": "user/repo",
-        "spans": anys.ANY_LIST,
-    }
 
 
 def test_process_tests_target_branch_callback() -> None:

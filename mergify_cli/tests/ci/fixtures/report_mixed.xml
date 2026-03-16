@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="2" skipped="0" tests="3" time="0.030"
+               timestamp="2024-08-14T12:25:18.210796+02:00" hostname="mergify-MBP">
+        <testcase classname="tests" name="test_success" time="0.000"/>
+        <testcase classname="tests" name="test_flaky" time="0.000">
+            <failure message="flaky timeout">Connection timed out</failure>
+        </testcase>
+        <testcase classname="tests" name="test_broken" time="0.000">
+            <failure message="invalid input" type="ValueError">Traceback:
+  File "test.py", line 10
+ValueError: invalid input</failure>
+        </testcase>
+    </testsuite>
+</testsuites>
