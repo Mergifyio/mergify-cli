@@ -10,7 +10,7 @@ SCOPE_NAME_RE = r"^[A-Za-z0-9_-]+$"
 
 ScopeName = typing.Annotated[
     str,
-    pydantic.StringConstraints(pattern=SCOPE_NAME_RE, min_length=1),
+    pydantic.StringConstraints(pattern=SCOPE_NAME_RE, min_length=2),
 ]
 
 
@@ -75,10 +75,7 @@ class Scopes(pydantic.BaseModel):
             "`None` disables scoping."
         ),
     )
-    merge_queue_scope: str | None = pydantic.Field(
+    merge_queue_scope: ScopeName = pydantic.Field(
         default="merge-queue",
-        description=(
-            "Optional scope name automatically applied to merge queue PRs. "
-            "Set to `None` to disable."
-        ),
+        description="Scope name automatically applied to merge queue PRs.",
     )
