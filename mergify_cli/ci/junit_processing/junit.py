@@ -255,7 +255,7 @@ async def junit_to_spans(
                     is_remote=False,
                 ),
                 parent=testsuite_context,
-                attributes=common_attributes | attributes,
+                attributes={**common_attributes, **attributes},
                 status=span_status,
                 resource=resource,
             )
