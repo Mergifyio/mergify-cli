@@ -27,6 +27,7 @@ async def process_junit_files(
     test_language: str | None,
     tests_target_branch: str,
     files: tuple[str, ...],
+    test_exit_code: int | None = None,
 ) -> None:
     # ── Header ──
     click.echo(SEPARATOR)
@@ -170,6 +171,25 @@ async def process_junit_files(
 
     # ── Quarantine ──
     _print_quarantine_section(result, error=quarantine_error)
+
+    # ── Silent failure detection ──
+    if test_exit_code is not None and test_exit_code != 0 and nb_failing_spans == 0:
+        click.echo("")
+        click.echo(SEPARATOR_LIGHT)
+        click.echo("")
+        click.echo(
+            f"  ⚠️  Test runner exited with an error (exit code: {test_exit_code})",
+        )
+        click.echo("      but no test failures appear in the JUnit report.")
+        click.echo("      The report may be incomplete — check your test runner logs.")
+        click.echo("")
+        click.echo(SEPARATOR)
+        click.echo(
+            "❌ FAIL — test runner exited with an error but no failures were reported",
+        )
+        click.echo("  Exit code: 1")
+        click.echo(SEPARATOR)
+        sys.exit(1)
 
     # ── Verdict ──
     nb_quarantined_failures = len(result.failing_spans) if result is not None else 0
