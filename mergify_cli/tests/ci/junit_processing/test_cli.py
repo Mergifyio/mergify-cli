@@ -55,6 +55,7 @@ async def _run_process(
     quarantine_result: quarantine.QuarantineResult | None = None,
     quarantine_side_effect: Exception | None = None,
     upload_side_effect: Exception | None = None,
+    test_exit_code: int | None = None,
     capsys: pytest.CaptureFixture[str],
 ) -> ProcessResult:
     quarantine_mock = mock.AsyncMock()
@@ -93,6 +94,7 @@ async def _run_process(
             test_language=None,
             tests_target_branch="main",
             files=files,
+            test_exit_code=test_exit_code,
         )
 
     captured = capsys.readouterr()
@@ -792,3 +794,154 @@ async def test_no_test_cases_in_junit(
         "  Exit code: 1\n"
         "══════════════════════════════════════════\n"
     )
+
+
+# ── Silent failure detection (--test-exit-code) ──
+
+
+async def test_test_exit_code_not_provided_all_pass(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Backwards compat: no --test-exit-code flag, all tests pass -> exit 0."""
+    result = await _run_process(
+        files=(str(REPORT_ALL_PASS_XML),),
+        quarantine_result=quarantine.QuarantineResult(
+            failing_spans=[],
+            quarantined_spans=[],
+            non_quarantined_spans=[],
+            failing_tests_not_quarantined_count=0,
+        ),
+        test_exit_code=None,
+        capsys=capsys,
+    )
+
+    assert result.exit_code == 0
+    assert "all tests passed" in result.stdout
+
+
+async def test_test_exit_code_zero_all_pass(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--test-exit-code 0, all tests pass -> exit 0."""
+    result = await _run_process(
+        files=(str(REPORT_ALL_PASS_XML),),
+        quarantine_result=quarantine.QuarantineResult(
+            failing_spans=[],
+            quarantined_spans=[],
+            non_quarantined_spans=[],
+            failing_tests_not_quarantined_count=0,
+        ),
+        test_exit_code=0,
+        capsys=capsys,
+    )
+
+    assert result.exit_code == 0
+    assert "all tests passed" in result.stdout
+
+
+async def test_test_exit_code_nonzero_with_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--test-exit-code 1 with failures in JUnit -> normal quarantine flow."""
+    result = await _run_process(
+        quarantine_result=quarantine.QuarantineResult(
+            failing_spans=[FAILING_SPAN],
+            quarantined_spans=[],
+            non_quarantined_spans=[FAILING_SPAN],
+            failing_tests_not_quarantined_count=1,
+        ),
+        test_exit_code=1,
+        capsys=capsys,
+    )
+
+    assert result.exit_code == 1
+    assert "0/1 failures quarantined" in result.stdout
+    assert "test runner exited with an error" not in result.stdout
+
+
+async def test_test_exit_code_nonzero_no_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--test-exit-code 1 with no failures -> silent failure detected, exit 1."""
+    result = await _run_process(
+        files=(str(REPORT_ALL_PASS_XML),),
+        quarantine_result=quarantine.QuarantineResult(
+            failing_spans=[],
+            quarantined_spans=[],
+            non_quarantined_spans=[],
+            failing_tests_not_quarantined_count=0,
+        ),
+        test_exit_code=1,
+        capsys=capsys,
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == (
+        "══════════════════════════════════════════\n"
+        "  🚀 CI Insights\n"
+        "\n"
+        "  Uploads JUnit test results to Mergify CI Insights and evaluates\n"
+        "  quarantine status for failing tests. This step determines the\n"
+        "  final CI status — quarantined failures are ignored.\n"
+        "  Learn more: https://docs.mergify.com/ci-insights/quarantine\n"
+        "══════════════════════════════════════════\n"
+        "\n"
+        "  Run ID: 00000002dfdc1c3e\n"
+        "      ☁️ 1 report uploaded\n"
+        "      🧪 2 tests (0 failures)\n"
+        "\n"
+        "──────────────────────────────────────────\n"
+        "\n"
+        "  ⚠️  Test runner exited with an error (exit code: 1)\n"
+        "      but no test failures appear in the JUnit report.\n"
+        "      The report may be incomplete — check your test runner logs.\n"
+        "\n"
+        "══════════════════════════════════════════\n"
+        "❌ FAIL — test runner exited with an error but no failures were reported\n"
+        "  Exit code: 1\n"
+        "══════════════════════════════════════════\n"
+    )
+
+
+async def test_test_exit_code_oom_kill_no_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--test-exit-code 137 (OOM) with no failures -> shows exit code 137 in warning."""
+    result = await _run_process(
+        files=(str(REPORT_ALL_PASS_XML),),
+        quarantine_result=quarantine.QuarantineResult(
+            failing_spans=[],
+            quarantined_spans=[],
+            non_quarantined_spans=[],
+            failing_tests_not_quarantined_count=0,
+        ),
+        test_exit_code=137,
+        capsys=capsys,
+    )
+
+    assert result.exit_code == 1
+    assert "exit code: 137" in result.stdout
+    assert (
+        "test runner exited with an error but no failures were reported"
+        in result.stdout
+    )
+
+
+async def test_test_exit_code_nonzero_with_quarantined_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--test-exit-code 1 with all failures quarantined -> quarantine logic applies, exit 0."""
+    result = await _run_process(
+        quarantine_result=quarantine.QuarantineResult(
+            failing_spans=[FAILING_SPAN],
+            quarantined_spans=[FAILING_SPAN],
+            non_quarantined_spans=[],
+            failing_tests_not_quarantined_count=0,
+        ),
+        test_exit_code=1,
+        capsys=capsys,
+    )
+
+    assert result.exit_code == 0
+    assert "failures quarantined, CI status unaffected" in result.stdout
+    assert "test runner exited with an error" not in result.stdout

@@ -101,6 +101,15 @@ ci = click.Group(
     envvar=["GITHUB_BASE_REF", "GITHUB_HEAD_REF", "GITHUB_REF_NAME", "GITHUB_REF"],
     callback=_process_tests_target_branch,
 )
+@click.option(
+    "--test-exit-code",
+    "-e",
+    help="Exit code of the test runner process. Used to detect silent failures where the runner crashed but the JUnit report appears clean.",
+    type=int,
+    required=False,
+    default=None,
+    envvar="MERGIFY_TEST_EXIT_CODE",
+)
 @click.argument(
     "files",
     nargs=-1,
@@ -116,6 +125,7 @@ async def junit_upload(
     test_framework: str | None,
     test_language: str | None,
     tests_target_branch: str,
+    test_exit_code: int | None,
     files: tuple[str, ...],
 ) -> None:
     await junit_processing_cli.process_junit_files(
@@ -126,6 +136,7 @@ async def junit_upload(
         test_language=test_language,
         tests_target_branch=tests_target_branch,
         files=files,
+        test_exit_code=test_exit_code,
     )
 
 
@@ -172,6 +183,15 @@ async def junit_upload(
     envvar=["GITHUB_BASE_REF", "GITHUB_HEAD_REF", "GITHUB_REF_NAME", "GITHUB_REF"],
     callback=_process_tests_target_branch,
 )
+@click.option(
+    "--test-exit-code",
+    "-e",
+    help="Exit code of the test runner process. Used to detect silent failures where the runner crashed but the JUnit report appears clean.",
+    type=int,
+    required=False,
+    default=None,
+    envvar="MERGIFY_TEST_EXIT_CODE",
+)
 @click.argument(
     "files",
     nargs=-1,
@@ -187,6 +207,7 @@ async def junit_process(
     test_framework: str | None,
     test_language: str | None,
     tests_target_branch: str,
+    test_exit_code: int | None,
     files: tuple[str, ...],
 ) -> None:
     await junit_processing_cli.process_junit_files(
@@ -197,6 +218,7 @@ async def junit_process(
         test_language=test_language,
         tests_target_branch=tests_target_branch,
         files=files,
+        test_exit_code=test_exit_code,
     )
 
 
