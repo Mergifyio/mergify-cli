@@ -169,8 +169,7 @@ async def process_junit_files(
         click.echo("      └─")
 
     # ── Quarantine ──
-    if _print_quarantine_section(result, error=quarantine_error):
-        pass
+    _print_quarantine_section(result, error=quarantine_error)
 
     # ── Verdict ──
     nb_quarantined_failures = len(result.failing_spans) if result is not None else 0
