@@ -46,7 +46,7 @@ Changelog = "https://github.com/Mergifyio/mergify-cli/releases"
 dev = [
     "mypy==1.19.1",
     "mypy-extensions==1.1.0",
-    "ruff==0.15.7",
+    "ruff==0.15.8",
     "pytest==9.0.2",
     "poethepoet==0.42.1",
     "pytest-asyncio==1.3.0",
