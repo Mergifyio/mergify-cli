@@ -23,7 +23,7 @@ dependencies = [
     "jsonschema==4.26.0",
     "rich==14.3.3",
     "aiofiles==25.1.0",
-    "click==8.3.1",
+    "click==8.3.2",
     "opentelemetry-exporter-otlp-proto-http==1.40.0",
     "opentelemetry-sdk==1.40.0",
     "tenacity==9.1.4",
