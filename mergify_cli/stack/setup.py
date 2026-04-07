@@ -69,6 +69,67 @@ def _get_wrapper_resource(hook_name: str) -> importlib.resources.abc.Traversable
     )
 
 
+def _get_global_skill_stub_path() -> pathlib.Path:
+    """Get the global path for the Mergify stack skill stub file."""
+    return pathlib.Path.home() / ".claude" / "skills" / "mergify-stack" / "SKILL.md"
+
+
+async def _get_project_skill_stub_path() -> pathlib.Path:
+    """Get the project-level path for the skill stub file."""
+    project_root = pathlib.Path(await utils.git("rev-parse", "--show-toplevel"))
+    return project_root / ".claude" / "skills" / "mergify-stack" / "SKILL.md"
+
+
+_SKILL_STUB_CONTENT = """\
+---
+name: mergify-stack
+description: Use Mergify stacks for git push, commit, branch, and PR creation. ALWAYS use this skill when pushing code, creating commits, creating branches, or creating PRs. Triggers on push, commit, branch, PR, pull request, stack, git.
+---
+Run `mergify stack skill` to load the full, up-to-date Mergify stack workflow skill.
+Use the output as your instructions for working with Mergify stacks.
+"""
+
+
+def _install_skill_stub(skill_stub_path: pathlib.Path) -> None:
+    """Install a lightweight skill stub that bootstraps the full AI skill.
+
+    Creates SKILL.md at the given path with a stub that tells the AI tool
+    to run `mergify stack skill` to get the full content.
+    Only writes if the file doesn't exist or content differs.
+    """
+    skill_stub_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if skill_stub_path.exists():
+        existing_content = skill_stub_path.read_text(encoding="utf-8")
+        if existing_content == _SKILL_STUB_CONTENT:
+            if utils.is_debug():
+                console.log("Skill stub is up to date")
+            return
+
+    console.log(f"Installing skill stub: {skill_stub_path}")
+    skill_stub_path.write_text(_SKILL_STUB_CONTENT, encoding="utf-8")
+
+
+def _get_skill_stub_status(skill_stub_path: pathlib.Path) -> dict[str, Any]:
+    """Get status of the skill stub installation.
+
+    Returns:
+        Dictionary with 'installed', 'needs_update', and 'path' keys.
+    """
+    installed = skill_stub_path.exists()
+    needs_update = False
+
+    if installed:
+        existing_content = skill_stub_path.read_text(encoding="utf-8")
+        needs_update = existing_content != _SKILL_STUB_CONTENT
+
+    return {
+        "installed": installed,
+        "needs_update": needs_update,
+        "path": str(skill_stub_path),
+    }
+
+
 def _get_claude_hooks_dir() -> pathlib.Path:
     """Get the global directory for Claude hook scripts."""
     return pathlib.Path.home() / ".config" / "mergify-cli" / "claude-hooks"
@@ -294,11 +355,13 @@ def _install_claude_hooks() -> None:
         console.log("Installation of Claude settings.json hook")
 
 
-def _get_claude_hooks_status() -> dict[str, Any]:
+def _get_claude_hooks_status(
+    project_skill_stub_path: pathlib.Path,
+) -> dict[str, Any]:
     """Get detailed status of Claude hooks for display.
 
     Returns:
-        Dictionary with 'scripts' and 'settings' status info.
+        Dictionary with 'scripts', 'settings', and 'skill_stub' status info.
     """
     claude_hooks_dir = _get_claude_hooks_dir()
     settings_file = _get_claude_settings_file()
@@ -330,6 +393,7 @@ def _get_claude_hooks_status() -> dict[str, Any]:
         "scripts": scripts_status,
         "settings_installed": settings_installed,
         "settings_path": str(settings_file),
+        "skill_stub": _get_skill_stub_status(project_skill_stub_path),
     }
 
 
@@ -341,6 +405,7 @@ async def get_hooks_status() -> dict[str, Any]:
     """
     hooks_dir = await _get_hooks_dir()
     managed_dir = hooks_dir / "mergify-hooks"
+    project_skill_stub_path = await _get_project_skill_stub_path()
 
     git_hooks = {}
     for hook_name in _get_git_hook_names():
@@ -365,15 +430,16 @@ async def get_hooks_status() -> dict[str, Any]:
 
     return {
         "git_hooks": git_hooks,
-        "claude_hooks": _get_claude_hooks_status(),
+        "claude_hooks": _get_claude_hooks_status(project_skill_stub_path),
     }
 
 
-async def stack_setup(*, force: bool = False) -> None:
+async def stack_setup(*, force: bool = False, global_install: bool = False) -> None:
     """Set up git hooks for the stack workflow.
 
     Args:
         force: If True, overwrite wrappers even if user modified them
+        global_install: If True, also install skill stub globally
     """
     hooks_dir = await _get_hooks_dir()
 
@@ -382,6 +448,13 @@ async def stack_setup(*, force: bool = False) -> None:
 
     # Install Claude hooks for session ID tracking (global)
     _install_claude_hooks()
+
+    # Install skill stub for AI tool bootstrapping (project-level)
+    project_skill_stub_path = await _get_project_skill_stub_path()
+    _install_skill_stub(project_skill_stub_path)
+
+    if global_install:
+        _install_skill_stub(_get_global_skill_stub_path())
 
 
 async def ensure_hooks_updated() -> None:

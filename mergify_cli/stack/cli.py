@@ -174,6 +174,24 @@ def _print_hooks_status(status: dict[str, Any]) -> None:
         needs_setup = True
     console.print()
 
+    # Skill stub section
+    skill_stub = claude_hooks["skill_stub"]
+    console.print("  skill stub:")
+    if skill_stub["installed"]:
+        if skill_stub["needs_update"]:
+            console.print(
+                f"    Status: [yellow]needs update[/] ({skill_stub['path']})",
+            )
+            needs_setup = True
+        else:
+            console.print(
+                f"    Status: [green]up to date[/] ({skill_stub['path']})",
+            )
+    else:
+        console.print("    Status: [red]not installed[/]")
+        needs_setup = True
+    console.print()
+
     if needs_setup or needs_force:
         console.print("Run 'mergify stack hooks --setup' to install/upgrade hooks.")
         if needs_force:
@@ -197,10 +215,16 @@ def _print_hooks_status(status: dict[str, Any]) -> None:
     is_flag=True,
     help="Force reinstall wrappers (use with --setup)",
 )
+@click.option(
+    "--global",
+    "global_install",
+    is_flag=True,
+    help="Also install AI skill stub globally (~/.claude/skills/)",
+)
 @utils.run_with_asyncio
-async def hooks(*, do_setup: bool, force: bool) -> None:
+async def hooks(*, do_setup: bool, force: bool, global_install: bool) -> None:
     if do_setup:
-        await stack_setup_mod.stack_setup(force=force)
+        await stack_setup_mod.stack_setup(force=force, global_install=global_install)
     else:
         status = await stack_setup_mod.get_hooks_status()
         _print_hooks_status(status)
@@ -218,13 +242,19 @@ async def hooks(*, do_setup: bool, force: bool) -> None:
     is_flag=True,
     help="Check status only (use 'stack hooks' instead)",
 )
+@click.option(
+    "--global",
+    "global_install",
+    is_flag=True,
+    help="Also install AI skill stub globally (~/.claude/skills/)",
+)
 @utils.run_with_asyncio
-async def setup(*, force: bool, check: bool) -> None:
+async def setup(*, force: bool, check: bool, global_install: bool) -> None:
     if check:
         status = await stack_setup_mod.get_hooks_status()
         _print_hooks_status(status)
     else:
-        await stack_setup_mod.stack_setup(force=force)
+        await stack_setup_mod.stack_setup(force=force, global_install=global_install)
 
 
 @stack.command(help="Edit the stack history")
