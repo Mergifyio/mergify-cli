@@ -15,10 +15,16 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 import yaml
 
+from mergify_cli.stack import setup as stack_setup_mod
 from mergify_cli.stack import skill as stack_skill_mod
+
+
+if TYPE_CHECKING:
+    import pathlib
 
 
 def test_skill_content_is_readable() -> None:
@@ -67,3 +73,54 @@ def test_skill_references_valid_commands() -> None:
             f"Skill references 'mergify stack {cmd}' but it's not a registered command. "
             f"Available: {sorted(available)}"
         )
+
+
+def test_skill_stub_has_valid_frontmatter() -> None:
+    """Verify the skill stub has valid YAML frontmatter and references mergify stack skill."""
+    content = stack_setup_mod._SKILL_STUB_CONTENT
+    # Extract YAML frontmatter between --- markers
+    match = re.match(r"^---\n(.+?)\n---\n", content, re.DOTALL)
+    assert match is not None, "Skill stub must have YAML frontmatter"
+
+    frontmatter = yaml.safe_load(match.group(1))
+    assert isinstance(frontmatter, dict), "Frontmatter must be a YAML mapping"
+    assert "name" in frontmatter, "Frontmatter must have 'name'"
+    assert "description" in frontmatter, "Frontmatter must have 'description'"
+    assert frontmatter["name"] == "mergify-stack"
+
+    # Verify the stub references the command to load full skill
+    assert "mergify stack skill" in content, (
+        "Skill stub must reference 'mergify stack skill' command"
+    )
+
+
+def test_skill_stub_install(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Verify _install_skill_stub creates the file with correct content."""
+    stub_path = tmp_path / ".claude" / "skills" / "mergify-stack" / "SKILL.md"
+    assert not stub_path.exists()
+
+    stack_setup_mod._install_skill_stub(stub_path)
+
+    assert stub_path.exists()
+    content = stub_path.read_text(encoding="utf-8")
+    assert content == stack_setup_mod._SKILL_STUB_CONTENT
+
+    # Calling again should be a no-op (idempotent)
+    stack_setup_mod._install_skill_stub(stub_path)
+    # Content is unchanged, so file should remain the same
+    assert stub_path.read_text(encoding="utf-8") == content
+
+
+def test_skill_stub_updates_when_content_differs(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Verify _install_skill_stub updates the file when content differs."""
+    stub_path = tmp_path / ".claude" / "skills" / "mergify-stack" / "SKILL.md"
+    stub_path.parent.mkdir(parents=True)
+    stub_path.write_text("old content", encoding="utf-8")
+
+    stack_setup_mod._install_skill_stub(stub_path)
+
+    assert stub_path.read_text(encoding="utf-8") == stack_setup_mod._SKILL_STUB_CONTENT
