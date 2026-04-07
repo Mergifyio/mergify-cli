@@ -27,6 +27,19 @@ STATUS_STYLES: dict[str, tuple[str, str]] = {
     "frozen": ("❄", "cyan"),
 }
 
+CHECK_STATE_STYLES: dict[str, tuple[str, str]] = {
+    "success": ("✓", "green"),
+    "pending": ("◌", "blue"),
+    "failure": ("✗", "red"),
+    "error": ("✗", "red"),
+    "cancelled": ("○", "dim"),
+    "action_required": ("!", "yellow"),
+    "timed_out": ("⏰", "red"),
+    "neutral": ("○", "dim"),
+    "skipped": ("○", "dim"),
+    "stale": ("○", "dim"),
+}
+
 
 def _relative_time(iso_str: str | None, *, future: bool = False) -> str:
     if not iso_str:
@@ -157,6 +170,80 @@ def _print_waiting_prs(pull_requests: list[queue_api.QueuePullRequest]) -> None:
         console.print(line)
 
 
+def _print_pull_metadata(data: queue_api.QueuePullResponse) -> None:
+    console.print(Text(f"PR #{data['number']}", style="bold"))
+    console.print()
+    console.print(f"  Position:    {data['position']}")
+    console.print(f"  Priority:    {data['priority_rule_name']}")
+    console.print(f"  Queue rule:  {data['queue_rule_name']}")
+    queued_rel = _relative_time(data["queued_at"])
+    console.print(
+        f"  Queued at:   {queued_rel}"
+        if queued_rel
+        else f"  Queued at:   {data['queued_at']}",
+    )
+    eta = data.get("estimated_time_of_merge")
+    eta_rel = _relative_time(eta, future=True) if eta else ""
+    console.print(f"  ETA:         {eta_rel}" if eta_rel else "  ETA:         -")
+
+
+def _check_state_text(state: str) -> Text:
+    icon, style = CHECK_STATE_STYLES.get(state, ("?", "dim"))
+    text = Text()
+    text.append(f"{icon} ", style=style)
+    text.append(state, style=style)
+    return text
+
+
+def _print_checks_section(mc: queue_api.QueueMergeabilityCheck) -> None:
+    from rich.table import Table
+
+    console.print()
+    ci_label = Text("  CI State: ")
+    ci_label.append_text(_check_state_text(mc["ci_state"]))
+    ci_label.append(f"   {mc['check_type']}", style="dim")
+    started = mc.get("started_at")
+    if started:
+        rel = _relative_time(started)
+        if rel:
+            ci_label.append(f"   started {rel}", style="dim")
+    console.print(ci_label)
+
+    checks = mc["checks"]
+    if checks:
+        table = Table(show_header=True, padding=(0, 1), box=None)
+        table.add_column("  Check", style="dim")
+        table.add_column("Status")
+        for check in checks:
+            table.add_row(f"  {check['name']}", _check_state_text(check["state"]))
+        console.print(table)
+
+
+def _print_conditions_tree(
+    evaluation: queue_api.QueueConditionEvaluation,
+) -> None:
+    console.print()
+    tree = Tree(Text("Conditions", style="bold"))
+    _add_condition_nodes(tree, evaluation)
+    console.print(tree)
+
+
+def _add_condition_nodes(
+    parent: Tree,
+    evaluation: queue_api.QueueConditionEvaluation,
+) -> None:
+    subconditions = evaluation.get("subconditions") or []
+    if subconditions:
+        for sub in subconditions:
+            icon = "✓" if sub["match"] else "✗"
+            style = "green" if sub["match"] else "red"
+            label = Text()
+            label.append(f"{icon} ", style=style)
+            label.append(sub["label"])
+            node = parent.add(label)
+            _add_condition_nodes(node, sub)
+
+
 @click.group(
     cls=DYMGroup,
     invoke_without_command=True,
@@ -263,3 +350,54 @@ async def status(ctx: click.Context, *, branch: str | None, output_json: bool) -
         if batches:
             console.print()
         _print_waiting_prs(waiting)
+
+
+@queue.command(help="Show detailed state of a pull request in the merge queue")
+@click.argument("pr_number", type=int)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output in JSON format",
+)
+@click.pass_context
+@utils.run_with_asyncio
+async def show(ctx: click.Context, *, pr_number: int, output_json: bool) -> None:
+    import httpx
+
+    try:
+        async with utils.get_mergify_http_client(
+            ctx.obj["api_url"],
+            ctx.obj["token"],
+        ) as client:
+            data = await queue_api.get_queue_pull(
+                client,
+                ctx.obj["repository"],
+                pr_number,
+            )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            console.print(
+                f"PR #{pr_number} is not in the merge queue",
+                style="yellow",
+            )
+            raise SystemExit(1) from None
+        raise
+
+    if output_json:
+        import json
+
+        click.echo(json.dumps(data, indent=2))
+        return
+
+    _print_pull_metadata(data)
+
+    mc = data.get("mergeability_check")
+    if mc is None:
+        console.print()
+        console.print("  Waiting for mergeability check...", style="dim")
+    else:
+        _print_checks_section(mc)
+        conditions = mc.get("conditions_evaluation")
+        if conditions is not None:
+            _print_conditions_tree(conditions)
