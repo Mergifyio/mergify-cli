@@ -194,6 +194,7 @@ async def test_get_hooks_status_no_hooks(
     git_hooks = status["git_hooks"]
     assert "commit-msg" in git_hooks
     assert "prepare-commit-msg" in git_hooks
+    assert "pre-push" in git_hooks
 
     # All git hooks should show as not installed
     for info in git_hooks.values():
@@ -217,7 +218,7 @@ async def test_get_hooks_status_installed_hooks(
     git_mock.mock("rev-parse", "--git-path", "hooks", output=str(hooks_dir))
 
     # Install hooks
-    for hook_name in ("commit-msg", "prepare-commit-msg"):
+    for hook_name in setup._get_git_hook_names():
         # Install wrapper
         wrapper_source = str(
             importlib.resources.files("mergify_cli.stack").joinpath(
