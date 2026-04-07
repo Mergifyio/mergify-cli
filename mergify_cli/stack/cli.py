@@ -21,6 +21,7 @@ from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import session as stack_session_mod
 from mergify_cli.stack import setup as stack_setup_mod
+from mergify_cli.stack import skill as stack_skill_mod
 
 
 def trunk_type(
@@ -466,6 +467,11 @@ async def session(*, commit: str, launch: bool) -> None:
 
     if launch:
         stack_session_mod.launch_claude_session(session_id)
+
+
+@stack.command(help="Output the AI skill for the Mergify stack workflow")
+def skill() -> None:
+    click.echo(stack_skill_mod.get_skill_content(), nl=False)
 
 
 @stack.command(name="list", help="List the stack's commits and their associated PRs")
