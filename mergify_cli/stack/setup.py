@@ -110,7 +110,7 @@ def _install_skill_stub(
         if existing_content == _SKILL_STUB_CONTENT:
             if verbose:
                 console.print(
-                    f"  ✅ Skill stub: up to date ({skill_stub_path})",
+                    f"  ✓ Skill stub: up to date ({skill_stub_path})",
                     style="green",
                 )
             return
@@ -118,9 +118,8 @@ def _install_skill_stub(
     skill_stub_path.write_text(_SKILL_STUB_CONTENT, encoding="utf-8")
     if verbose:
         action = "updated" if is_update else "installed"
-        emoji = "🔄" if is_update else "📦"
         console.print(
-            f"  {emoji} Skill stub: {action} ({skill_stub_path})",
+            f"  ✓ Skill stub: {action} ({skill_stub_path})",
             style="bold green",
         )
 
@@ -322,12 +321,12 @@ def _install_claude_hooks(*, verbose: bool = False) -> None:
             dest_file.chmod(0o755)
             if verbose:
                 console.print(
-                    f"  🔄 Hook script: updated ({src_file.name})",
+                    f"  ✓ Hook script: updated ({src_file.name})",
                     style="bold cyan",
                 )
         elif verbose:
             console.print(
-                f"  ✅ Hook script: up to date ({src_file.name})",
+                f"  ✓ Hook script: up to date ({src_file.name})",
                 style="green",
             )
 
@@ -362,7 +361,7 @@ def _install_claude_hooks(*, verbose: bool = False) -> None:
     if already_installed:
         if verbose:
             console.print(
-                f"  ✅ Settings hook: up to date ({settings_file})",
+                f"  ✓ Settings hook: up to date ({settings_file})",
                 style="green",
             )
     else:
@@ -383,7 +382,7 @@ def _install_claude_hooks(*, verbose: bool = False) -> None:
         )
         if verbose:
             console.print(
-                f"  🔗 Settings hook: installed ({settings_file})",
+                f"  ✓ Settings hook: installed ({settings_file})",
                 style="bold cyan",
             )
 
@@ -480,7 +479,7 @@ async def stack_setup(*, force: bool = False, global_install: bool = False) -> N
         _install_git_hook(hooks_dir, hook_name, force=force)
 
     # Install Claude hooks for session ID tracking (global)
-    console.print("\n🤖 Claude Code integration:", style="bold")
+    console.print("\nClaude Code integration:", style="bold")
     _install_claude_hooks(verbose=True)
 
     # Install skill stub for AI tool bootstrapping (project-level)
