@@ -31,12 +31,13 @@ A branch is a stack. Keep stacks short and focused:
 ## Commands
 
 ```bash
-mergify stack new NAME  # Create a new stack/branch for new work
-mergify stack push      # Push and create/update PRs
-mergify stack list      # Show commit <-> PR mapping for current stack
+mergify stack new NAME       # Create a new stack/branch for new work
+mergify stack push           # Push and create/update PRs
+mergify stack list           # Show commit <-> PR mapping for current stack
+mergify stack list --json    # Same, but machine-readable JSON output
 ```
 
-Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. This is the go-to command to understand the current state of a stack.
+Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. This is the go-to command to understand the current state of a stack. Use `--json` when you need to parse the output programmatically.
 
 ## CRITICAL: Check Branch Before ANY Commit
 

@@ -76,7 +76,11 @@ async def push_branches(
         if c.action in {"create", "update"}
     ]
     if refspecs:
-        await utils.git("push", "-f", remote, *refspecs)
+        os.environ["MERGIFY_STACK_PUSH"] = "1"
+        try:
+            await utils.git("push", "-f", remote, *refspecs)
+        finally:
+            os.environ.pop("MERGIFY_STACK_PUSH", None)
 
 
 @dataclasses.dataclass
