@@ -16,7 +16,7 @@ from mergify_cli.queue import api as queue_api
 STATUS_STYLES: dict[str, tuple[str, str]] = {
     "running": ("●", "green"),
     "bisecting": ("◑", "yellow"),
-    "preparing": ("◌", "blue"),
+    "preparing": ("◌", "yellow"),
     "failed": ("✗", "red"),
     "merged": ("✓", "dim green"),
     "waiting_for_merge": ("◎", "cyan"),
@@ -25,6 +25,19 @@ STATUS_STYLES: dict[str, tuple[str, str]] = {
     "waiting_schedule": ("⏰", "yellow"),
     "waiting_for_batch": ("⏳", "dim"),
     "frozen": ("❄", "cyan"),
+}
+
+CHECK_STATE_STYLES: dict[str, tuple[str, str]] = {
+    "success": ("✓", "green"),
+    "pending": ("◌", "yellow"),
+    "failure": ("✗", "red"),
+    "error": ("✗", "red"),
+    "cancelled": ("○", "dim"),
+    "action_required": ("!", "red"),
+    "timed_out": ("⏰", "red"),
+    "neutral": ("○", "dim"),
+    "skipped": ("○", "dim"),
+    "stale": ("○", "dim"),
 }
 
 
@@ -157,6 +170,156 @@ def _print_waiting_prs(pull_requests: list[queue_api.QueuePullRequest]) -> None:
         console.print(line)
 
 
+def _print_pull_metadata(data: queue_api.QueuePullResponse) -> None:
+    console.print(Text(f"PR #{data['number']}", style="bold"))
+    console.print()
+    console.print(f"  Position:    {data['position']}")
+    console.print(f"  Priority:    {data['priority_rule_name']}")
+    console.print(f"  Queue rule:  {data['queue_rule_name']}")
+    queued_rel = _relative_time(data["queued_at"])
+    console.print(
+        f"  Queued at:   {queued_rel}"
+        if queued_rel
+        else f"  Queued at:   {data['queued_at']}",
+    )
+    eta = data.get("estimated_time_of_merge")
+    eta_rel = _relative_time(eta, future=True) if eta else ""
+    console.print(f"  ETA:         {eta_rel}" if eta_rel else "  ETA:         -")
+
+
+def _check_state_text(state: str) -> Text:
+    icon, style = CHECK_STATE_STYLES.get(state, ("?", "dim"))
+    text = Text()
+    text.append(f"{icon} ", style=style)
+    text.append(state, style=style)
+    return text
+
+
+def _print_checks_section(
+    mc: queue_api.QueueMergeabilityCheck,
+    *,
+    verbose: bool = False,
+) -> None:
+    from rich.table import Table
+
+    console.print()
+    ci_label = Text("  CI State: ")
+    ci_label.append_text(_check_state_text(mc["ci_state"]))
+    ci_label.append(f"   {mc['check_type']}", style="dim")
+    started = mc.get("started_at")
+    if started:
+        rel = _relative_time(started)
+        if rel:
+            ci_label.append(f"   started {rel}", style="dim")
+    console.print(ci_label)
+
+    checks = mc["checks"]
+    if not checks:
+        return
+
+    if verbose:
+        table = Table(show_header=True, padding=(0, 1), box=None)
+        table.add_column("  Check", style="dim")
+        table.add_column("Status")
+        for check in checks:
+            table.add_row(f"  {check['name']}", _check_state_text(check["state"]))
+        console.print(table)
+    else:
+        passed = sum(
+            1 for c in checks if c["state"] in {"success", "neutral", "skipped"}
+        )
+        pending = sum(1 for c in checks if c["state"] == "pending")
+        failed = len(checks) - passed - pending
+        summary = Text("  Checks:  ")
+        summary.append(f"{passed} passed", style="green")
+        if pending:
+            summary.append(f", {pending} pending", style="blue")
+        if failed:
+            summary.append(f", {failed} failed", style="red")
+        console.print(summary)
+        failing = [c for c in checks if c["state"] in {"failure", "error", "timed_out"}]
+        for check in failing:
+            line = Text("    ")
+            line.append_text(_check_state_text(check["state"]))
+            line.append(f"  {check['name']}", style="dim")
+            console.print(line)
+
+
+def _child_label(evaluation: queue_api.QueueConditionEvaluation) -> str:
+    label = evaluation["label"]
+    if label not in {"all of", "any of", "not"}:
+        return label
+    subconditions = evaluation.get("subconditions") or []
+    if not subconditions:
+        return label
+    first = subconditions[0]["label"]
+    if first in {"all of", "any of", "not"}:
+        return _child_label(subconditions[0])
+    return first
+
+
+def _summarize_failing_group(
+    evaluation: queue_api.QueueConditionEvaluation,
+) -> str:
+    subconditions = evaluation.get("subconditions") or []
+    labels = [_child_label(sub) for sub in subconditions]
+    if len(labels) <= 3:
+        return " or ".join(labels)
+    return " or ".join([*labels[:2], f"({len(labels) - 2} more)"])
+
+
+def _print_conditions_section(
+    evaluation: queue_api.QueueConditionEvaluation,
+    *,
+    verbose: bool = False,
+) -> None:
+    console.print()
+    if verbose:
+        tree = Tree(Text("Conditions", style="bold"))
+        _add_condition_nodes(tree, evaluation)
+        console.print(tree)
+        return
+
+    top_level = evaluation.get("subconditions") or []
+    if not top_level:
+        return
+
+    met = sum(1 for s in top_level if s["match"])
+    total = len(top_level)
+    header = Text("  Conditions: ")
+    if met == total:
+        header.append(f"{met}/{total} met", style="green")
+    else:
+        header.append(f"{met}/{total} met", style="yellow")
+    console.print(header)
+
+    for sub in top_level:
+        if sub["match"]:
+            continue
+        child_subs = sub.get("subconditions") or []
+        summary = _summarize_failing_group(sub) if child_subs else sub["label"]
+        line = Text("  ")
+        line.append("✗ ", style="red")
+        line.append(summary)
+        console.print(line)
+
+
+def _add_condition_nodes(
+    parent: Tree,
+    evaluation: queue_api.QueueConditionEvaluation,
+) -> None:
+    subconditions = evaluation.get("subconditions") or []
+    if subconditions:
+        for sub in subconditions:
+            icon = "✓" if sub["match"] else "✗"
+            style = "green" if sub["match"] else "red"
+            label = Text()
+            label.append(f"{icon} ", style=style)
+            label.append(sub["label"])
+            node = parent.add(label)
+            _add_condition_nodes(node, sub)
+
+
 @click.group(
     cls=DYMGroup,
     invoke_without_command=True,
@@ -263,3 +426,66 @@ async def status(ctx: click.Context, *, branch: str | None, output_json: bool) -
         if batches:
             console.print()
         _print_waiting_prs(waiting)
+
+
+@queue.command(help="Show detailed state of a pull request in the merge queue")
+@click.argument("pr_number", type=int)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show full checks table and conditions tree",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output in JSON format",
+)
+@click.pass_context
+@utils.run_with_asyncio
+async def show(
+    ctx: click.Context,
+    *,
+    pr_number: int,
+    verbose: bool,
+    output_json: bool,
+) -> None:
+    import httpx
+
+    try:
+        async with utils.get_mergify_http_client(
+            ctx.obj["api_url"],
+            ctx.obj["token"],
+        ) as client:
+            data = await queue_api.get_queue_pull(
+                client,
+                ctx.obj["repository"],
+                pr_number,
+            )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            console.print(
+                f"PR #{pr_number} is not in the merge queue",
+                style="yellow",
+            )
+            raise SystemExit(1) from None
+        raise
+
+    if output_json:
+        import json
+
+        click.echo(json.dumps(data, indent=2))
+        return
+
+    _print_pull_metadata(data)
+
+    mc = data.get("mergeability_check")
+    if mc is None:
+        console.print()
+        console.print("  Waiting for mergeability check...", style="dim")
+    else:
+        _print_checks_section(mc, verbose=verbose)
+        conditions = mc.get("conditions_evaluation")
+        if conditions is not None:
+            _print_conditions_section(conditions, verbose=verbose)
