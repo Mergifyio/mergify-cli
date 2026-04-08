@@ -90,7 +90,11 @@ Use the output as your instructions for working with Mergify stacks.
 """
 
 
-def _install_skill_stub(skill_stub_path: pathlib.Path) -> None:
+def _install_skill_stub(
+    skill_stub_path: pathlib.Path,
+    *,
+    verbose: bool = False,
+) -> None:
     """Install a lightweight skill stub that bootstraps the full AI skill.
 
     Creates SKILL.md at the given path with a stub that tells the AI tool
@@ -99,15 +103,26 @@ def _install_skill_stub(skill_stub_path: pathlib.Path) -> None:
     """
     skill_stub_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if skill_stub_path.exists():
+    is_update = skill_stub_path.exists()
+
+    if is_update:
         existing_content = skill_stub_path.read_text(encoding="utf-8")
         if existing_content == _SKILL_STUB_CONTENT:
-            if utils.is_debug():
-                console.log("Skill stub is up to date")
+            if verbose:
+                console.print(
+                    f"  ✅ Skill stub: up to date ({skill_stub_path})",
+                    style="green",
+                )
             return
 
-    console.log(f"Installing skill stub: {skill_stub_path}")
     skill_stub_path.write_text(_SKILL_STUB_CONTENT, encoding="utf-8")
+    if verbose:
+        action = "updated" if is_update else "installed"
+        emoji = "🔄" if is_update else "📦"
+        console.print(
+            f"  {emoji} Skill stub: {action} ({skill_stub_path})",
+            style="bold green",
+        )
 
 
 def _get_skill_stub_status(skill_stub_path: pathlib.Path) -> dict[str, Any]:
@@ -282,12 +297,16 @@ def _install_git_hook(
         console.log(f"Hook wrapper already installed: {hook_name}")
 
 
-def _install_claude_hooks() -> None:
+def _install_claude_hooks(*, verbose: bool = False) -> None:
     """Install Claude Code hooks for session ID tracking.
 
     Installs hooks globally:
     - Scripts: ~/.config/mergify-cli/claude-hooks/
     - Settings: ~/.claude/settings.json
+
+    Args:
+        verbose: If True, always print status (for explicit setup).
+                 If False, only print when something changes (for auto-upgrade).
     """
     claude_hooks_dir = _get_claude_hooks_dir()
     claude_hooks_dir.mkdir(parents=True, exist_ok=True)
@@ -297,13 +316,20 @@ def _install_claude_hooks() -> None:
         dest_file = claude_hooks_dir / src_file.name
 
         if _claude_script_needs_update(dest_file, src_file):
-            console.log(f"Updating Claude hook script: {src_file.name}")
             # Use as_file() context manager for safe copying from package resources
             with importlib.resources.as_file(src_file) as src_path:
                 shutil.copy(src_path, dest_file)
             dest_file.chmod(0o755)
-        elif utils.is_debug():
-            console.log(f"Claude hook script is up to date: {src_file.name}")
+            if verbose:
+                console.print(
+                    f"  🔄 Hook script: updated ({src_file.name})",
+                    style="bold cyan",
+                )
+        elif verbose:
+            console.print(
+                f"  ✅ Hook script: up to date ({src_file.name})",
+                style="green",
+            )
 
     # Install/update Claude settings
     settings_file = _get_claude_settings_file()
@@ -334,8 +360,11 @@ def _install_claude_hooks() -> None:
     )
 
     if already_installed:
-        if utils.is_debug():
-            console.log("Claude settings.json hook is up to date")
+        if verbose:
+            console.print(
+                f"  ✅ Settings hook: up to date ({settings_file})",
+                style="green",
+            )
     else:
         # Remove any old mergify-cli hooks that might reference different paths
         # Be specific: only remove hooks that contain "mergify-cli" in the path
@@ -352,7 +381,11 @@ def _install_claude_hooks() -> None:
             json.dumps(existing_settings, indent=2) + "\n",
             encoding="utf-8",
         )
-        console.log("Installation of Claude settings.json hook")
+        if verbose:
+            console.print(
+                f"  🔗 Settings hook: installed ({settings_file})",
+                style="bold cyan",
+            )
 
 
 def _get_claude_hooks_status(
@@ -447,14 +480,15 @@ async def stack_setup(*, force: bool = False, global_install: bool = False) -> N
         _install_git_hook(hooks_dir, hook_name, force=force)
 
     # Install Claude hooks for session ID tracking (global)
-    _install_claude_hooks()
+    console.print("\n🤖 Claude Code integration:", style="bold")
+    _install_claude_hooks(verbose=True)
 
     # Install skill stub for AI tool bootstrapping (project-level)
     project_skill_stub_path = await _get_project_skill_stub_path()
-    _install_skill_stub(project_skill_stub_path)
+    _install_skill_stub(project_skill_stub_path, verbose=True)
 
     if global_install:
-        _install_skill_stub(_get_global_skill_stub_path())
+        _install_skill_stub(_get_global_skill_stub_path(), verbose=True)
 
 
 async def ensure_hooks_updated() -> None:
