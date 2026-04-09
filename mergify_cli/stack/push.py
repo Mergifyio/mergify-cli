@@ -213,11 +213,27 @@ async def stack_push(
         if skip_rebase:
             console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
         else:
+            from mergify_cli.stack import sync as stack_sync_mod
+
             with console.status(
                 f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
             ):
-                await utils.git("pull", "--rebase", remote, base_branch)
-            console.log(f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`")
+                sync_status = await stack_sync_mod.smart_rebase(
+                    github_server,
+                    token,
+                    trunk=trunk,
+                    branch_prefix=branch_prefix,
+                    author=author,
+                )
+            if sync_status.merged:
+                console.log(
+                    f"branch `{dest_branch}` rebased on `{remote}/{base_branch}` "
+                    f"(dropped {len(sync_status.merged)} merged commit(s))",
+                )
+            else:
+                console.log(
+                    f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`",
+                )
 
     rebase_required = False
     if dry_run and not skip_rebase:
