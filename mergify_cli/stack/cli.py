@@ -176,7 +176,7 @@ def _print_hooks_status(status: dict[str, Any]) -> None:
 
     # Skill stub section
     skill_stub = claude_hooks["skill_stub"]
-    console.print("  skill stub:")
+    console.print("  skill stub (.agents/skills/):")
     if skill_stub["installed"]:
         if skill_stub["needs_update"]:
             console.print(
@@ -187,6 +187,24 @@ def _print_hooks_status(status: dict[str, Any]) -> None:
             console.print(
                 f"    Status: [green]up to date[/] ({skill_stub['path']})",
             )
+    else:
+        console.print("    Status: [red]not installed[/]")
+        needs_setup = True
+    console.print()
+
+    # Claude symlink section
+    skill_symlink = claude_hooks["skill_symlink"]
+    console.print("  claude skill symlink:")
+    if skill_symlink["installed"]:
+        if skill_symlink["correct"]:
+            console.print(
+                f"    Status: [green]up to date[/] ({skill_symlink['path']})",
+            )
+        else:
+            console.print(
+                f"    Status: [yellow]needs update[/] ({skill_symlink['path']})",
+            )
+            needs_setup = True
     else:
         console.print("    Status: [red]not installed[/]")
         needs_setup = True
@@ -219,7 +237,7 @@ def _print_hooks_status(status: dict[str, Any]) -> None:
     "--global",
     "global_install",
     is_flag=True,
-    help="Also install AI skill stub globally (~/.claude/skills/)",
+    help="Also install AI skill stub globally (~/.agents/skills/)",
 )
 @utils.run_with_asyncio
 async def hooks(*, do_setup: bool, force: bool, global_install: bool) -> None:
@@ -246,7 +264,7 @@ async def hooks(*, do_setup: bool, force: bool, global_install: bool) -> None:
     "--global",
     "global_install",
     is_flag=True,
-    help="Also install AI skill stub globally (~/.claude/skills/)",
+    help="Also install AI skill stub globally (~/.agents/skills/)",
 )
 @utils.run_with_asyncio
 async def setup(*, force: bool, check: bool, global_install: bool) -> None:
