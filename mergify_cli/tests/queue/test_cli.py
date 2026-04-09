@@ -404,3 +404,125 @@ class TestStatusCommand:
             )
         assert result.exit_code == 0, result.output
         assert "0/0" not in result.output
+
+
+FAKE_PAUSE_RESPONSE = {
+    "paused": True,
+    "reason": "Deploying hotfix",
+    "paused_at": "2025-11-05T14:00:00Z",
+}
+
+
+class TestPauseCommand:
+    def test_pause_with_confirmation(self) -> None:
+        with respx.mock(base_url="https://api.mergify.com") as mock:
+            mock.put("/v1/repos/owner/repo/merge-queue/pause").mock(
+                return_value=Response(200, json=FAKE_PAUSE_RESPONSE),
+            )
+            runner = CliRunner()
+            with patch("os.isatty", return_value=True):
+                result = runner.invoke(
+                    queue,
+                    [*BASE_ARGS, "pause", "--reason", "Deploying hotfix"],
+                    input="y\n",
+                )
+        assert result.exit_code == 0, result.output
+        assert "paused" in result.output.lower()
+        assert "Deploying hotfix" in result.output
+
+    def test_pause_with_yes_flag(self) -> None:
+        with respx.mock(base_url="https://api.mergify.com") as mock:
+            mock.put("/v1/repos/owner/repo/merge-queue/pause").mock(
+                return_value=Response(200, json=FAKE_PAUSE_RESPONSE),
+            )
+            runner = CliRunner()
+            result = runner.invoke(
+                queue,
+                [
+                    *BASE_ARGS,
+                    "pause",
+                    "--reason",
+                    "Deploying hotfix",
+                    "--yes-i-am-sure",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "paused" in result.output.lower()
+        assert "Deploying hotfix" in result.output
+
+    def test_pause_confirmation_denied(self) -> None:
+        runner = CliRunner()
+        with patch("os.isatty", return_value=True):
+            result = runner.invoke(
+                queue,
+                [*BASE_ARGS, "pause", "--reason", "test"],
+                input="n\n",
+            )
+        assert result.exit_code != 0
+
+    def test_pause_non_tty_without_flag(self) -> None:
+        runner = CliRunner()
+        with patch("os.isatty", return_value=False):
+            result = runner.invoke(
+                queue,
+                [*BASE_ARGS, "pause", "--reason", "test"],
+            )
+        assert result.exit_code == 1
+        assert "--yes-i-am-sure" in result.output
+
+    def test_pause_requires_reason(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            queue,
+            [*BASE_ARGS, "pause"],
+        )
+        assert result.exit_code != 0
+
+    def test_pause_reason_too_long(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            queue,
+            [*BASE_ARGS, "pause", "--reason", "x" * 256, "--yes-i-am-sure"],
+        )
+        assert result.exit_code != 0
+        assert "255 characters" in result.output
+
+    def test_pause_api_error(self) -> None:
+        with respx.mock(base_url="https://api.mergify.com") as mock:
+            mock.put("/v1/repos/owner/repo/merge-queue/pause").mock(
+                return_value=Response(422, json={"message": "Invalid reason"}),
+            )
+            runner = CliRunner()
+            result = runner.invoke(
+                queue,
+                [
+                    *BASE_ARGS,
+                    "pause",
+                    "--reason",
+                    "test",
+                    "--yes-i-am-sure",
+                ],
+            )
+        assert result.exit_code != 0
+
+
+class TestUnpauseCommand:
+    def test_unpause(self) -> None:
+        with respx.mock(base_url="https://api.mergify.com") as mock:
+            mock.delete("/v1/repos/owner/repo/merge-queue/pause").mock(
+                return_value=Response(204),
+            )
+            runner = CliRunner()
+            result = runner.invoke(queue, [*BASE_ARGS, "unpause"])
+        assert result.exit_code == 0, result.output
+        assert "unpaused" in result.output.lower()
+
+    def test_unpause_not_paused(self) -> None:
+        with respx.mock(base_url="https://api.mergify.com") as mock:
+            mock.delete("/v1/repos/owner/repo/merge-queue/pause").mock(
+                return_value=Response(404, json={"message": "Not paused"}),
+            )
+            runner = CliRunner()
+            result = runner.invoke(queue, [*BASE_ARGS, "unpause"])
+        assert result.exit_code == 1
+        assert "not currently paused" in result.output.lower()
