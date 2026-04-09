@@ -40,7 +40,7 @@ if test "$has_change_id" -eq 0; then
 fi
 
 echo ""
-echo "⚠  This branch is managed by Mergify stacks."
+echo "This branch is managed by Mergify stacks."
 echo "   Use 'mergify stack push' instead of 'git push'."
 echo ""
 echo "   'mergify stack push' will:"
