@@ -66,6 +66,7 @@ async def stack_open(
         github_server=github_server,
         token=token,
         trunk=trunk,
+        include_status=False,
     )
 
     if not output.entries:
