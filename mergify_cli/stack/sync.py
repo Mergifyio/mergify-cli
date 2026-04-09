@@ -128,14 +128,11 @@ async def get_sync_status(
 
     stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
 
-    try:
-        base_commit_sha = await utils.git(
-            "merge-base",
-            "--fork-point",
-            f"{remote}/{base_branch}",
-        )
-    except utils.CommandError:
-        base_commit_sha = ""
+    base_commit_sha = await utils.git(
+        "merge-base",
+        "--fork-point",
+        f"{remote}/{base_branch}",
+    )
     if not base_commit_sha:
         console.print(
             f"Common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
