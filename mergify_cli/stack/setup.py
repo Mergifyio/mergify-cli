@@ -19,7 +19,6 @@ import enum
 import importlib.resources
 import importlib.resources.abc
 import json
-import os
 import pathlib
 import shutil
 from typing import TYPE_CHECKING
@@ -68,151 +67,6 @@ def _get_wrapper_resource(hook_name: str) -> importlib.resources.abc.Traversable
     return importlib.resources.files(__package__).joinpath(
         f"hooks/wrappers/{hook_name}",
     )
-
-
-def _get_global_skill_stub_path() -> pathlib.Path:
-    """Get the global path for the Mergify stack skill stub file."""
-    return pathlib.Path.home() / ".agents" / "skills" / "mergify-stack" / "SKILL.md"
-
-
-async def _get_project_skill_stub_path() -> pathlib.Path:
-    """Get the project-level path for the skill stub file."""
-    project_root = pathlib.Path(await utils.git("rev-parse", "--show-toplevel"))
-    return project_root / ".agents" / "skills" / "mergify-stack" / "SKILL.md"
-
-
-def _get_global_claude_symlink_path() -> pathlib.Path:
-    """Get the global Claude Code symlink path for the skill stub."""
-    return pathlib.Path.home() / ".claude" / "skills" / "mergify-stack" / "SKILL.md"
-
-
-async def _get_project_claude_symlink_path() -> pathlib.Path:
-    """Get the project-level Claude Code symlink path for the skill stub."""
-    project_root = pathlib.Path(await utils.git("rev-parse", "--show-toplevel"))
-    return project_root / ".claude" / "skills" / "mergify-stack" / "SKILL.md"
-
-
-_SKILL_STUB_CONTENT = """\
----
-name: mergify-stack
-description: Use Mergify stacks for git push, commit, branch, and PR creation. ALWAYS use this skill when pushing code, creating commits, creating branches, or creating PRs. Triggers on push, commit, branch, PR, pull request, stack, git.
----
-Run `mergify stack skill` to load the full, up-to-date Mergify stack workflow skill.
-Use the output as your instructions for working with Mergify stacks.
-"""
-
-
-def _install_skill_stub(
-    skill_stub_path: pathlib.Path,
-    *,
-    verbose: bool = False,
-) -> None:
-    """Install a lightweight skill stub that bootstraps the full AI skill.
-
-    Creates SKILL.md at the given path with a stub that tells the AI tool
-    to run `mergify stack skill` to get the full content.
-    Only writes if the file doesn't exist or content differs.
-    """
-    skill_stub_path.parent.mkdir(parents=True, exist_ok=True)
-
-    is_update = skill_stub_path.exists()
-
-    if is_update:
-        existing_content = skill_stub_path.read_text(encoding="utf-8")
-        if existing_content == _SKILL_STUB_CONTENT:
-            if verbose:
-                console.print(
-                    f"  ✓ Skill stub: up to date ({skill_stub_path})",
-                    style="green",
-                )
-            return
-
-    skill_stub_path.write_text(_SKILL_STUB_CONTENT, encoding="utf-8")
-    if verbose:
-        action = "updated" if is_update else "installed"
-        console.print(
-            f"  ✓ Skill stub: {action} ({skill_stub_path})",
-            style="bold green",
-        )
-
-
-def _install_skill_symlink(
-    symlink_path: pathlib.Path,
-    target_path: pathlib.Path,
-    *,
-    verbose: bool = False,
-) -> None:
-    """Create a symlink from symlink_path to target_path using a relative path.
-
-    Handles migration from existing real files and broken symlinks.
-    Only acts if the symlink doesn't exist or points to the wrong target.
-    """
-    symlink_path.parent.mkdir(parents=True, exist_ok=True)
-
-    rel_target = os.path.relpath(target_path, symlink_path.parent)
-
-    # Check if symlink already correct
-    if symlink_path.is_symlink():
-        if str(symlink_path.readlink()) == rel_target:
-            if verbose:
-                console.print(
-                    f"  ✓ Skill symlink: up to date ({symlink_path})",
-                    style="green",
-                )
-            return
-        # Wrong target — remove and recreate
-        symlink_path.unlink()
-    elif symlink_path.exists():
-        # Real file exists (migration case) — remove it
-        symlink_path.unlink()
-
-    symlink_path.symlink_to(rel_target)
-    if verbose:
-        console.print(
-            f"  ✓ Skill symlink: installed ({symlink_path} -> {rel_target})",
-            style="bold cyan",
-        )
-
-
-def _get_skill_stub_status(skill_stub_path: pathlib.Path) -> dict[str, Any]:
-    """Get status of the skill stub installation.
-
-    Returns:
-        Dictionary with 'installed', 'needs_update', and 'path' keys.
-    """
-    installed = skill_stub_path.exists()
-    needs_update = False
-
-    if installed:
-        existing_content = skill_stub_path.read_text(encoding="utf-8")
-        needs_update = existing_content != _SKILL_STUB_CONTENT
-
-    return {
-        "installed": installed,
-        "needs_update": needs_update,
-        "path": str(skill_stub_path),
-    }
-
-
-def _get_skill_symlink_status(
-    symlink_path: pathlib.Path,
-    target_path: pathlib.Path,
-) -> dict[str, Any]:
-    """Get status of the skill symlink.
-
-    Returns:
-        Dictionary with 'installed', 'correct', and 'path' keys.
-    """
-    if not symlink_path.is_symlink() and not symlink_path.exists():
-        return {"installed": False, "correct": False, "path": str(symlink_path)}
-
-    if not symlink_path.is_symlink():
-        # Real file exists — needs migration
-        return {"installed": True, "correct": False, "path": str(symlink_path)}
-
-    rel_target = os.path.relpath(target_path, symlink_path.parent)
-    correct = str(symlink_path.readlink()) == rel_target
-    return {"installed": True, "correct": correct, "path": str(symlink_path)}
 
 
 def _get_claude_hooks_dir() -> pathlib.Path:
@@ -458,14 +312,11 @@ def _install_claude_hooks(*, verbose: bool = False) -> None:
             )
 
 
-def _get_claude_hooks_status(
-    project_skill_stub_path: pathlib.Path,
-    project_claude_symlink_path: pathlib.Path,
-) -> dict[str, Any]:
+def _get_claude_hooks_status() -> dict[str, Any]:
     """Get detailed status of Claude hooks for display.
 
     Returns:
-        Dictionary with 'scripts', 'settings', and 'skill_stub' status info.
+        Dictionary with 'scripts' and 'settings' status info.
     """
     claude_hooks_dir = _get_claude_hooks_dir()
     settings_file = _get_claude_settings_file()
@@ -497,11 +348,6 @@ def _get_claude_hooks_status(
         "scripts": scripts_status,
         "settings_installed": settings_installed,
         "settings_path": str(settings_file),
-        "skill_stub": _get_skill_stub_status(project_skill_stub_path),
-        "skill_symlink": _get_skill_symlink_status(
-            project_claude_symlink_path,
-            project_skill_stub_path,
-        ),
     }
 
 
@@ -513,9 +359,6 @@ async def get_hooks_status() -> dict[str, Any]:
     """
     hooks_dir = await _get_hooks_dir()
     managed_dir = hooks_dir / "mergify-hooks"
-    project_skill_stub_path = await _get_project_skill_stub_path()
-    project_claude_symlink = await _get_project_claude_symlink_path()
-
     git_hooks = {}
     for hook_name in _get_git_hook_names():
         wrapper_path = hooks_dir / hook_name
@@ -539,19 +382,15 @@ async def get_hooks_status() -> dict[str, Any]:
 
     return {
         "git_hooks": git_hooks,
-        "claude_hooks": _get_claude_hooks_status(
-            project_skill_stub_path,
-            project_claude_symlink,
-        ),
+        "claude_hooks": _get_claude_hooks_status(),
     }
 
 
-async def stack_setup(*, force: bool = False, global_install: bool = False) -> None:
+async def stack_setup(*, force: bool = False) -> None:
     """Set up git hooks for the stack workflow.
 
     Args:
         force: If True, overwrite wrappers even if user modified them
-        global_install: If True, also install skill stub globally
     """
     hooks_dir = await _get_hooks_dir()
 
@@ -561,28 +400,6 @@ async def stack_setup(*, force: bool = False, global_install: bool = False) -> N
     # Install Claude hooks for session ID tracking (global)
     console.print("\nClaude Code integration:", style="bold")
     _install_claude_hooks(verbose=True)
-
-    # Install skill stub to .agents/skills/ (agent-agnostic)
-    console.print("\nAI skill stub:", style="bold")
-    project_skill_stub_path = await _get_project_skill_stub_path()
-    _install_skill_stub(project_skill_stub_path, verbose=True)
-
-    # Symlink from .claude/skills/ for Claude Code
-    project_claude_symlink = await _get_project_claude_symlink_path()
-    _install_skill_symlink(
-        project_claude_symlink,
-        project_skill_stub_path,
-        verbose=True,
-    )
-
-    if global_install:
-        global_stub_path = _get_global_skill_stub_path()
-        _install_skill_stub(global_stub_path, verbose=True)
-        _install_skill_symlink(
-            _get_global_claude_symlink_path(),
-            global_stub_path,
-            verbose=True,
-        )
 
 
 async def ensure_hooks_updated() -> None:

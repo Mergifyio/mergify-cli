@@ -1,0 +1,1 @@
+../../mergify_cli/stack/skill.md
