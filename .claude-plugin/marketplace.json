@@ -5,7 +5,7 @@
   },
   "plugins": [
     {
-      "name": "mergify",
+      "name": "mergify-stack",
       "source": "./",
       "description": "Stacked PRs, merge queues, and Git workflow automation"
     }
