@@ -187,9 +187,8 @@ async def test_get_hooks_status_no_hooks(
 
     status = await setup.get_hooks_status()
 
-    # Should have git_hooks and claude_hooks sections
+    # Should have git_hooks section
     assert "git_hooks" in status
-    assert "claude_hooks" in status
 
     git_hooks = status["git_hooks"]
     assert "commit-msg" in git_hooks
@@ -299,9 +298,6 @@ def test_hooks_command_shows_status(
     assert "commit-msg:" in result.output
     assert "prepare-commit-msg:" in result.output
     assert "Wrapper:" in result.output
-    # Claude hooks section
-    assert "Claude Hooks Status:" in result.output
-    assert "settings.json:" in result.output
 
 
 def test_hooks_command_setup_flag(

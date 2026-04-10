@@ -17,9 +17,9 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-# This hook preserves Change-Id and Claude-Session-Id during amend operations
+# This hook preserves Change-Id during amend operations
 # where the message is provided via -m or -F flags (which would otherwise lose
-# these trailers).
+# this trailer).
 #
 # Arguments:
 #   $1 - Path to the commit message file
@@ -105,17 +105,5 @@ if ! grep -q "^Change-Id: I[0-9a-f]\{40\}$" "$MSG_FILE"; then
             NEED_BLANK_LINE=true
         fi
         echo "$HEAD_CHANGEID" >> "$MSG_FILE"
-    fi
-fi
-
-# Preserve Claude-Session-Id if missing from current message but present in HEAD
-if ! grep -q "^Claude-Session-Id:" "$MSG_FILE"; then
-    HEAD_CLAUDE_SESSION_ID=$(git log -1 --format=%B HEAD 2>/dev/null | grep "^Claude-Session-Id:" | tail -1)
-    if test -n "$HEAD_CLAUDE_SESSION_ID"; then
-        if test "$NEED_BLANK_LINE" = "false"; then
-            echo "" >> "$MSG_FILE"
-            NEED_BLANK_LINE=true
-        fi
-        echo "$HEAD_CLAUDE_SESSION_ID" >> "$MSG_FILE"
     fi
 fi
