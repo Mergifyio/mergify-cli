@@ -118,7 +118,7 @@ def git_repo_with_hooks(tmp_path: pathlib.Path) -> pathlib.Path:
     managed_dir = hooks_dir / "mergify-hooks"
     managed_dir.mkdir(parents=True, exist_ok=True)
 
-    for hook_name in ("commit-msg", "prepare-commit-msg"):
+    for hook_name in ("commit-msg", "prepare-commit-msg", "post-commit"):
         # Install wrapper
         wrapper_source = str(
             importlib.resources.files("mergify_cli.stack").joinpath(
