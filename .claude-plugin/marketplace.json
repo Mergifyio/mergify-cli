@@ -8,6 +8,11 @@
       "name": "mergify-stack",
       "source": "./",
       "description": "Stacked PRs, merge queues, and Git workflow automation"
+    },
+    {
+      "name": "mergify-merge-queue",
+      "source": "./",
+      "description": "Monitor, inspect, pause, and manage the Mergify merge queue"
     }
   ]
 }
