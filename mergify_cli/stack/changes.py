@@ -30,6 +30,17 @@ if typing.TYPE_CHECKING:
 
 
 CHANGEID_RE = re.compile(r"Change-Id: (I[0-9a-z]{40})")
+
+
+def is_change_id_prefix(prefix: str) -> bool:
+    """Return True if *prefix* looks like a Change-Id prefix."""
+    return (
+        len(prefix) >= 2
+        and prefix[0] == "I"
+        and all(c in "0123456789abcdef" for c in prefix[1:])
+    )
+
+
 ChangeId = typing.NewType("ChangeId", str)
 RemoteChanges = typing.NewType(
     "RemoteChanges",

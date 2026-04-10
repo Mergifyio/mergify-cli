@@ -21,6 +21,7 @@ A branch is a stack. Keep stacks short and focused:
 - **Push**: Use `mergify stack push` (never `git push`)
 - **Fixes**: Use `git commit --amend` (never create new commits to fix issues)
 - **Mid-stack fixes**: Use `git rebase -i` to edit the specific commit, amend it, continue rebase, then `mergify stack push`
+- **Reordering**: Use `mergify stack reorder` (list all commits in desired order) instead of manual `git rebase -i` — non-interactive and avoids `GIT_SEQUENCE_EDITOR` quoting issues
 - **Commit titles**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
 - **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.**
 - **Ticket references**: Include ticket/issue references (e.g., `MRGFY-1234`, `Fixes #123`) in the commit message body, not added separately to the PR.
@@ -46,6 +47,7 @@ mergify stack new NAME       # Create a new stack/branch for new work
 mergify stack push           # Push and create/update PRs
 mergify stack list           # Show commit <-> PR mapping for current stack
 mergify stack list --json    # Same, but machine-readable JSON output
+mergify stack reorder C A B  # Reorder all commits (pass SHA or Change-Id prefixes)
 ```
 
 Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. This is the go-to command to understand the current state of a stack. Use `--json` when you need to parse the output programmatically.

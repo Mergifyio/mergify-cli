@@ -19,6 +19,7 @@ from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import new as stack_new_mod
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
+from mergify_cli.stack import reorder as stack_reorder_mod
 from mergify_cli.stack import setup as stack_setup_mod
 from mergify_cli.stack import skill as stack_skill_mod
 
@@ -199,6 +200,20 @@ async def setup(*, force: bool, check: bool) -> None:
 @utils.run_with_asyncio
 async def edit() -> None:
     await stack_edit_mod.stack_edit()
+
+
+@stack.command(help="Reorder the stack's commits")
+@click.argument("commits", nargs=-1, required=True)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show the plan without reordering",
+)
+@utils.run_with_asyncio
+async def reorder(*, commits: tuple[str, ...], dry_run: bool) -> None:
+    await stack_reorder_mod.stack_reorder(list(commits), dry_run=dry_run)
 
 
 @stack.command(help="Create a new stack branch")
