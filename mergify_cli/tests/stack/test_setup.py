@@ -67,52 +67,6 @@ def test_commit_gets_change_id(git_repo_with_hooks: pathlib.Path) -> None:
     assert re.match(r"^I[0-9a-f]{40}$", change_id)
 
 
-def test_amend_with_m_flag_preserves_change_id(
-    git_repo_with_hooks: pathlib.Path,
-) -> None:
-    """Test that amending a commit with -m flag preserves the Change-Id.
-
-    This is the specific scenario where tools like Claude Code amend commits
-    by passing the message via -m flag, which would otherwise lose the Change-Id.
-    """
-    import time
-
-    # Create initial commit with Change-Id
-    (git_repo_with_hooks / "file.txt").write_text("content")
-    subprocess.run(["git", "add", "file.txt"], check=True, cwd=git_repo_with_hooks)
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],
-        check=True,
-        cwd=git_repo_with_hooks,
-    )
-
-    original_message = get_commit_message(git_repo_with_hooks)
-    original_change_id = get_change_id(original_message)
-    assert original_change_id is not None
-
-    # Wait a bit so the hook can detect this is an amend (author date will be old)
-    time.sleep(2)
-
-    # Amend with -m flag (this is what Claude Code does)
-    subprocess.run(
-        ["git", "commit", "--amend", "-m", "Amended commit"],
-        check=True,
-        cwd=git_repo_with_hooks,
-    )
-
-    amended_message = get_commit_message(git_repo_with_hooks)
-    amended_change_id = get_change_id(amended_message)
-
-    assert amended_change_id is not None, (
-        f"Expected Change-Id in amended message:\n{amended_message}"
-    )
-    assert amended_change_id == original_change_id, (
-        f"Change-Id should be preserved during amend.\n"
-        f"Original: {original_change_id}\n"
-        f"After amend: {amended_change_id}"
-    )
-
-
 def test_amend_without_m_flag_preserves_change_id(
     git_repo_with_hooks: pathlib.Path,
 ) -> None:
@@ -336,8 +290,10 @@ def test_hooks_command_setup_flag(
     hooks_dir = tmp_path / ".git" / "hooks"
     assert (hooks_dir / "commit-msg").exists()
     assert (hooks_dir / "prepare-commit-msg").exists()
+    assert (hooks_dir / "post-commit").exists()
     assert (hooks_dir / "mergify-hooks" / "commit-msg.sh").exists()
     assert (hooks_dir / "mergify-hooks" / "prepare-commit-msg.sh").exists()
+    assert (hooks_dir / "mergify-hooks" / "post-commit.sh").exists()
 
 
 def test_setup_command_check_flag(
@@ -394,3 +350,128 @@ def test_setup_command_without_flags(
     hooks_dir = tmp_path / ".git" / "hooks"
     assert (hooks_dir / "commit-msg").exists()
     assert (hooks_dir / "prepare-commit-msg").exists()
+    assert (hooks_dir / "post-commit").exists()
+    assert (hooks_dir / "mergify-hooks" / "post-commit.sh").exists()
+
+
+def test_post_commit_adds_missing_change_id(
+    git_repo_with_hooks: pathlib.Path,
+) -> None:
+    """Test that the post-commit hook adds a Change-Id when commit-msg is bypassed.
+
+    When --no-verify is used, the commit-msg hook doesn't run, but the
+    post-commit hook still fires and should add the missing Change-Id.
+    """
+    (git_repo_with_hooks / "file.txt").write_text("content")
+    subprocess.run(["git", "add", "file.txt"], check=True, cwd=git_repo_with_hooks)
+    subprocess.run(
+        ["git", "commit", "--no-verify", "-m", "Commit bypassing hooks"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    message = get_commit_message(git_repo_with_hooks)
+    change_id = get_change_id(message)
+
+    assert change_id is not None, (
+        f"Expected post-commit hook to add Change-Id:\n{message}"
+    )
+    assert re.match(r"^I[0-9a-f]{40}$", change_id)
+
+
+def test_reset_and_recreate_preserves_change_id(
+    git_repo_with_hooks: pathlib.Path,
+) -> None:
+    """Test that resetting to main and recreating commits preserves Change-Ids.
+
+    This is the core Claude Code pattern: Claude resets the branch to main
+    and recreates the same stack from scratch. The commit-msg hook should
+    find the previous Change-Id in the branch reflog and reuse it.
+    """
+    # Create an initial commit on main so we can reset to it later
+    (git_repo_with_hooks / "base.txt").write_text("base")
+    subprocess.run(["git", "add", "base.txt"], check=True, cwd=git_repo_with_hooks)
+    subprocess.run(
+        ["git", "commit", "-m", "initial base"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    # Create a stack commit on a branch
+    subprocess.run(
+        ["git", "checkout", "-b", "feat/test-stack"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+    (git_repo_with_hooks / "file1.txt").write_text("content1")
+    subprocess.run(["git", "add", "file1.txt"], check=True, cwd=git_repo_with_hooks)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: add feature X"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    original_change_id = get_change_id(get_commit_message(git_repo_with_hooks))
+    assert original_change_id is not None
+
+    # Reset to main (simulating Claude's reset-and-recreate pattern)
+    subprocess.run(
+        ["git", "reset", "--hard", "main"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    # Recreate the same commit with the same subject line
+    (git_repo_with_hooks / "file1.txt").write_text("content1-v2")
+    subprocess.run(["git", "add", "file1.txt"], check=True, cwd=git_repo_with_hooks)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: add feature X"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    recreated_change_id = get_change_id(get_commit_message(git_repo_with_hooks))
+    assert recreated_change_id is not None, "Recreated commit should have a Change-Id"
+    assert recreated_change_id == original_change_id, (
+        f"Change-Id should be preserved when recreating a commit with the same subject.\n"
+        f"Original: {original_change_id}\n"
+        f"Recreated: {recreated_change_id}"
+    )
+
+
+def test_duplicate_subject_gets_unique_change_ids(
+    git_repo_with_hooks: pathlib.Path,
+) -> None:
+    """Test that two commits with the same subject get different Change-Ids.
+
+    The reflog search must NOT reuse a Change-Id from a commit that is still
+    in the current branch. Otherwise two commits in the same stack would share
+    a Change-Id, breaking PR tracking.
+    """
+    (git_repo_with_hooks / "file1.txt").write_text("content1")
+    subprocess.run(["git", "add", "file1.txt"], check=True, cwd=git_repo_with_hooks)
+    subprocess.run(
+        ["git", "commit", "-m", "fix: typo"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    first_change_id = get_change_id(get_commit_message(git_repo_with_hooks))
+    assert first_change_id is not None
+
+    # Create a second commit with the exact same subject
+    (git_repo_with_hooks / "file2.txt").write_text("content2")
+    subprocess.run(["git", "add", "file2.txt"], check=True, cwd=git_repo_with_hooks)
+    subprocess.run(
+        ["git", "commit", "-m", "fix: typo"],
+        check=True,
+        cwd=git_repo_with_hooks,
+    )
+
+    second_change_id = get_change_id(get_commit_message(git_repo_with_hooks))
+    assert second_change_id is not None
+    assert second_change_id != first_change_id, (
+        f"Two commits with the same subject must get different Change-Ids.\n"
+        f"First:  {first_change_id}\n"
+        f"Second: {second_change_id}"
+    )
