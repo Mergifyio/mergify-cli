@@ -50,6 +50,58 @@ async def test_get_trunk() -> None:
     assert await utils.get_trunk() == "origin/main"
 
 
+@pytest.mark.usefixtures("_git_repo")
+async def test_get_trunk_auto_sets_upstream_when_missing() -> None:
+    await utils.git("checkout", "-b", "feature-branch")
+    # No upstream is set for feature-branch; get_trunk should auto-detect
+    # from origin/HEAD and set the upstream
+    original_git = utils.git
+
+    async def patched_git(*args: str) -> str:
+        if args[:2] == ("branch", "feature-branch"):
+            # Simulate successful set-upstream-to without a real remote
+            await original_git(
+                "config",
+                "branch.feature-branch.remote",
+                "origin",
+            )
+            await original_git(
+                "config",
+                "branch.feature-branch.merge",
+                "refs/heads/main",
+            )
+            return ""
+        return await original_git(*args)
+
+    with (
+        mock.patch.object(
+            utils,
+            "_get_default_remote_branch",
+            return_value=("origin", "main"),
+        ),
+        mock.patch.object(utils, "git", side_effect=patched_git),
+    ):
+        result = await utils.get_trunk()
+    assert result == "origin/main"
+    # Verify the upstream was set
+    assert await utils.git_get_target_branch("feature-branch") == "main"
+    assert await utils.git_get_target_remote("feature-branch") == "origin"
+
+
+@pytest.mark.usefixtures("_git_repo")
+async def test_get_trunk_fails_when_no_upstream_and_no_default() -> None:
+    await utils.git("checkout", "-b", "feature-branch")
+    with (
+        mock.patch.object(
+            utils,
+            "_get_default_remote_branch",
+            side_effect=utils.CommandError((), 1, b""),
+        ),
+        pytest.raises(utils.CommandError),
+    ):
+        await utils.get_trunk()
+
+
 @pytest.mark.parametrize(
     ("default_arg_fct", "config_get_result", "expected_default"),
     [
