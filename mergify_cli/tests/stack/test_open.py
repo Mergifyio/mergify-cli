@@ -80,6 +80,7 @@ async def test_stack_open_head(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
 
@@ -158,6 +159,7 @@ async def test_stack_open_specific_commit(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
     respx_mock.get("/repos/user/repo/pulls/124").respond(
@@ -174,6 +176,7 @@ async def test_stack_open_specific_commit(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
 
@@ -393,6 +396,7 @@ async def test_stack_open_interactive_selection(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
     respx_mock.get("/repos/user/repo/pulls/124").respond(
@@ -409,6 +413,7 @@ async def test_stack_open_interactive_selection(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
 

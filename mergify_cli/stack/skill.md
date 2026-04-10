@@ -40,7 +40,7 @@ mergify stack list --json    # Same, but machine-readable JSON output
 
 Use `mergify stack sync` to bring your stack up to date. It fetches the latest trunk, detects which PRs have been merged, removes those commits from your local branch, and rebases the remaining commits. Run this before starting new work on an existing stack.
 
-Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. This is the go-to command to understand the current state of a stack. Use `--json` when you need to parse the output programmatically.
+Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. It also shows CI status, review status, and merge conflicts for each PR. Use `--verbose` for detailed check names and reviewer names. Use `--json` when you need to parse the output programmatically — it includes full CI check details and review data.
 
 ## CRITICAL: Check Branch Before ANY Commit
 
