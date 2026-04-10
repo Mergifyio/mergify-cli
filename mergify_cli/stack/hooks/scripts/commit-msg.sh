@@ -33,10 +33,38 @@ if test ! -f "$1" ; then
 fi
 
 # $RANDOM will be undefined if not using bash, so don't use set -u
-random=$( (whoami ; hostname ; date; cat $1 ; echo $RANDOM) | git hash-object --stdin)
+# $RANDOM is undefined in POSIX sh (dash), so include HEAD's SHA for entropy
+# to prevent collisions when two commits have the same message in the same second
+random=$( (whoami ; hostname ; date; cat $1 ; echo $RANDOM; git rev-parse HEAD 2>/dev/null) | git hash-object --stdin)
 dest="$1.tmp.${random}"
 
 trap 'rm -f "${dest}"' EXIT
+
+# Reuse a Change-Id from a prior commit on this branch with the same subject.
+# Handles amends and reset-and-recreate cycles (where a branch is reset to main
+# and the same stack is rebuilt from scratch, which would otherwise generate new
+# Change-Ids and break PR tracking).
+if ! grep -q "^Change-Id:" "$1"; then
+    subject=$(head -1 "$1")
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if test -n "$branch" && test "$branch" != "HEAD"; then
+        reuse_cid=""
+        for sha in $(git reflog "$branch" --format='%H' -n 50 2>/dev/null); do
+            s=$(git log -1 --format=%s "$sha" 2>/dev/null)
+            if test "$s" = "$subject"; then
+                # Only reuse from commits no longer in the branch (reset away).
+                # Skip commits still reachable from HEAD to avoid giving two
+                # active stack commits the same Change-Id.
+                git merge-base --is-ancestor "$sha" HEAD 2>/dev/null && continue
+                reuse_cid=$(git log -1 --format=%B "$sha" 2>/dev/null | grep "^Change-Id: I[0-9a-f]\{40\}$" | tail -1 | sed 's/^Change-Id: I//')
+                test -n "$reuse_cid" && break
+            fi
+        done
+        if test -n "$reuse_cid"; then
+            random="$reuse_cid"
+        fi
+    fi
+fi
 
 # cut everything from the scissor marker downwards, then strip comments/whitespace
 if ! (sed '/^# -\{24\} >8 -\{24\}$/,$d' | git stripspace --strip-comments) < "$1" > "${dest}" ; then
