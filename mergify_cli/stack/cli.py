@@ -380,13 +380,29 @@ async def checkout(
     ctx: click.Context,
     *,
     author: str | None,
-    repository: str,
+    repository: str | None,
     branch: str,
     branch_prefix: str | None,
     dry_run: bool,
     trunk: tuple[str, str],
 ) -> None:
-    user, repo = repository.split("/")
+    remote, _base_branch = trunk
+    if repository is not None:
+        repository_parts = repository.split("/", maxsplit=1)
+        if (
+            len(repository_parts) != 2
+            or not repository_parts[0]
+            or not repository_parts[1]
+        ):
+            raise click.BadParameter(
+                "Repository must be in the format 'owner/repo'",
+                param_hint="--repository",
+            )
+        user, repo = repository_parts
+    else:
+        user, repo = utils.get_slug(
+            await utils.git("config", "--get", f"remote.{remote}.url"),
+        )
     await stack_checkout_mod.stack_checkout(
         ctx.obj["github_server"],
         ctx.obj["token"],
