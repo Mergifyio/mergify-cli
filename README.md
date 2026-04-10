@@ -44,19 +44,26 @@ mergify ci --help
 mergify freeze --help
 ```
 
-## Claude Code Plugin
+## AI Agent Skills
 
-Mergify CLI is available as a [Claude Code
-plugin](https://docs.anthropic.com/en/docs/claude-code/plugins), providing AI
-skills for managing stacked PRs and Git workflows.
+Mergify CLI provides AI skills for managing stacked PRs and Git workflows,
+compatible with [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
+[Cursor](https://cursor.sh), and [many other AI
+agents](https://skills.sh).
 
-### Install from the official marketplace
+### Install via npx (all agents)
+
+```shell
+npx skills add Mergifyio/mergify-cli
+```
+
+### Install as a Claude Code plugin
 
 ```shell
 claude /plugin install mergify@claude-plugins-official
 ```
 
-### Install from this repository
+Or from this repository:
 
 ```shell
 claude /plugin marketplace add https://github.com/Mergifyio/mergify-cli
