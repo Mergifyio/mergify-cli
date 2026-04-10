@@ -517,18 +517,26 @@ async def sync(
     is_flag=True,
     help="Output in JSON format for scripting",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed CI check names and reviewer names",
+)
 @utils.run_with_asyncio
 async def list_cmd(
     ctx: click.Context,
     *,
     trunk: tuple[str, str],
     output_json: bool,
+    verbose: bool,
 ) -> None:
     await stack_list_mod.stack_list(
         github_server=ctx.obj["github_server"],
         token=ctx.obj["token"],
         trunk=trunk,
         output_json=output_json,
+        verbose=verbose,
     )
 
 
