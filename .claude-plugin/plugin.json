@@ -1,5 +1,5 @@
 {
-  "name": "mergify",
+  "name": "mergify-stack",
   "description": "Mergify CLI integration for stacked PRs, merge queues, and Git workflows",
   "author": {
     "name": "Mergify"
