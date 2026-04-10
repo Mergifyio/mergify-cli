@@ -156,3 +156,74 @@ async def test_stack_checkout_repository_explicit(
         "--get",
         "remote.origin.url",
     )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+@pytest.mark.parametrize(
+    ("branch_input", "expected_branch"),
+    [
+        # Full head ref with prefix and change ID suffix → stripped to plain branch
+        (
+            "devs/JulianMaurin/MRGFY-6797/Ibb431d523fb75f48f387a3964d2936ada933cffe",
+            "MRGFY-6797",
+        ),
+        # Change ID suffix only → stripped
+        (
+            "MRGFY-6797/Ibb431d523fb75f48f387a3964d2936ada933cffe",
+            "MRGFY-6797",
+        ),
+        # Prefix only → stripped
+        (
+            "devs/JulianMaurin/MRGFY-6797",
+            "MRGFY-6797",
+        ),
+        # Already plain → unchanged
+        (
+            "MRGFY-6797",
+            "MRGFY-6797",
+        ),
+    ],
+    ids=[
+        "full-head-ref",
+        "with-suffix-no-prefix",
+        "with-prefix-no-suffix",
+        "plain-branch",
+    ],
+)
+async def test_stack_checkout_branch_normalization(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+    branch_input: str,
+    expected_branch: str,
+) -> None:
+    """Test that checkout normalizes --branch by stripping prefix and change ID suffix."""
+    git_mock.mock(
+        "config",
+        "--get",
+        "mergify-cli.stack-branch-prefix",
+        output="devs/JulianMaurin",
+    )
+
+    search_mock = respx_mock.get("/search/issues").respond(
+        200,
+        json={"items": []},
+    )
+
+    with pytest.raises(SystemExit, match="0"):
+        await stack_checkout_mod.stack_checkout(
+            github_server="https://api.github.com/",
+            token="",
+            user="user",
+            repo="repo",
+            branch_prefix=None,
+            branch=branch_input,
+            author="author",
+            trunk=("origin", "main"),
+            dry_run=True,
+        )
+
+    # Verify the search query: stack_branch = prefix/normalized_branch
+    expected_stack_branch = f"devs/JulianMaurin/{expected_branch}"
+    assert len(search_mock.calls) == 1
+    query = str(search_mock.calls[0].request.url)
+    assert f"head%3A{expected_stack_branch.replace('/', '%2F')}%2F" in query
