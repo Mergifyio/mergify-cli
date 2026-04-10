@@ -80,8 +80,13 @@ def git_mock(
         "remote.origin.url",
         output="https://github.com/user/repo",
     )
-    # Mock pull command
+    # Mock fetch and pull commands (used by smart_rebase)
+    git_mock_object.mock("fetch", "origin", "main", output="")
     git_mock_object.mock("pull", "--rebase", "origin", "main", output="")
+    # Mock branch prefix config (used by smart_rebase via get_sync_status)
+    git_mock_object.mock(
+        "config", "--get", "mergify-cli.stack-branch-prefix", output=""
+    )
 
     with mock.patch("mergify_cli.utils.git", git_mock_object):
         yield git_mock_object
