@@ -39,6 +39,13 @@ async def stack_checkout(
     if branch_prefix is None:
         branch_prefix = await utils.get_default_branch_prefix(author)
 
+    # Strip change ID suffix if present (e.g. /Ibb431d523fb75f48f387a3964d2936ada933cffe)
+    branch = changes.CHANGEID_SUFFIX_RE.sub("", branch)
+
+    # Strip branch prefix from branch if already included
+    if branch_prefix and branch.startswith(f"{branch_prefix}/"):
+        branch = branch.removeprefix(f"{branch_prefix}/")
+
     stack_branch = f"{branch_prefix}/{branch}" if branch_prefix else branch
 
     async with utils.get_github_http_client(github_server, token) as client:
