@@ -158,31 +158,67 @@ async def get_default_create_as_draft() -> bool:
     return result == "true"
 
 
+async def _get_default_remote_branch() -> tuple[str, str]:
+    """Detect the default branch from the remote (e.g. origin/main).
+
+    Returns (remote, branch) tuple.
+    """
+    ref = await git("symbolic-ref", "refs/remotes/origin/HEAD")
+    # ref is like "refs/remotes/origin/main"
+    prefix = "refs/remotes/"
+    ref = ref.removeprefix(prefix)
+    remote, _, branch = ref.partition("/")
+    return remote, branch
+
+
 async def get_trunk() -> str:
     try:
         branch_name = await git_get_branch_name()
     except CommandError:
         console.print("error: can't get the current branch", style="red")
         raise
+
+    target_branch = None
+    target_remote = None
     try:
         target_branch = await git_get_target_branch(branch_name)
     except CommandError:
-        # It's possible this has not been set; ignore
-        console.print("error: can't get the remote target branch", style="red")
-        console.print(
-            f"Please set the target branch with `git branch {branch_name} --set-upstream-to=<remote>/<branch>",
-            style="red",
-        )
-        raise
-
+        pass
     try:
         target_remote = await git_get_target_remote(branch_name)
     except CommandError:
-        console.print(
-            f"error: can't get the target remote for branch {branch_name}",
-            style="red",
+        pass
+
+    if target_branch is None or target_remote is None:
+        try:
+            default_remote, default_branch = await _get_default_remote_branch()
+        except CommandError:
+            console.print(
+                f"error: can't detect the remote target branch for {branch_name}",
+                style="red",
+            )
+            console.print(
+                f"Please set it with `git branch {branch_name} --set-upstream-to=<remote>/<branch>`",
+            )
+            raise
+
+        if target_branch is None:
+            target_branch = default_branch
+        if target_remote is None:
+            target_remote = default_remote
+
+        await git(
+            "branch",
+            branch_name,
+            "--set-upstream-to",
+            f"{target_remote}/{target_branch}",
         )
-        raise
+        console.print(
+            f"Upstream not set for {branch_name}, "
+            f"automatically set to {target_remote}/{target_branch}",
+            style="yellow",
+        )
+
     return f"{target_remote}/{target_branch}"
 
 
