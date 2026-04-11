@@ -1,0 +1,1 @@
+../../mergify_cli/queue/skill.md
