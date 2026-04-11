@@ -60,14 +60,8 @@ npx skills add Mergifyio/mergify-cli
 ### Install as a Claude Code plugin
 
 ```shell
-claude /plugin install mergify@claude-plugins-official
-```
-
-Or from this repository:
-
-```shell
-claude /plugin marketplace add https://github.com/Mergifyio/mergify-cli
-claude /plugin install mergify
+/plugin marketplace add Mergifyio/mergify-cli
+/plugin install mergify
 ```
 
 ## Contributing
