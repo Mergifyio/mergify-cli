@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
     "httpx==0.28.1",
     "jsonschema==4.26.0",
-    "rich==14.3.4",
+    "rich==15.0.0",
     "aiofiles==25.1.0",
     "click==8.3.2",
     "opentelemetry-exporter-otlp-proto-http==1.41.0",
