@@ -16,6 +16,7 @@ from mergify_cli.stack import (
     github_action_auto_rebase as stack_github_action_auto_rebase_mod,
 )
 from mergify_cli.stack import list as stack_list_mod
+from mergify_cli.stack import move as stack_move_mod
 from mergify_cli.stack import new as stack_new_mod
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
@@ -214,6 +215,33 @@ async def edit() -> None:
 @utils.run_with_asyncio
 async def reorder(*, commits: tuple[str, ...], dry_run: bool) -> None:
     await stack_reorder_mod.stack_reorder(list(commits), dry_run=dry_run)
+
+
+@stack.command(help="Move a commit within the stack")
+@click.argument("commit")
+@click.argument("position", type=click.Choice(["before", "after", "first", "last"]))
+@click.argument("target", required=False, default=None)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show the plan without moving",
+)
+@utils.run_with_asyncio
+async def move(
+    *,
+    commit: str,
+    position: str,
+    target: str | None,
+    dry_run: bool,
+) -> None:
+    await stack_move_mod.stack_move(
+        commit_prefix=commit,
+        position=position,
+        target_prefix=target,
+        dry_run=dry_run,
+    )
 
 
 @stack.command(help="Create a new stack branch")

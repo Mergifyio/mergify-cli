@@ -21,6 +21,7 @@ A branch is a stack. Keep stacks short and focused:
 - **Push**: Use `mergify stack push` (never `git push`)
 - **Fixes**: Use `git commit --amend` (never create new commits to fix issues)
 - **Mid-stack fixes**: Use `git rebase -i` to edit the specific commit, amend it, continue rebase, then `mergify stack push`
+- **Reordering**: Use `mergify stack reorder` (list all commits in desired order) or `mergify stack move` (move a single commit) instead of manual `git rebase -i` — non-interactive and avoids `GIT_SEQUENCE_EDITOR` quoting issues
 - **Commit titles**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
 - **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.**
 - **Ticket references**: Include ticket/issue references (e.g., `MRGFY-1234`, `Fixes #123`) in the commit message body, not added separately to the PR.
@@ -47,6 +48,11 @@ mergify stack push           # Push and create/update PRs
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
 mergify stack list           # Show commit <-> PR mapping for current stack
 mergify stack list --json    # Same, but machine-readable JSON output
+mergify stack reorder C A B  # Reorder all commits (pass SHA or Change-Id prefixes)
+mergify stack move X first   # Move commit X to the top of the stack
+mergify stack move X last    # Move commit X to the bottom of the stack
+mergify stack move X before Y  # Move commit X before commit Y
+mergify stack move X after Y   # Move commit X after commit Y
 ```
 
 Use `mergify stack sync` to bring your stack up to date. It fetches the latest trunk, detects which PRs have been merged, removes those commits from your local branch, and rebases the remaining commits. Run this before starting new work on an existing stack.
