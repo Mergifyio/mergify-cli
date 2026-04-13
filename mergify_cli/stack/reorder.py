@@ -92,42 +92,14 @@ def match_commit(
     return matches[0]
 
 
-def run_rebase(base: str, ordered_shas: list[str]) -> None:
-    """Run ``git rebase -i`` with a generated sequence editor script.
+def run_scripted_rebase(base: str, script_content: str) -> None:
+    """Run ``git rebase -i`` with a custom sequence-editor script.
 
-    The temporary Python script rewrites the rebase todo list so that
-    the pick lines appear in the order given by *ordered_shas*.
+    Writes *script_content* to a temporary Python file, sets it as
+    ``GIT_SEQUENCE_EDITOR``, then executes the rebase.  The temp file
+    is cleaned up afterwards regardless of outcome.
     """
-    script_content = (
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "order = " + repr(ordered_shas) + "\n"
-        "todo_path = sys.argv[1]\n"
-        "with open(todo_path) as f:\n"
-        "    lines = f.readlines()\n"
-        "pick_lines = {}\n"
-        "other_lines = []\n"
-        "for line in lines:\n"
-        "    stripped = line.strip()\n"
-        "    if stripped and not stripped.startswith('#'):\n"
-        "        parts = stripped.split(None, 2)\n"
-        "        if len(parts) >= 2:\n"
-        "            pick_lines[parts[1]] = line\n"
-        "        else:\n"
-        "            other_lines.append(line)\n"
-        "    else:\n"
-        "        other_lines.append(line)\n"
-        "reordered = []\n"
-        "for sha in order:\n"
-        "    for key in pick_lines:\n"
-        "        if sha.startswith(key) or key.startswith(sha):\n"
-        "            reordered.append(pick_lines[key])\n"
-        "            break\n"
-        "with open(todo_path, 'w') as f:\n"
-        "    f.writelines(reordered + other_lines)\n"
-    )
-
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix="mergify_reorder_")
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix="mergify_rebase_")
     try:
         with os.fdopen(tmp_fd, "w") as f:
             f.write(script_content)
@@ -159,6 +131,39 @@ def run_rebase(base: str, ordered_shas: list[str]) -> None:
         tmp_file = pathlib.Path(tmp_path)
         if tmp_file.exists():
             tmp_file.unlink()
+
+
+def run_rebase(base: str, ordered_shas: list[str]) -> None:
+    """Run ``git rebase -i`` reordering picks to match *ordered_shas*."""
+    script_content = (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "order = " + repr(ordered_shas) + "\n"
+        "todo_path = sys.argv[1]\n"
+        "with open(todo_path) as f:\n"
+        "    lines = f.readlines()\n"
+        "pick_lines = {}\n"
+        "other_lines = []\n"
+        "for line in lines:\n"
+        "    stripped = line.strip()\n"
+        "    if stripped and not stripped.startswith('#'):\n"
+        "        parts = stripped.split(None, 2)\n"
+        "        if len(parts) >= 2:\n"
+        "            pick_lines[parts[1]] = line\n"
+        "        else:\n"
+        "            other_lines.append(line)\n"
+        "    else:\n"
+        "        other_lines.append(line)\n"
+        "reordered = []\n"
+        "for sha in order:\n"
+        "    for key in pick_lines:\n"
+        "        if sha.startswith(key) or key.startswith(sha):\n"
+        "            reordered.append(pick_lines[key])\n"
+        "            break\n"
+        "with open(todo_path, 'w') as f:\n"
+        "    f.writelines(reordered + other_lines)\n"
+    )
+    run_scripted_rebase(base, script_content)
 
 
 def display_plan(
