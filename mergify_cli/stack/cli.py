@@ -12,9 +12,6 @@ from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.stack import checkout as stack_checkout_mod
 from mergify_cli.stack import edit as stack_edit_mod
-from mergify_cli.stack import (
-    github_action_auto_rebase as stack_github_action_auto_rebase_mod,
-)
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import move as stack_move_mod
 from mergify_cli.stack import new as stack_new_mod
@@ -461,16 +458,6 @@ async def checkout(
         author=author,
         trunk=trunk,
         dry_run=dry_run,
-    )
-
-
-@stack.command(help="Autorebase a pull requests stack")
-@click.pass_context
-@utils.run_with_asyncio
-async def github_action_auto_rebase(ctx: click.Context) -> None:
-    await stack_github_action_auto_rebase_mod.stack_github_action_auto_rebase(
-        ctx.obj["github_server"],
-        ctx.obj["token"],
     )
 
 
