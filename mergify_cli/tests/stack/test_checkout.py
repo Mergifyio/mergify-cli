@@ -49,7 +49,8 @@ async def test_stack_checkout_no_prs(
             user="user",
             repo="repo",
             branch_prefix=None,
-            branch="my-branch",
+            name="my-branch",
+            branch=None,
             author="author",
             trunk=("origin", "main"),
             dry_run=True,
@@ -87,9 +88,10 @@ async def test_stack_checkout_repository_from_remote(
 
         await checkout_async(
             ctx,
+            name="my-branch",
             author="author",
             repository=None,
-            branch="my-branch",
+            branch=None,
             branch_prefix="prefix",
             dry_run=True,
             trunk=("origin", "main"),
@@ -101,7 +103,8 @@ async def test_stack_checkout_repository_from_remote(
             user="myorg",
             repo="myrepo",
             branch_prefix="prefix",
-            branch="my-branch",
+            name="my-branch",
+            branch=None,
             author="author",
             trunk=("origin", "main"),
             dry_run=True,
@@ -130,9 +133,10 @@ async def test_stack_checkout_repository_explicit(
 
         await checkout_async(
             ctx,
+            name="my-branch",
             author="author",
             repository="explicit-owner/explicit-repo",
-            branch="my-branch",
+            branch=None,
             branch_prefix="prefix",
             dry_run=True,
             trunk=("origin", "main"),
@@ -144,7 +148,8 @@ async def test_stack_checkout_repository_explicit(
             user="explicit-owner",
             repo="explicit-repo",
             branch_prefix="prefix",
-            branch="my-branch",
+            name="my-branch",
+            branch=None,
             author="author",
             trunk=("origin", "main"),
             dry_run=True,
@@ -160,9 +165,9 @@ async def test_stack_checkout_repository_explicit(
 
 @pytest.mark.respx(base_url="https://api.github.com/")
 @pytest.mark.parametrize(
-    ("branch_input", "expected_branch"),
+    ("name_input", "expected_name"),
     [
-        # Full head ref with prefix and change ID suffix → stripped to plain branch
+        # Full head ref with prefix and change ID suffix → stripped to plain name
         (
             "devs/JulianMaurin/MRGFY-6797/Ibb431d523fb75f48f387a3964d2936ada933cffe",
             "MRGFY-6797",
@@ -187,16 +192,16 @@ async def test_stack_checkout_repository_explicit(
         "full-head-ref",
         "with-suffix-no-prefix",
         "with-prefix-no-suffix",
-        "plain-branch",
+        "plain-name",
     ],
 )
-async def test_stack_checkout_branch_normalization(
+async def test_stack_checkout_name_normalization(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,
-    branch_input: str,
-    expected_branch: str,
+    name_input: str,
+    expected_name: str,
 ) -> None:
-    """Test that checkout normalizes --branch by stripping prefix and change ID suffix."""
+    """Test that checkout normalizes NAME by stripping prefix and change ID suffix."""
     git_mock.mock(
         "config",
         "--get",
@@ -216,14 +221,15 @@ async def test_stack_checkout_branch_normalization(
             user="user",
             repo="repo",
             branch_prefix=None,
-            branch=branch_input,
+            name=name_input,
+            branch=None,
             author="author",
             trunk=("origin", "main"),
             dry_run=True,
         )
 
-    # Verify the search query: stack_branch = prefix/normalized_branch
-    expected_stack_branch = f"devs/JulianMaurin/{expected_branch}"
+    # Verify the search query: stack_branch = prefix/normalized_name
+    expected_stack_branch = f"devs/JulianMaurin/{expected_name}"
     assert len(search_mock.calls) == 1
     query = str(search_mock.calls[0].request.url)
     assert f"head%3A{expected_stack_branch.replace('/', '%2F')}%2F" in query

@@ -386,6 +386,7 @@ async def push(
 
 @stack.command(help="Checkout the pull requests stack")
 @click.pass_context
+@click.argument("name")
 @click.option(
     "--author",
     help="Set the author of the stack (default: the author of the token)",
@@ -397,7 +398,8 @@ async def push(
 )
 @click.option(
     "--branch",
-    help="Branch used to create stacked PR.",
+    default=None,
+    help="Local branch name to create. Default: same as NAME.",
 )
 @click.option(
     "--branch-prefix",
@@ -423,9 +425,10 @@ async def push(
 async def checkout(
     ctx: click.Context,
     *,
+    name: str,
     author: str | None,
     repository: str | None,
-    branch: str,
+    branch: str | None,
     branch_prefix: str | None,
     dry_run: bool,
     trunk: tuple[str, str],
@@ -453,6 +456,7 @@ async def checkout(
         user=user,
         repo=repo,
         branch_prefix=branch_prefix,
+        name=name,
         branch=branch,
         author=author,
         trunk=trunk,

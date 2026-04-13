@@ -45,6 +45,7 @@ A branch is a stack. Keep stacks short and focused:
 ```bash
 mergify stack new NAME       # Create a new stack/branch for new work
 mergify stack push           # Push and create/update PRs
+mergify stack checkout NAME  # Checkout an existing stack from GitHub (e.g. someone else's)
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
 mergify stack list           # Show commit <-> PR mapping for current stack
 mergify stack list --json    # Same, but machine-readable JSON output
@@ -54,6 +55,8 @@ mergify stack move X last    # Move commit X to the bottom of the stack
 mergify stack move X before Y  # Move commit X before commit Y
 mergify stack move X after Y   # Move commit X after commit Y
 ```
+
+Use `mergify stack checkout NAME` to check out a stack that exists on GitHub (e.g. a colleague's stack). NAME is the remote branch name of the stack. It fetches all stacked PRs, creates a local branch, and sets up tracking. Use `--branch` to override the local branch name.
 
 Use `mergify stack sync` to bring your stack up to date. It fetches the latest trunk, detects which PRs have been merged, removes those commits from your local branch, and rebases the remaining commits. Run this before starting new work on an existing stack.
 

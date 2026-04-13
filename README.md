@@ -36,6 +36,8 @@ mergify --help
 
 # Manage stacked pull requests
 mergify stack --help
+mergify stack push                    # Push and create/update stacked PRs
+mergify stack checkout my-feature     # Checkout an existing stack from GitHub
 
 # Upload CI results
 mergify ci --help

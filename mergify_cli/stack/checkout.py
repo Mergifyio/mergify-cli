@@ -26,7 +26,8 @@ async def stack_checkout(
     user: str,
     repo: str,
     branch_prefix: str | None,
-    branch: str,
+    name: str,
+    branch: str | None,
     author: str | None,
     trunk: tuple[str, str],
     dry_run: bool,
@@ -40,13 +41,17 @@ async def stack_checkout(
         branch_prefix = await utils.get_default_branch_prefix(author)
 
     # Strip change ID suffix if present (e.g. /Ibb431d523fb75f48f387a3964d2936ada933cffe)
-    branch = changes.CHANGEID_SUFFIX_RE.sub("", branch)
+    name = changes.CHANGEID_SUFFIX_RE.sub("", name)
 
-    # Strip branch prefix from branch if already included
-    if branch_prefix and branch.startswith(f"{branch_prefix}/"):
-        branch = branch.removeprefix(f"{branch_prefix}/")
+    # Strip branch prefix from name if already included
+    if branch_prefix and name.startswith(f"{branch_prefix}/"):
+        name = name.removeprefix(f"{branch_prefix}/")
 
-    stack_branch = f"{branch_prefix}/{branch}" if branch_prefix else branch
+    # Local branch name defaults to the remote stack name
+    if branch is None:
+        branch = name
+
+    stack_branch = f"{branch_prefix}/{name}" if branch_prefix else name
 
     async with utils.get_github_http_client(github_server, token) as client:
         with console.status("Retrieving latest pushed stacks"):
