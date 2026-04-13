@@ -20,6 +20,7 @@ class PullRequest(typing.TypedDict):
     node_id: str
     merged_at: str | None
     merge_commit_sha: str | None
+    mergeable: bool | None
 
 
 class Comment(typing.TypedDict):

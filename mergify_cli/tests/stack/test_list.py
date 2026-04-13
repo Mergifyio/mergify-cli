@@ -89,6 +89,7 @@ async def test_stack_list_with_prs(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
     respx_mock.get("/repos/user/repo/pulls/124").respond(
@@ -105,8 +106,14 @@ async def test_stack_list_with_prs(
             "merged_at": None,
             "draft": True,
             "node_id": "",
+            "mergeable": None,
         },
     )
+    respx_mock.get(url__regex=r".*/commits/.*/check-runs$").respond(
+        200,
+        json={"check_runs": []},
+    )
+    respx_mock.get(url__regex=r".*/pulls/\d+/reviews$").respond(200, json=[])
 
     await stack_list_mod.stack_list(
         github_server="https://api.github.com/",
@@ -233,6 +240,7 @@ async def test_stack_list_mixed_pr_states(
             "merged_at": "2024-01-01T00:00:00Z",
             "draft": False,
             "node_id": "",
+            "mergeable": None,
         },
     )
     # Second PR: draft
@@ -250,6 +258,7 @@ async def test_stack_list_mixed_pr_states(
             "merged_at": None,
             "draft": True,
             "node_id": "",
+            "mergeable": None,
         },
     )
     # Third PR: open
@@ -267,8 +276,14 @@ async def test_stack_list_mixed_pr_states(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
+    respx_mock.get(url__regex=r".*/commits/.*/check-runs$").respond(
+        200,
+        json={"check_runs": []},
+    )
+    respx_mock.get(url__regex=r".*/pulls/\d+/reviews$").respond(200, json=[])
 
     await stack_list_mod.stack_list(
         github_server="https://api.github.com/",
@@ -329,8 +344,14 @@ async def test_stack_list_json_output(
             "merged_at": None,
             "draft": False,
             "node_id": "",
+            "mergeable": True,
         },
     )
+    respx_mock.get(url__regex=r".*/commits/.*/check-runs$").respond(
+        200,
+        json={"check_runs": []},
+    )
+    respx_mock.get(url__regex=r".*/pulls/\d+/reviews$").respond(200, json=[])
 
     await stack_list_mod.stack_list(
         github_server="https://api.github.com/",
@@ -350,6 +371,11 @@ async def test_stack_list_json_output(
     assert output["entries"][0]["status"] == "open"
     assert output["entries"][0]["pull_number"] == 42
     assert output["entries"][0]["pull_url"] == "https://github.com/user/repo/pull/42"
+    assert output["entries"][0]["ci_status"] == "unknown"
+    assert output["entries"][0]["ci_checks"] == []
+    assert output["entries"][0]["review_status"] == "unknown"
+    assert output["entries"][0]["reviews"] == []
+    assert output["entries"][0]["mergeable"] is True
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
@@ -460,3 +486,272 @@ async def test_stack_list_no_fork_point_raises_error(
             token="",
             trunk=("origin", "main"),
         )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_list_json_includes_ci_and_review_status(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test that JSON output includes CI status, reviews, and mergeable fields."""
+    git_mock.mock("config", "--get", "mergify-cli.stack-branch-prefix", output="")
+
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Add CI feature",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/99",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/99").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/99",
+            "number": "99",
+            "title": "Add CI feature",
+            "head": {
+                "sha": "commit1_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "mergeable": True,
+        },
+    )
+    respx_mock.get("/repos/user/repo/commits/commit1_sha/check-runs").respond(
+        200,
+        json={
+            "check_runs": [
+                {
+                    "name": "tests",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "lint",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/99/reviews").respond(
+        200,
+        json=[
+            {
+                "user": {"login": "reviewer1"},
+                "state": "APPROVED",
+            },
+        ],
+    )
+
+    await stack_list_mod.stack_list(
+        github_server="https://api.github.com/",
+        token="",
+        trunk=("origin", "main"),
+        output_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+
+    entry = output["entries"][0]
+    assert entry["ci_status"] == "passing"
+    assert len(entry["ci_checks"]) == 2
+    assert entry["ci_checks"][0] == {"name": "tests", "status": "success"}
+    assert entry["ci_checks"][1] == {"name": "lint", "status": "success"}
+    assert entry["review_status"] == "approved"
+    assert len(entry["reviews"]) == 1
+    assert entry["reviews"][0] == {"user": "reviewer1", "state": "APPROVED"}
+    assert entry["mergeable"] is True
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_list_shows_ci_and_review_summary(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test that display output includes CI status, review status, and conflict indicator."""
+    git_mock.mock("config", "--get", "mergify-cli.stack-branch-prefix", output="")
+
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Add feature",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/77",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/77").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/77",
+            "number": "77",
+            "title": "Add feature",
+            "head": {
+                "sha": "commit1_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "mergeable": False,
+        },
+    )
+    respx_mock.get("/repos/user/repo/commits/commit1_sha/check-runs").respond(
+        200,
+        json={
+            "check_runs": [
+                {
+                    "name": "linters",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "tests",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/77/reviews").respond(
+        200,
+        json=[
+            {
+                "user": {"login": "alice"},
+                "state": "CHANGES_REQUESTED",
+            },
+        ],
+    )
+
+    await stack_list_mod.stack_list(
+        github_server="https://api.github.com/",
+        token="",
+        trunk=("origin", "main"),
+    )
+
+    captured = capsys.readouterr()
+    assert "failing" in captured.out
+    assert "changes requested" in captured.out
+    assert "conflicting" in captured.out
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_list_verbose_shows_check_names_and_reviewers(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test that verbose mode shows individual check names and reviewer names."""
+    git_mock.mock("config", "--get", "mergify-cli.stack-branch-prefix", output="")
+
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Add feature",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/42",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/42").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/42",
+            "number": "42",
+            "title": "Add feature",
+            "head": {
+                "sha": "commit1_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "mergeable": True,
+        },
+    )
+    respx_mock.get("/repos/user/repo/commits/commit1_sha/check-runs").respond(
+        200,
+        json={
+            "check_runs": [
+                {"name": "linters", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "tests (ubuntu)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/42/reviews").respond(
+        200,
+        json=[
+            {"user": {"login": "alice"}, "state": "APPROVED"},
+            {"user": {"login": "bob"}, "state": "CHANGES_REQUESTED"},
+        ],
+    )
+
+    await stack_list_mod.stack_list(
+        github_server="https://api.github.com/",
+        token="",
+        trunk=("origin", "main"),
+        verbose=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "linters" in captured.out
+    assert "tests (ubuntu)" in captured.out
+    assert "alice" in captured.out
+    assert "bob" in captured.out
