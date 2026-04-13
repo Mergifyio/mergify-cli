@@ -264,3 +264,82 @@ async def smart_rebase(
         script_path.unlink(missing_ok=True)
 
     return status
+
+
+async def stack_sync(
+    github_server: str,
+    token: str,
+    *,
+    trunk: tuple[str, str],
+    dry_run: bool = False,
+    branch_prefix: str | None = None,
+    author: str | None = None,
+) -> None:
+    """Sync the current stack by removing merged commits and rebasing.
+
+    Args:
+        github_server: GitHub API server URL
+        token: GitHub personal access token
+        trunk: Tuple of (remote, branch) for the trunk
+        dry_run: If True, only report what would be done
+        branch_prefix: Optional branch prefix for stack branches
+        author: Optional author filter (defaults to token owner)
+    """
+    remote, base_branch = trunk
+
+    # Dry-run: just check status and report
+    if dry_run:
+        with console.status("Checking sync status\u2026"):
+            status = await get_sync_status(
+                github_server,
+                token,
+                trunk=trunk,
+                branch_prefix=branch_prefix,
+                author=author,
+            )
+
+        if status.all_merged:
+            console.print(
+                f"All commits in the stack have been merged into {base_branch}.\n"
+                f"You can switch to {base_branch} with: git checkout {base_branch}",
+            )
+        elif status.up_to_date:
+            console.print("Stack is up to date.")
+        else:
+            console.print(
+                "[bold]Dry run:[/] the following merged commits would be removed:",
+            )
+            for m in status.merged:
+                console.print(f"  - {m.title} (#{m.pull_number}, merged)")
+            console.print(
+                f"\n{len(status.remaining)} commit(s) would remain in the stack.",
+            )
+        return
+
+    # Fetch and sync
+    with console.status(f"Fetching {remote}/{base_branch}\u2026"):
+        await utils.git("fetch", remote, base_branch)
+
+    with console.status(f"Rebasing onto {remote}/{base_branch}\u2026"):
+        status = await smart_rebase(
+            github_server,
+            token,
+            trunk=trunk,
+            branch_prefix=branch_prefix,
+            author=author,
+        )
+
+    if status.all_merged:
+        console.print(
+            f"All commits in the stack have been merged into {base_branch}.\n"
+            f"You can switch to {base_branch} with: git checkout {base_branch}",
+        )
+    elif status.up_to_date:
+        console.print("Stack is up to date.")
+    else:
+        for m in status.merged:
+            console.print(f"  ✓ Dropped: {m.title} (#{m.pull_number})")
+        console.print(
+            f"Dropped {len(status.merged)} merged commit(s). "
+            f"{len(status.remaining)} commit(s) remaining in the stack.",
+        )

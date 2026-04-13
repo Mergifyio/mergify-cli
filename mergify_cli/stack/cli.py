@@ -21,6 +21,7 @@ from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import reorder as stack_reorder_mod
 from mergify_cli.stack import setup as stack_setup_mod
+from mergify_cli.stack import sync as stack_sync_mod
 
 
 def trunk_type(
@@ -437,6 +438,38 @@ async def github_action_auto_rebase(ctx: click.Context) -> None:
     await stack_github_action_auto_rebase_mod.stack_github_action_auto_rebase(
         ctx.obj["github_server"],
         ctx.obj["token"],
+    )
+
+
+@stack.command(help="Sync the stack: fetch trunk, remove merged commits, rebase")
+@click.pass_context
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show what would happen without making changes",
+)
+@click.option(
+    "--trunk",
+    "-t",
+    type=click.UNPROCESSED,
+    default=lambda: asyncio.run(utils.get_trunk()),
+    callback=trunk_type,
+    help="Change the target branch of the stack.",
+)
+@utils.run_with_asyncio
+async def sync(
+    ctx: click.Context,
+    *,
+    dry_run: bool,
+    trunk: tuple[str, str],
+) -> None:
+    await stack_sync_mod.stack_sync(
+        github_server=ctx.obj["github_server"],
+        token=ctx.obj["token"],
+        trunk=trunk,
+        dry_run=dry_run,
     )
 
 
