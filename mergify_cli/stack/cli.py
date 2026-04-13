@@ -198,9 +198,10 @@ async def setup(*, force: bool, check: bool) -> None:
 
 
 @stack.command(help="Edit the stack history")
+@click.argument("commit", required=False, default=None)
 @utils.run_with_asyncio
-async def edit() -> None:
-    await stack_edit_mod.stack_edit()
+async def edit(*, commit: str | None) -> None:
+    await stack_edit_mod.stack_edit(commit_prefix=commit)
 
 
 @stack.command(help="Reorder the stack's commits")
