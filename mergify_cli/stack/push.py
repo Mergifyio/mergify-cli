@@ -355,24 +355,33 @@ async def stack_push(
 class StackComment:
     pulls: list[github_types.PullRequest]
 
-    STACK_COMMENT_FIRST_LINE: typing.ClassVar[str] = (
+    _STACK_COMMENT_OLD_HEADER: typing.ClassVar[str] = (
         "This pull request is part of a stack:\n"
     )
 
-    def body(self, current_pull: github_types.PullRequest) -> str:
-        body = self.STACK_COMMENT_FIRST_LINE
+    STACK_COMMENT_HEADER: typing.ClassVar[str] = (
+        "This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):\n"
+    )
 
-        for pull in self.pulls:
-            body += f"1. {pull['title']} ([#{pull['number']}]({pull['html_url']}))"
-            if pull == current_pull:
-                body += " 👈"
-            body += "\n"
+    def body(self, current_pull: github_types.PullRequest) -> str:
+        body = self.STACK_COMMENT_HEADER
+        body += "\n"
+        body += "| # | Pull Request | |\n"
+        body += "|--:|---|---|\n"
+
+        for i, pull in enumerate(self.pulls, 1):
+            title = pull["title"].replace("|", "\\|")
+            entry = f"{title} ([#{pull['number']}]({pull['html_url']}))"
+            status = "👈" if pull == current_pull else ""
+            body += f"| {i} | {entry} | {status} |\n"
 
         return body
 
     @staticmethod
     def is_stack_comment(comment: github_types.Comment) -> bool:
-        return comment["body"].startswith(StackComment.STACK_COMMENT_FIRST_LINE)
+        return comment["body"].startswith(
+            StackComment.STACK_COMMENT_HEADER,
+        ) or comment["body"].startswith(StackComment._STACK_COMMENT_OLD_HEADER)
 
 
 async def _update_comment_for_pull(
