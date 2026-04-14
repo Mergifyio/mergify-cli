@@ -14,11 +14,14 @@
 # under the License.
 from __future__ import annotations
 
+import datetime
 import json
 from typing import TYPE_CHECKING
+from unittest import mock
 
 import pytest
 
+from mergify_cli import utils
 from mergify_cli.stack import changes
 from mergify_cli.stack import push
 from mergify_cli.tests import utils as test_utils
@@ -306,16 +309,19 @@ async def test_stack_update_no_rebase(
     patch_comment_mock = respx_mock.patch(
         "/repos/user/repo/issues/comments/456",
     ).respond(200)
+    respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    await push.stack_push(
-        github_server="https://api.github.com/",
-        token="",
-        skip_rebase=True,
-        next_only=False,
-        branch_prefix="",
-        dry_run=False,
-        trunk=("origin", "main"),
-    )
+    with mock.patch.object(push, "detect_change_type", return_value="content"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=True,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
     assert not git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
 
     # The pull request is updated
@@ -400,16 +406,19 @@ async def test_stack_update(
         ],
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    await push.stack_push(
-        github_server="https://api.github.com/",
-        token="",
-        skip_rebase=False,
-        next_only=False,
-        branch_prefix="",
-        dry_run=False,
-        trunk=("origin", "main"),
-    )
+    with mock.patch.object(push, "detect_change_type", return_value="content"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
     assert git_mock.has_been_called_with("pull", "--rebase", "origin", "main")
 
     # The pull request is updated
@@ -486,17 +495,20 @@ async def test_stack_update_keep_title_and_body(
         ],
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    await push.stack_push(
-        github_server="https://api.github.com/",
-        token="",
-        skip_rebase=False,
-        next_only=False,
-        branch_prefix="",
-        dry_run=False,
-        trunk=("origin", "main"),
-        keep_pull_request_title_and_body=True,
-    )
+    with mock.patch.object(push, "detect_change_type", return_value="content"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+            keep_pull_request_title_and_body=True,
+        )
 
     # The pull request is updated
     assert len(patch_pull_mock.calls) == 1
@@ -740,3 +752,520 @@ async def test_get_remote_changes_search_query_uses_trailing_slash(
     assert "head:my-stack/" in query, (
         f"Expected 'head:my-stack/' (with trailing slash) in query, got: {query}"
     )
+
+
+@pytest.mark.parametrize(
+    ("config_value", "expected"),
+    [
+        ("true", True),
+        ("false", False),
+        ("", True),  # default when empty
+    ],
+)
+async def test_get_default_revision_history(
+    git_mock: test_utils.GitMock,
+    *,
+    config_value: str,
+    expected: bool,
+) -> None:
+    git_mock.mock(
+        "config",
+        "--get",
+        "mergify-cli.stack-revision-history",
+        output=config_value,
+    )
+    result = await utils.get_default_revision_history()
+    assert result == expected
+
+
+async def test_get_default_revision_history_not_set() -> None:
+    # When config key doesn't exist, git raises an error — default to True
+    with mock.patch.object(
+        utils,
+        "git",
+        side_effect=utils.CommandError(
+            ("config", "--get", "mergify-cli.stack-revision-history"),
+            1,
+            b"",
+        ),
+    ):
+        result = await utils.get_default_revision_history()
+    assert result is True
+
+
+async def test_detect_change_type_content() -> None:
+    with mock.patch.object(push, "_git_patch_id", side_effect=["aaa", "bbb"]):
+        result = await push.detect_change_type("old_sha", "new_sha")
+    assert result == "content"
+
+
+async def test_detect_change_type_rebase() -> None:
+    with mock.patch.object(push, "_git_patch_id", side_effect=["aaa", "aaa"]):
+        result = await push.detect_change_type("old_sha", "new_sha")
+    assert result == "rebase"
+
+
+async def test_detect_change_type_error_falls_back_to_unknown() -> None:
+    with mock.patch.object(
+        push,
+        "_git_patch_id",
+        side_effect=utils.CommandError(("git",), 1, b""),
+    ):
+        result = await push.detect_change_type("old_sha", "new_sha")
+    assert result == "unknown"
+
+
+async def test_fetch_old_pr_heads(
+    git_mock: test_utils.GitMock,
+) -> None:
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "refs/pull/1/head",
+        "refs/pull/2/head",
+        output="",
+    )
+    await push.fetch_old_pr_heads("origin", [1, 2])
+
+
+async def test_fetch_old_pr_heads_empty() -> None:
+    # No PRs to fetch — should not call git fetch at all
+    await push.fetch_old_pr_heads("origin", [])
+
+
+def test_revision_history_comment_first_update() -> None:
+    """First update creates a comment with initial + update rows."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = comment.body()
+    assert body.startswith("### Revision history\n")
+    assert "| 1 | initial |" in body
+    assert "`abc1234`" in body
+    assert "| 2 | content |" in body
+    assert (
+        "abc1234567890abcdef1234567890abcdef123456...def5678901234567890abcdef1234567890abcdef"
+        in body
+    )
+    assert "2026-04-14 14:30 UTC" in body
+
+
+def test_revision_history_comment_append() -> None:
+    """Appending adds a new row to existing comment."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    comment.append(
+        old_sha="def5678901234567890abcdef1234567890abcdef",
+        new_sha="789abcdef01234567890abcdef01234567890abcd",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
+    )
+    body = comment.body()
+    assert "| 3 | rebase |" in body
+    assert (
+        "def5678901234567890abcdef1234567890abcdef...789abcdef01234567890abcdef01234567890abcd"
+        in body
+    )
+    assert "2026-04-15 09:10 UTC" in body
+
+
+def test_revision_history_comment_parse_existing() -> None:
+    """Parse an existing comment body back into a RevisionHistoryComment."""
+    original = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = original.body()
+
+    parsed = push.RevisionHistoryComment.parse(
+        body,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    # Append to the parsed comment
+    parsed.append(
+        old_sha="def5678901234567890abcdef1234567890abcdef",
+        new_sha="789abcdef01234567890abcdef01234567890abcd",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
+    )
+    new_body = parsed.body()
+    assert "| 3 | rebase |" in new_body
+    # Verify old rows are preserved verbatim (compare links intact)
+    assert (
+        "abc1234567890abcdef1234567890abcdef123456...def5678901234567890abcdef1234567890abcdef"
+        in new_body
+    )
+    assert "| 1 | initial |" in new_body
+    assert "| 2 | content |" in new_body
+
+
+def test_revision_history_comment_parse_returns_none_for_non_matching() -> None:
+    parsed = push.RevisionHistoryComment.parse(
+        "Some other comment",
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is None
+
+
+def test_revision_history_is_revision_comment() -> None:
+    assert push.RevisionHistoryComment.is_revision_comment(
+        {"body": "### Revision history\n...", "url": ""},
+    )
+    assert not push.RevisionHistoryComment.is_revision_comment(
+        {"body": "Some other comment", "url": ""},
+    )
+
+
+def test_revision_history_comment_unknown_type() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="unknown",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = comment.body()
+    assert "| 2 | unknown |" in body
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_create_revision_comment_on_update(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """When a PR is updated (force-pushed), a revision history comment is created."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new_commit_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "refs/pull/123/head",
+        output="",
+    )
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/123",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "old_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    # Stack comment (existing)
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    # Revision comment will be POSTed (no existing one in the comments list)
+    post_revision_mock = respx_mock.post(
+        "/repos/user/repo/issues/123/comments",
+    ).respond(200)
+
+    with mock.patch.object(push, "detect_change_type", return_value="content"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+    # A revision history comment should have been posted
+    assert post_revision_mock.called
+    # The last POST to comments should be the revision history
+    revision_calls = [
+        call
+        for call in post_revision_mock.calls
+        if json.loads(call.request.content)
+        .get("body", "")
+        .startswith("### Revision history")
+    ]
+    assert len(revision_calls) == 1
+    posted_body = json.loads(revision_calls[0].request.content)["body"]
+    assert "content" in posted_body
+    assert "old_com" in posted_body  # old_commit_sha[:7]
+    assert "new_com" in posted_body  # new_commit_sha[:7]
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_no_revision_comment_on_create(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """When a PR is created (not updated), no revision history comment is posted."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+    respx_mock.post("/repos/user/repo/pulls").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/1",
+            "number": "1",
+            "title": "Title commit 1",
+            "head": {"sha": "commit1_sha"},
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
+
+    await push.stack_push(
+        github_server="https://api.github.com/",
+        token="",
+        skip_rebase=False,
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+    )
+
+    # Verify no revision history comment was posted
+    for call in respx_mock.calls:
+        if call.request.method == "POST" and "/comments" in str(call.request.url):
+            posted = json.loads(call.request.content)
+            assert not posted.get("body", "").startswith("### Revision history")
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_no_revision_history_flag_skips_revision_comments(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new_commit_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "old_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+
+    await push.stack_push(
+        github_server="https://api.github.com/",
+        token="",
+        skip_rebase=False,
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+        revision_history=False,
+    )
+
+    # No fetch of PR heads
+    assert not git_mock.has_been_called_with("fetch", "origin", "refs/pull/123/head")
+    # No revision comment posted
+    for call in respx_mock.calls:
+        if call.request.method == "POST" and "/comments" in str(call.request.url):
+            posted = json.loads(call.request.content)
+            assert not posted.get("body", "").startswith("### Revision history")
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_revision_comment_updated_on_second_push(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """On a second force-push, the existing revision comment is updated, not duplicated."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="third_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/123",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "second_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+
+    # Existing comments: stack comment + existing revision comment
+    existing_revision_body = (
+        "### Revision history\n"
+        "| # | Type | Changes | Date |\n"
+        "|---|------|---------|------|\n"
+        "| 1 | initial | `first_s` | 2026-04-14 10:00 UTC |\n"
+        "| 2 | content | [`first_s \u2192 second_`](https://github.com/user/repo/compare/first_s...second_) | 2026-04-14 12:00 UTC |\n"
+    )
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+            {
+                "body": existing_revision_body,
+                "url": "https://api.github.com/repos/user/repo/issues/comments/789",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    patch_revision_mock = respx_mock.patch(
+        "/repos/user/repo/issues/comments/789",
+    ).respond(200)
+
+    with mock.patch.object(push, "detect_change_type", return_value="rebase"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+    # The existing revision comment is PATCHED, not a new one POSTed
+    assert patch_revision_mock.called
+    patched_body = json.loads(patch_revision_mock.calls.last.request.content)["body"]
+    assert "| 3 | rebase |" in patched_body
+    assert "second_" in patched_body  # old sha
+    assert "third_s" in patched_body  # new sha
