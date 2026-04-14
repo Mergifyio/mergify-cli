@@ -147,6 +147,78 @@ def test_create_minimal() -> None:
         assert body["end"] is None
 
 
+def test_create_auto_detects_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("tzlocal.get_localzone_name", lambda: "America/New_York")
+
+    with respx.mock(base_url="https://api.mergify.com") as mock:
+        mock.post("/v1/repos/owner/repo/scheduled_freeze").mock(
+            return_value=Response(
+                201,
+                json={**FAKE_FREEZE, "timezone": "America/New_York"},
+            ),
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            freeze,
+            [
+                *BASE_ARGS,
+                "create",
+                "--reason",
+                "Release prep",
+                "-c",
+                "base=main",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Freeze created successfully" in result.output
+
+        request = mock.calls.last.request
+        body = json.loads(request.content)
+        assert body["timezone"] == "America/New_York"
+
+
+def test_create_fails_when_timezone_not_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("tzlocal.get_localzone_name", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        freeze,
+        [
+            *BASE_ARGS,
+            "create",
+            "--reason",
+            "Release prep",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "Could not detect system timezone" in result.output
+
+
+def test_create_fails_when_timezone_detection_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise() -> str:
+        raise RuntimeError("no timezone found")
+
+    monkeypatch.setattr("tzlocal.get_localzone_name", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        freeze,
+        [
+            *BASE_ARGS,
+            "create",
+            "--reason",
+            "Release prep",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "Could not detect system timezone" in result.output
+
+
 def test_create_with_all_options() -> None:
     with respx.mock(base_url="https://api.mergify.com") as mock:
         mock.post("/v1/repos/owner/repo/scheduled_freeze").mock(
