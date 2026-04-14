@@ -1,6 +1,6 @@
 ---
 name: mergify-merge-queue
-description: Use Mergify merge queue to monitor, inspect, pause, and manage the merge queue. ALWAYS use this skill when checking queue status, investigating PR merge state, pausing/unpausing the queue, or debugging merge failures. Triggers on merge queue, queue status, queue pause, merge, CI checks.
+description: Use Mergify merge queue to monitor, inspect, pause, and manage the merge queue. ALWAYS use this skill when checking queue status, investigating PR merge state, pausing/unpausing the queue, or debugging merge failures. Triggers on merge queue, queue status, queue pause, queue show, pause, unpause, frozen, bisecting, batch, CI checks.
 ---
 
 # Mergify Merge Queue
