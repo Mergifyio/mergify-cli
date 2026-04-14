@@ -155,9 +155,12 @@ async def test_stack_create(
 
     # First stack comment is created
     assert len(post_comment1_mock.calls) == 1
-    expected_body = """This pull request is part of a stack:
-1. Title commit 1 ([#1](https://github.com/repo/user/pull/1)) 👈
-1. Title commit 2 ([#2](https://github.com/repo/user/pull/2))
+    expected_body = """This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):
+
+| # | Pull Request | |
+|--:|---|---|
+| 1 | Title commit 1 ([#1](https://github.com/repo/user/pull/1)) | 👈 |
+| 2 | Title commit 2 ([#2](https://github.com/repo/user/pull/2)) |  |
 """
     assert json.loads(post_comment1_mock.calls.last.request.content) == {
         "body": expected_body,
@@ -165,9 +168,12 @@ async def test_stack_create(
 
     # Second stack comment is created
     assert len(post_comment2_mock.calls) == 1
-    expected_body = """This pull request is part of a stack:
-1. Title commit 1 ([#1](https://github.com/repo/user/pull/1))
-1. Title commit 2 ([#2](https://github.com/repo/user/pull/2)) 👈
+    expected_body = """This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):
+
+| # | Pull Request | |
+|--:|---|---|
+| 1 | Title commit 1 ([#1](https://github.com/repo/user/pull/1)) |  |
+| 2 | Title commit 2 ([#2](https://github.com/repo/user/pull/2)) | 👈 |
 """
     assert json.loads(post_comment2_mock.calls.last.request.content) == {
         "body": expected_body,
@@ -297,7 +303,9 @@ async def test_stack_update_no_rebase(
             },
         ],
     )
-    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    patch_comment_mock = respx_mock.patch(
+        "/repos/user/repo/issues/comments/456",
+    ).respond(200)
 
     await push.stack_push(
         github_server="https://api.github.com/",
@@ -318,6 +326,13 @@ async def test_stack_update_no_rebase(
         "title": "Title",
         "body": "Message",
     }
+
+    # Old-format stack comment is updated to new table format
+    assert len(patch_comment_mock.calls) == 1
+    comment_body = json.loads(patch_comment_mock.calls.last.request.content)["body"]
+    assert comment_body.startswith(
+        "This pull request is part of a [Mergify stack]",
+    )
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
