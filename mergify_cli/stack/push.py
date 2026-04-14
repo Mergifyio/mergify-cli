@@ -421,11 +421,11 @@ async def stack_push(
 
         with console.status("Deleting unused branches..."):
             if planned_changes.orphans:
-                await asyncio.wait(
-                    asyncio.create_task(
-                        delete_stack(client, user, repo, stack_prefix, change),
-                    )
-                    for change in planned_changes.orphans
+                await asyncio.gather(
+                    *(
+                        delete_stack(client, user, repo, stack_prefix, change)
+                        for change in planned_changes.orphans
+                    ),
                 )
 
         console.log("[green]Finished :tada:[/]")
