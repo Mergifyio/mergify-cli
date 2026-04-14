@@ -4,7 +4,7 @@
   "author": {
     "name": "Mergify"
   },
-  "keywords": ["git", "pr", "stacked-prs", "merge-queue", "workflow"],
+  "keywords": ["git", "pr", "stacked-prs", "push", "commit", "branch", "rebase", "checkout", "workflow"],
   "license": "Apache-2.0",
   "repository": "https://github.com/Mergifyio/mergify-cli"
 }
