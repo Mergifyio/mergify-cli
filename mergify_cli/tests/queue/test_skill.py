@@ -20,7 +20,9 @@ import re
 import yaml
 
 
-SKILL_PATH = pathlib.Path(__file__).parents[2] / "queue" / "skill.md"
+SKILL_PATH = (
+    pathlib.Path(__file__).parents[3] / "skills" / "mergify-merge-queue" / "SKILL.md"
+)
 
 
 def _get_skill_content() -> str:
