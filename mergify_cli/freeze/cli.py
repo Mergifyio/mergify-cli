@@ -191,8 +191,8 @@ async def list_cmd(ctx: click.Context, *, output_json: bool) -> None:
 @click.option("--reason", required=True, help="Reason for the freeze")
 @click.option(
     "--timezone",
-    required=True,
-    help="IANA timezone name (e.g. Europe/Paris, US/Eastern)",
+    default=None,
+    help="IANA timezone name (e.g. Europe/Paris, US/Eastern). Defaults to system timezone.",
 )
 @click.option(
     "--condition",
@@ -226,12 +226,23 @@ async def create(
     ctx: click.Context,
     *,
     reason: str,
-    timezone: str,
+    timezone: str | None,
     conditions: tuple[str, ...],
     start: datetime.datetime | None,
     end: datetime.datetime | None,
     excludes: tuple[str, ...],
 ) -> None:
+    if timezone is None:
+        from tzlocal import get_localzone_name
+
+        try:
+            timezone = typing.cast("str | None", get_localzone_name())
+        except Exception:
+            timezone = None
+        if not timezone:
+            msg = "Could not detect system timezone. Please specify --timezone explicitly."
+            raise click.UsageError(msg)
+
     async with utils.get_mergify_http_client(
         ctx.obj["api_url"],
         ctx.obj["token"],
