@@ -231,4 +231,4 @@ async def stack_reorder(
         return
 
     run_rebase(base, matched_shas)
-    console.print("Stack reordered successfully", style="green")
+    console.print("Stack reordered successfully.", style="green")
