@@ -21,6 +21,7 @@ import sys
 import typing
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import github_types
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
@@ -321,9 +322,8 @@ async def get_changes(
     for idx, (commit, title, message) in enumerate(commit_infos):
         changeids = CHANGEID_RE.findall(message)
         if not changeids:
-            console.print(
+            console_error(
                 f"`Change-Id:` line is missing on commit {commit}",
-                style="red",
             )
             console.print(
                 "Did you run `mergify stack setup` for this repository?",

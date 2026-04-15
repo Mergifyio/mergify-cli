@@ -11,6 +11,7 @@ from rich.markup import escape
 import yaml
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.ci.detector import MERGIFY_CONFIG_PATHS
 from mergify_cli.ci.detector import get_mergify_config_path
@@ -82,12 +83,13 @@ def validate(ctx: click.Context) -> None:
         console.print(f"[green]Configuration file '{escaped_path}' is valid.[/]")
         return
 
-    console.print(
-        f"[red]Configuration file '{escaped_path}' has {len(result.errors)} error(s):[/]",
+    console_error(
+        f"configuration file '{escaped_path}' has {len(result.errors)} error(s):",
     )
     for error in result.errors:
         console.print(
-            f"  [red]- {escape(error.path)}: {escape(error.message)}[/]",
+            f"  - {escape(error.path)}: {escape(error.message)}",
+            style="red",
         )
 
     raise SystemExit(ExitCode.CONFIGURATION_ERROR)

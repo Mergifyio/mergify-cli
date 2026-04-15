@@ -24,6 +24,7 @@ import typing
 import click
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
@@ -362,7 +363,7 @@ async def get_stack_list(
     try:
         check_local_branch(branch_name=dest_branch, branch_prefix=branch_prefix)
     except LocalBranchInvalidError as e:
-        console.print(f"[red] {e.message} [/]")
+        console_error(e.message)
         console.print(
             "You should run `mergify stack list` on the branch you created in the first place",
         )
@@ -376,12 +377,14 @@ async def get_stack_list(
 
     if base_branch == dest_branch:
         remote_url = await utils.git("remote", "get-url", remote)
+        console_error(
+            f"your local branch `{dest_branch}` targets itself: "
+            f"`{remote}/{base_branch}` (at {remote_url}@{base_branch})",
+        )
         console.print(
-            f"Your local branch `{dest_branch}` targets itself: `{remote}/{base_branch}` (at {remote_url}@{base_branch}).\n"
-            f"You should either fix the target branch or rename your local branch.\n\n"
-            f"* To fix the target branch: `git branch {dest_branch} --set-upstream-to={remote}/main>\n",
+            "You should either fix the target branch or rename your local branch.\n\n"
+            f"* To fix the target branch: `git branch {dest_branch} --set-upstream-to={remote}/main`\n"
             f"* To rename your local branch: `git branch -M {dest_branch} new-branch-name`",
-            style="red",
         )
         sys.exit(ExitCode.INVALID_STATE)
 
@@ -393,9 +396,8 @@ async def get_stack_list(
         f"{remote}/{base_branch}",
     )
     if not base_commit_sha:
-        console.print(
-            f"Common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
-            style="red",
+        console_error(
+            f"common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
         )
         sys.exit(ExitCode.STACK_NOT_FOUND)
 

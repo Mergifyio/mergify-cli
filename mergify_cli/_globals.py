@@ -23,3 +23,8 @@ import rich.console
 console = rich.console.Console(log_path=False, log_time=False)
 
 VERSION = importlib.metadata.version("mergify-cli")
+
+
+def console_error(message: str) -> None:
+    """Print a consistently formatted error message."""
+    console.print(f"error: {message}", style="red")
