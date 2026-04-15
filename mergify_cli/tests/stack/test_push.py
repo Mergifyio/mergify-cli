@@ -160,10 +160,10 @@ async def test_stack_create(
     assert len(post_comment1_mock.calls) == 1
     expected_body = """This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):
 
-| # | Pull Request | |
-|--:|---|---|
-| 1 | Title commit 1 ([#1](https://github.com/repo/user/pull/1)) | 👈 |
-| 2 | Title commit 2 ([#2](https://github.com/repo/user/pull/2)) |  |
+| # | Pull Request | Link | |
+|--:|---|---|---|
+| 1 | Title commit 1 | [#1](https://github.com/repo/user/pull/1) | 👈 |
+| 2 | Title commit 2 | [#2](https://github.com/repo/user/pull/2) |  |
 """
     assert json.loads(post_comment1_mock.calls.last.request.content) == {
         "body": expected_body,
@@ -173,10 +173,10 @@ async def test_stack_create(
     assert len(post_comment2_mock.calls) == 1
     expected_body = """This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):
 
-| # | Pull Request | |
-|--:|---|---|
-| 1 | Title commit 1 ([#1](https://github.com/repo/user/pull/1)) |  |
-| 2 | Title commit 2 ([#2](https://github.com/repo/user/pull/2)) | 👈 |
+| # | Pull Request | Link | |
+|--:|---|---|---|
+| 1 | Title commit 1 | [#1](https://github.com/repo/user/pull/1) |  |
+| 2 | Title commit 2 | [#2](https://github.com/repo/user/pull/2) | 👈 |
 """
     assert json.loads(post_comment2_mock.calls.last.request.content) == {
         "body": expected_body,
