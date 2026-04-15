@@ -458,14 +458,14 @@ class StackComment:
     def body(self, current_pull: github_types.PullRequest) -> str:
         body = self.STACK_COMMENT_HEADER
         body += "\n"
-        body += "| # | Pull Request | |\n"
-        body += "|--:|---|---|\n"
+        body += "| # | Pull Request | Link | |\n"
+        body += "|--:|---|---|---|\n"
 
         for i, pull in enumerate(self.pulls, 1):
             title = pull["title"].replace("|", "\\|")
-            entry = f"{title} ([#{pull['number']}]({pull['html_url']}))"
+            link = f"[#{pull['number']}]({pull['html_url']})"
             status = "👈" if pull == current_pull else ""
-            body += f"| {i} | {entry} | {status} |\n"
+            body += f"| {i} | {title} | {link} | {status} |\n"
 
         return body
 
