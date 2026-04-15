@@ -256,7 +256,11 @@ async def test_stack_update_no_rebase(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
-    git_mock.finalize()
+    git_mock.finalize(
+        remote_shas={
+            "I29617d37762fd69809c255d7e7073cb11f8fbf50": "previous_commit_sha",
+        },
+    )
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
@@ -355,7 +359,11 @@ async def test_stack_update(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
-    git_mock.finalize()
+    git_mock.finalize(
+        remote_shas={
+            "I29617d37762fd69809c255d7e7073cb11f8fbf50": "previous_commit_sha",
+        },
+    )
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
@@ -445,7 +453,11 @@ async def test_stack_update_keep_title_and_body(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
-    git_mock.finalize()
+    git_mock.finalize(
+        remote_shas={
+            "I29617d37762fd69809c255d7e7073cb11f8fbf50": "previous_commit_sha",
+        },
+    )
 
     # Mock HTTP calls: the stack already exists but it's out of date, it should
     # be updated
@@ -555,7 +567,8 @@ async def test_stack_dry_run_does_not_rebase(
     # No branches are pushed.
     assert not git_mock.has_been_called_with(
         "push",
-        "-f",
+        "--atomic",
+        "--force-with-lease=refs/heads/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50:",
         "origin",
         "commit1_sha:refs/heads/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
     )
@@ -967,7 +980,9 @@ async def test_create_revision_comment_on_update(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
-    git_mock.finalize()
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "old_commit_sha"},
+    )
     git_mock.mock(
         "fetch",
         "origin",
@@ -1113,7 +1128,9 @@ async def test_no_revision_history_flag_skips_revision_comments(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
-    git_mock.finalize()
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "old_commit_sha"},
+    )
 
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(
@@ -1191,7 +1208,9 @@ async def test_revision_comment_updated_on_second_push(
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
-    git_mock.finalize()
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "second_sha"},
+    )
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
     respx_mock.get("/user").respond(200, json={"login": "author"})

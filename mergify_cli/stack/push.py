@@ -69,17 +69,29 @@ async def push_branches(
     remote: str,
     local_changes: list[changes.LocalChange],
 ) -> None:
-    refspecs = [
-        f"{c.commit_sha}:refs/heads/{c.dest_branch}"
-        for c in local_changes
-        if c.action in {"create", "update"}
-    ]
-    if refspecs:
-        os.environ["MERGIFY_STACK_PUSH"] = "1"
-        try:
-            await utils.git("push", "-f", remote, *refspecs)
-        finally:
-            os.environ.pop("MERGIFY_STACK_PUSH", None)
+    changes_to_push = [c for c in local_changes if c.action in {"create", "update"}]
+    if not changes_to_push:
+        return
+
+    lease_args: list[str] = []
+    for c in changes_to_push:
+        if c.action == "update":
+            # Explicit lease: reject push if the remote branch has moved
+            # since we last read it via the GitHub API.
+            lease_args.append(
+                f"--force-with-lease=refs/heads/{c.dest_branch}:{c.pull_head_sha}",
+            )
+        else:
+            # New branch — no remote ref expected; force is sufficient.
+            lease_args.append(f"--force-with-lease=refs/heads/{c.dest_branch}:")
+
+    refspecs = [f"{c.commit_sha}:refs/heads/{c.dest_branch}" for c in changes_to_push]
+
+    os.environ["MERGIFY_STACK_PUSH"] = "1"
+    try:
+        await utils.git("push", "--atomic", *lease_args, remote, *refspecs)
+    finally:
+        os.environ.pop("MERGIFY_STACK_PUSH", None)
 
 
 async def _git_patch_id(sha: str) -> str:
