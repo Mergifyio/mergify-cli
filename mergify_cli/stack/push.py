@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime
 import os
 import re
 import sys
@@ -79,6 +80,46 @@ async def push_branches(
             await utils.git("push", "-f", remote, *refspecs)
         finally:
             os.environ.pop("MERGIFY_STACK_PUSH", None)
+
+
+async def _git_patch_id(sha: str) -> str:
+    """Get the patch-id of a commit, stable across rebases."""
+    diff = await utils.git("show", sha)
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        "git",
+        "patch-id",
+        "--stable",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate(input=diff.encode())
+    if proc.returncode != 0:
+        raise utils.CommandError(
+            ("git", "patch-id"),
+            proc.returncode,
+            stdout or b"",
+        )
+    # Output format: "<patch-id> <commit-sha>"
+    return stdout.decode().strip().split()[0]
+
+
+async def detect_change_type(old_sha: str, new_sha: str) -> str:
+    """Compare patch-ids to determine if a force-push is rebase-only or content change."""
+    try:
+        old_patch_id = await _git_patch_id(old_sha)
+        new_patch_id = await _git_patch_id(new_sha)
+    except (utils.CommandError, IndexError, UnicodeDecodeError):
+        return "unknown"
+    return "rebase" if old_patch_id == new_patch_id else "content"
+
+
+async def fetch_old_pr_heads(remote: str, pr_numbers: list[int]) -> None:
+    """Fetch current PR head refs so old SHAs are available locally for patch-id comparison."""
+    if not pr_numbers:
+        return
+    refspecs = [f"refs/pull/{n}/head" for n in pr_numbers]
+    await utils.git("fetch", remote, *refspecs)
 
 
 @dataclasses.dataclass
@@ -167,6 +208,7 @@ async def stack_push(
     keep_pull_request_title_and_body: bool = False,
     only_update_existing_pulls: bool = False,
     author: str | None = None,
+    revision_history: bool = True,
 ) -> None:
     os.chdir(await utils.git("rev-parse", "--show-toplevel"))
     dest_branch = await utils.git_get_branch_name()
@@ -297,6 +339,28 @@ async def stack_push(
             console.log("[orange]Finished (dry-run mode) :tada:[/]")
             sys.exit(0)
 
+        if revision_history:
+            # Fetch old PR heads for patch-id comparison before force-pushing
+            updated_pr_numbers = [
+                int(c.pull["number"])
+                for c in planned_changes.locals
+                if c.action == "update" and c.pull is not None
+            ]
+            with console.status("Fetching old PR heads for comparison..."):
+                try:
+                    await fetch_old_pr_heads(remote, updated_pr_numbers)
+                except utils.CommandError:
+                    pass  # Non-fatal: change type will be "unknown"
+
+            # Detect change types before force-push overwrites refs
+            change_types: dict[str, str] = {}
+            for change in planned_changes.locals:
+                if change.action == "update" and change.pull is not None:
+                    change_types[change.id] = await detect_change_type(
+                        change.pull_head_sha,
+                        change.commit_sha,
+                    )
+
         with console.status("Pushing stacked branches..."):
             await push_branches(remote, planned_changes.locals)
 
@@ -338,6 +402,22 @@ async def stack_push(
             await create_or_update_comments(client, user, repo, pulls_to_comment)
 
         console.log("[green]Comments updated")
+
+        if revision_history:
+            updated_changes = [
+                (task.change, change_types.get(task.change.id, "unknown"))
+                for task in tasks
+                if task.change.action == "update" and task.change.pull is not None
+            ]
+            with console.status("Updating revision history..."):
+                await create_or_update_revision_comments(
+                    client,
+                    user,
+                    repo,
+                    github_server,
+                    updated_changes,
+                )
+            console.log("[green]Revision history updated")
 
         with console.status("Deleting unused branches..."):
             if planned_changes.orphans:
@@ -382,6 +462,145 @@ class StackComment:
         return comment["body"].startswith(
             StackComment.STACK_COMMENT_HEADER,
         ) or comment["body"].startswith(StackComment._STACK_COMMENT_OLD_HEADER)
+
+
+@dataclasses.dataclass
+class _RevisionEntry:
+    number: int
+    change_type: str
+    old_sha: str | None  # None for "initial"
+    new_sha: str
+    timestamp: str  # "YYYY-MM-DD HH:MM UTC"
+
+
+@dataclasses.dataclass
+class RevisionHistoryComment:
+    github_server: str
+    user: str
+    repo: str
+    entries: list[_RevisionEntry]
+    _raw_rows: list[str] = dataclasses.field(default_factory=list)
+
+    REVISION_COMMENT_FIRST_LINE: typing.ClassVar[str] = "### Revision history\n"
+
+    @staticmethod
+    def is_revision_comment(comment: github_types.Comment) -> bool:
+        return comment["body"].startswith(
+            RevisionHistoryComment.REVISION_COMMENT_FIRST_LINE,
+        )
+
+    def _compare_url(self, old_sha: str, new_sha: str) -> str:
+        api_url = self.github_server.rstrip("/")
+        if "/api/v3" in api_url:
+            html_url = api_url.replace("/api/v3", "")
+        else:
+            html_url = api_url.replace("api.github.com", "github.com")
+        return f"{html_url}/{self.user}/{self.repo}/compare/{old_sha}...{new_sha}"
+
+    @staticmethod
+    def _format_timestamp(dt: datetime.datetime) -> str:
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+
+    @classmethod
+    def create_initial(
+        cls,
+        *,
+        github_server: str,
+        user: str,
+        repo: str,
+        old_sha: str,
+        new_sha: str,
+        change_type: str,
+        timestamp: datetime.datetime,
+    ) -> RevisionHistoryComment:
+        ts = cls._format_timestamp(timestamp)
+        entries = [
+            _RevisionEntry(1, "initial", None, old_sha, ts),
+            _RevisionEntry(2, change_type, old_sha, new_sha, ts),
+        ]
+        return cls(
+            github_server=github_server,
+            user=user,
+            repo=repo,
+            entries=entries,
+        )
+
+    def append(
+        self,
+        *,
+        old_sha: str,
+        new_sha: str,
+        change_type: str,
+        timestamp: datetime.datetime,
+    ) -> None:
+        ts = self._format_timestamp(timestamp)
+        next_number = len(self.entries) + 1
+        self.entries.append(
+            _RevisionEntry(next_number, change_type, old_sha, new_sha, ts),
+        )
+
+    def _render_entry(self, entry: _RevisionEntry) -> str:
+        if entry.old_sha is None:
+            changes_cell = f"`{entry.new_sha[:7]}`"
+        else:
+            url = self._compare_url(entry.old_sha, entry.new_sha)
+            changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
+        return f"| {entry.number} | {entry.change_type} | {changes_cell} | {entry.timestamp} |"
+
+    def body(self) -> str:
+        lines = [
+            self.REVISION_COMMENT_FIRST_LINE,
+            "| # | Type | Changes | Date |",
+            "|---|------|---------|------|",
+        ]
+        for i, entry in enumerate(self.entries):
+            if i < len(self._raw_rows):
+                # Preserve original row verbatim from parsed comment
+                lines.append(self._raw_rows[i])
+            else:
+                lines.append(self._render_entry(entry))
+        return "\n".join(lines) + "\n"
+
+    _ROW_RE: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^\| (\d+) \| (\w+) \| .+ \| (.+) \|$",
+    )
+
+    @classmethod
+    def parse(
+        cls,
+        body: str,
+        *,
+        github_server: str,
+        user: str,
+        repo: str,
+    ) -> RevisionHistoryComment | None:
+        if not body.startswith(cls.REVISION_COMMENT_FIRST_LINE):
+            return None
+
+        entries: list[_RevisionEntry] = []
+        raw_rows: list[str] = []
+        for line in body.splitlines():
+            m = cls._ROW_RE.match(line)
+            if not m:
+                continue
+            number = int(m.group(1))
+            change_type = m.group(2)
+            timestamp = m.group(3).strip()
+            entries.append(
+                _RevisionEntry(number, change_type, None, "", timestamp),
+            )
+            raw_rows.append(line)
+
+        if not entries:
+            return None
+
+        return cls(
+            github_server=github_server,
+            user=user,
+            repo=repo,
+            entries=entries,
+            _raw_rows=raw_rows,
+        )
 
 
 async def _update_comment_for_pull(
@@ -439,6 +658,113 @@ async def create_or_update_comments(
             )
             for pull in pulls
             if not pull["merged_at"]
+        ),
+    )
+
+
+async def _update_revision_for_pull(
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    github_server: str,
+    change: changes.LocalChange,
+    change_type: str,
+    timestamp: datetime.datetime,
+    sem: asyncio.Semaphore,
+) -> None:
+    if change.pull is None:
+        return
+
+    pull_number = change.pull["number"]
+    old_sha = change.pull_head_sha
+    new_sha = change.commit_sha
+
+    async with sem:
+        r = await client.get(
+            f"/repos/{user}/{repo}/issues/{pull_number}/comments",
+        )
+        comments = typing.cast("list[github_types.Comment]", r.json())
+
+        for comment in comments:
+            if RevisionHistoryComment.is_revision_comment(comment):
+                parsed = RevisionHistoryComment.parse(
+                    comment["body"],
+                    github_server=github_server,
+                    user=user,
+                    repo=repo,
+                )
+                if parsed is not None:
+                    parsed.append(
+                        old_sha=old_sha,
+                        new_sha=new_sha,
+                        change_type=change_type,
+                        timestamp=timestamp,
+                    )
+                    new_body = parsed.body()
+                    if comment["body"] != new_body:
+                        await client.patch(
+                            comment["url"],
+                            json={"body": new_body},
+                        )
+                    return
+                # Comment header matched but body corrupted — overwrite it
+                revision = RevisionHistoryComment.create_initial(
+                    github_server=github_server,
+                    user=user,
+                    repo=repo,
+                    old_sha=old_sha,
+                    new_sha=new_sha,
+                    change_type=change_type,
+                    timestamp=timestamp,
+                )
+                await client.patch(
+                    comment["url"],
+                    json={"body": revision.body()},
+                )
+                return
+
+        # No existing revision comment — create one
+        revision = RevisionHistoryComment.create_initial(
+            github_server=github_server,
+            user=user,
+            repo=repo,
+            old_sha=old_sha,
+            new_sha=new_sha,
+            change_type=change_type,
+            timestamp=timestamp,
+        )
+        await client.post(
+            f"/repos/{user}/{repo}/issues/{pull_number}/comments",
+            json={"body": revision.body()},
+        )
+
+
+async def create_or_update_revision_comments(
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    github_server: str,
+    updated_changes: list[tuple[changes.LocalChange, str]],
+) -> None:
+    if not updated_changes:
+        return
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+    now = datetime.datetime.now(datetime.UTC)
+
+    await asyncio.gather(
+        *(
+            _update_revision_for_pull(
+                client,
+                user,
+                repo,
+                github_server,
+                change,
+                change_type,
+                now,
+                sem,
+            )
+            for change, change_type in updated_changes
         ),
     )
 

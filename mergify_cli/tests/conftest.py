@@ -90,6 +90,12 @@ def git_mock(
         "mergify-cli.stack-branch-prefix",
         output="",
     )
+    git_mock_object.mock(
+        "config",
+        "--get",
+        "mergify-cli.stack-revision-history",
+        output="",
+    )
 
     with mock.patch("mergify_cli.utils.git", git_mock_object):
         yield git_mock_object
