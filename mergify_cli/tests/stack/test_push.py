@@ -1269,3 +1269,75 @@ async def test_revision_comment_updated_on_second_push(
     assert "| 3 | rebase |" in patched_body
     assert "second_" in patched_body  # old sha
     assert "third_s" in patched_body  # new sha
+
+
+def test_is_change_id_valid() -> None:
+    assert changes.is_change_id("I29617d37762fd69809c255d7e7073cb11f8fbf50") is True
+
+
+def test_is_change_id_invalid() -> None:
+    assert changes.is_change_id("add-auth-model--29617d37") is False
+    assert changes.is_change_id("29617d37") is False
+    assert changes.is_change_id("I2961") is False
+    assert changes.is_change_id("") is False
+
+
+def test_extract_short_changeid_new_format() -> None:
+    assert changes.extract_changeid_from_branch_segment(
+        "add-auth-model--29617d37",
+    ) == changes.ChangeId("29617d37")
+
+
+def test_extract_short_changeid_old_format() -> None:
+    assert changes.extract_changeid_from_branch_segment(
+        "I29617d37762fd69809c255d7e7073cb11f8fbf50",
+    ) == changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50")
+
+
+def test_extract_short_changeid_invalid() -> None:
+    assert changes.extract_changeid_from_branch_segment("random-branch") is None
+
+
+def test_pop_remote_change_exact_match() -> None:
+    pull: dict = {"number": 1}
+    remote = changes.RemoteChanges(
+        {
+            changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"): pull,
+        },
+    )
+    result = changes.pop_remote_change(
+        remote,
+        changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+    )
+    assert result is pull
+    assert len(remote) == 0
+
+
+def test_pop_remote_change_short_remote_vs_full_local() -> None:
+    pull: dict = {"number": 1}
+    remote = changes.RemoteChanges(
+        {
+            changes.ChangeId("29617d37"): pull,
+        },
+    )
+    result = changes.pop_remote_change(
+        remote,
+        changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+    )
+    assert result is pull
+    assert len(remote) == 0
+
+
+def test_pop_remote_change_no_match() -> None:
+    pull: dict = {"number": 1}
+    remote = changes.RemoteChanges(
+        {
+            changes.ChangeId("Iaaaaaaaa762fd69809c255d7e7073cb11f8fbf50"): pull,
+        },
+    )
+    result = changes.pop_remote_change(
+        remote,
+        changes.ChangeId("Ibbbbbbbb762fd69809c255d7e7073cb11f8fbf50"),
+    )
+    assert result is None
+    assert len(remote) == 1

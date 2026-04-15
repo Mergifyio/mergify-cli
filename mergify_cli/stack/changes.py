@@ -43,11 +43,55 @@ def is_change_id_prefix(prefix: str) -> bool:
     )
 
 
+_CHANGEID_FULL_RE = re.compile(r"^I[0-9a-f]{40}$")
+_SHORT_CHANGEID_RE = re.compile(r"--([0-9a-f]{8})$")
+
+
+def is_change_id(value: str) -> bool:
+    """Return True if *value* is a full 40-hex Change-Id (I-prefixed)."""
+    return bool(_CHANGEID_FULL_RE.match(value))
+
+
 ChangeId = typing.NewType("ChangeId", str)
 RemoteChanges = typing.NewType(
     "RemoteChanges",
     dict[ChangeId, github_types.PullRequest],
 )
+
+
+def extract_changeid_from_branch_segment(segment: str) -> ChangeId | None:
+    """Extract a Change-Id from the last segment of a branch name.
+
+    Supports both old format (full I-prefixed Change-Id) and new
+    format (slug--hex8).
+    """
+    if is_change_id(segment):
+        return ChangeId(segment)
+    match = _SHORT_CHANGEID_RE.search(segment)
+    if match:
+        return ChangeId(match.group(1))
+    return None
+
+
+def pop_remote_change(
+    remote_changes: RemoteChanges,
+    changeid: ChangeId,
+) -> github_types.PullRequest | None:
+    """Pop a remote change by exact or cross-format prefix match.
+
+    Handles matching between full Change-Ids (I-prefixed, 40 hex)
+    and short hex-only IDs (8 hex from new-format branch names).
+    """
+    if changeid in remote_changes:
+        return remote_changes.pop(changeid)
+
+    local_hex = changeid.removeprefix("I")
+    for remote_cid in list(remote_changes):
+        remote_hex = remote_cid.removeprefix("I")
+        if remote_hex.startswith(local_hex) or local_hex.startswith(remote_hex):
+            return remote_changes.pop(remote_cid)
+    return None
+
 
 ActionT = typing.Literal[
     "skip-merged",
