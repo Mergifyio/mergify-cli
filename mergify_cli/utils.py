@@ -158,6 +158,19 @@ async def get_default_create_as_draft() -> bool:
     return result == "true"
 
 
+async def get_default_revision_history() -> bool:
+    try:
+        result = await git(
+            "config",
+            "--get",
+            "mergify-cli.stack-revision-history",
+        )
+    except CommandError:
+        return True
+
+    return result != "false"
+
+
 async def _get_default_remote_branch() -> tuple[str, str]:
     """Detect the default branch from the remote (e.g. origin/main).
 

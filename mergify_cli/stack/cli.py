@@ -341,6 +341,15 @@ async def new(
     is_flag=True,
     help="Only update existing pull requests, do not create new ones",
 )
+@click.option(
+    "--no-revision-history",
+    is_flag=True,
+    flag_value=True,
+    default=lambda: not asyncio.run(utils.get_default_revision_history()),
+    help="Don't post revision history comments on pull requests. "
+    "Default fetched from git config if added with "
+    "`git config --add mergify-cli.stack-revision-history false`",
+)
 @utils.run_with_asyncio
 async def push(
     ctx: click.Context,
@@ -356,6 +365,7 @@ async def push(
     trunk: tuple[str, str],
     branch_prefix: str | None,
     only_update_existing_pulls: bool,
+    no_revision_history: bool,
 ) -> None:
     if setup:
         # backward compat
@@ -378,6 +388,7 @@ async def push(
         keep_pull_request_title_and_body=keep_pull_request_title_and_body,
         only_update_existing_pulls=only_update_existing_pulls,
         author=author,
+        revision_history=not no_revision_history,
     )
 
 
