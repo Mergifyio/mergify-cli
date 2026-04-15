@@ -25,6 +25,7 @@ import typing
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
 
 
@@ -244,7 +245,7 @@ async def stack_push(
         console.log(
             "You should run `mergify stack` on the branch you created in the first place",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_STATE)
 
     remote, base_branch = trunk
 
@@ -261,7 +262,7 @@ async def stack_push(
             f"* To rename your local branch: `git branch -M {dest_branch} new-branch-name`",
             style="red",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_STATE)
 
     stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
 
@@ -316,7 +317,7 @@ async def stack_push(
             f"Common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
             style="red",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.STACK_NOT_FOUND)
 
     async with utils.get_github_http_client(github_server, token) as client:
         with console.status("Retrieving latest pushed stacks"):

@@ -48,6 +48,13 @@ def is_debug() -> bool:
     return _DEBUG
 
 
+MERGIFY_API_DEFAULT_URL = "https://api.mergify.com"
+
+
+def get_mergify_api_url() -> str:
+    return os.getenv("MERGIFY_API_URL", MERGIFY_API_DEFAULT_URL)
+
+
 async def check_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return

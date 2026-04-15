@@ -23,6 +23,7 @@ import typing
 from mergify_cli import console
 from mergify_cli import github_types
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.slug import slugify_title
 
 
@@ -328,7 +329,7 @@ async def get_changes(
                 "Did you run `mergify stack setup` for this repository?",
             )
             # TODO(sileht): we should raise an Exception and exit in main program
-            sys.exit(1)
+            sys.exit(ExitCode.INVALID_STATE)
 
         changeid = ChangeId(changeids[-1])
         pull = pop_remote_change(remaining_remote_changes, changeid)

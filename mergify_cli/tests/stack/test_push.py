@@ -22,6 +22,7 @@ from unittest import mock
 import pytest
 
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
 from mergify_cli.stack import push
 from mergify_cli.tests import utils as test_utils
@@ -687,7 +688,7 @@ async def test_stack_on_destination_branch_raises_an_error(
         output="https://github.com/foo/bar.git",
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match=str(ExitCode.INVALID_STATE)):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -707,7 +708,7 @@ async def test_stack_without_common_commit_raises_an_error(
     respx_mock.get("/user").respond(200, json={"login": "author"})
     git_mock.mock("merge-base", "--fork-point", "origin/main", output="")
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match=str(ExitCode.STACK_NOT_FOUND)):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",

@@ -24,6 +24,7 @@ import typing
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
 from mergify_cli.stack.push import LocalBranchInvalidError
 from mergify_cli.stack.push import check_local_branch
@@ -104,7 +105,7 @@ async def get_sync_status(
         console.print(
             "You should run `mergify stack sync` on the branch you created in the first place",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_STATE)
 
     remote, base_branch = trunk
 
@@ -124,7 +125,7 @@ async def get_sync_status(
             f"`git branch -M {dest_branch} new-branch-name`",
             style="red",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_STATE)
 
     stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
 
@@ -138,7 +139,7 @@ async def get_sync_status(
             f"Common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
             style="red",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.STACK_NOT_FOUND)
 
     async with utils.get_github_http_client(github_server, token) as client:
         remote_changes = await changes.get_remote_changes(

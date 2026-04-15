@@ -137,7 +137,7 @@ def _print_freeze(freeze: freeze_api.ScheduledFreezeResponse) -> None:
     "-u",
     help="URL of the Mergify API",
     envvar="MERGIFY_API_URL",
-    default="https://api.mergify.com",
+    default=utils.MERGIFY_API_DEFAULT_URL,
     show_default=True,
 )
 @click.option(

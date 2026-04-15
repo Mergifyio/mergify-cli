@@ -8,6 +8,7 @@ from click.testing import CliRunner
 from httpx import Response
 import respx
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.queue.cli import _relative_time
 from mergify_cli.queue.cli import _topological_sort
 from mergify_cli.queue.cli import queue
@@ -467,7 +468,7 @@ class TestPauseCommand:
                 queue,
                 [*BASE_ARGS, "pause", "--reason", "test"],
             )
-        assert result.exit_code == 1
+        assert result.exit_code == ExitCode.INVALID_STATE
         assert "--yes-i-am-sure" in result.output
 
     def test_pause_requires_reason(self) -> None:
@@ -524,5 +525,5 @@ class TestUnpauseCommand:
             )
             runner = CliRunner()
             result = runner.invoke(queue, [*BASE_ARGS, "unpause"])
-        assert result.exit_code == 1
+        assert result.exit_code == ExitCode.MERGIFY_API_ERROR
         assert "not currently paused" in result.output.lower()

@@ -12,6 +12,7 @@ from httpx import Response
 import respx
 
 from mergify_cli.config.cli import config
+from mergify_cli.exit_codes import ExitCode
 
 
 _MINIMAL_SCHEMA: dict[str, object] = {
@@ -63,7 +64,7 @@ def test_invalid_config(tmp_path: pathlib.Path) -> None:
             config,
             ["--config-file", config_path, "validate"],
         )
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == ExitCode.CONFIGURATION_ERROR, result.output
         assert "error" in result.output.lower()
 
 

@@ -25,6 +25,7 @@ import questionary
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.list import get_stack_list
 
 
@@ -71,7 +72,7 @@ async def stack_open(
 
     if not output.entries:
         console.print("[yellow]No commits in stack[/]")
-        sys.exit(1)
+        sys.exit(ExitCode.STACK_NOT_FOUND)
 
     entry: StackListEntry
 
@@ -96,7 +97,7 @@ async def stack_open(
             commit_sha = await utils.git("rev-parse", commit)
         except utils.CommandError:
             console.print(f"[red]Commit `{commit}` not found[/]")
-            sys.exit(1)
+            sys.exit(ExitCode.STACK_NOT_FOUND)
 
         # Find entry matching the commit SHA
         found_entry = next(
@@ -108,7 +109,7 @@ async def stack_open(
             console.print(
                 f"[red]Commit `{commit}` ({commit_sha[:7]}) not found in stack[/]",
             )
-            sys.exit(1)
+            sys.exit(ExitCode.STACK_NOT_FOUND)
 
         entry = found_entry
 
@@ -117,7 +118,7 @@ async def stack_open(
             f"[yellow]No PR for: {entry.title} ({entry.commit_sha[:7]})[/]",
         )
         console.print("Run `mergify stack push` first.")
-        sys.exit(1)
+        sys.exit(ExitCode.STACK_NOT_FOUND)
 
     console.print(f"Opening PR #{entry.pull_number}: {entry.title}")
     webbrowser.open(entry.pull_url)
