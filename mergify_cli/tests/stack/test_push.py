@@ -139,7 +139,7 @@ async def test_stack_create(
     # First pull request is created
     assert len(post_pull1_mock.calls) == 1
     assert json.loads(post_pull1_mock.calls.last.request.content) == {
-        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/title-commit-1--29617d37",
         "base": "main",
         "title": "Title commit 1",
         "body": "Message commit 1",
@@ -149,8 +149,8 @@ async def test_stack_create(
     # Second pull request is created
     assert len(post_pull2_mock.calls) == 1
     assert json.loads(post_pull2_mock.calls.last.request.content) == {
-        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf51",
-        "base": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/title-commit-2--29617d37",
+        "base": "current-branch/title-commit-1--29617d37",
         "title": "Title commit 2",
         "body": "Message commit 2\n\nDepends-On: #1",
         "draft": False,
@@ -234,7 +234,7 @@ async def test_stack_create_single_pull(
     # Pull request is created without stack comment
     assert len(post_pull_mock.calls) == 1
     assert json.loads(post_pull_mock.calls.last.request.content) == {
-        "head": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "head": "current-branch/title-commit-1--29617d37",
         "base": "main",
         "title": "Title commit 1",
         "body": "Message commit 1",
@@ -254,6 +254,7 @@ async def test_stack_update_no_rebase(
             title="Title",
             message="Message",
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
     git_mock.finalize()
@@ -353,6 +354,7 @@ async def test_stack_update(
             title="Title",
             message="Message",
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
     git_mock.finalize()
@@ -443,6 +445,7 @@ async def test_stack_update_keep_title_and_body(
             title="New Title that should be ignored",
             message="New Message that should be ignored",
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
         ),
     )
     git_mock.finalize()
@@ -557,7 +560,7 @@ async def test_stack_dry_run_does_not_rebase(
         "push",
         "-f",
         "origin",
-        "commit1_sha:refs/heads/current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        "commit1_sha:refs/heads/current-branch/title-commit-1--29617d37",
     )
 
 

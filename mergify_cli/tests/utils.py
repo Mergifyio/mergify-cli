@@ -24,11 +24,15 @@ if typing.TYPE_CHECKING:
     from collections import abc
 
 
-class Commit(typing.TypedDict):
+class _CommitRequired(typing.TypedDict):
     sha: str
     title: str
     message: str
     change_id: str
+
+
+class Commit(_CommitRequired, total=False):
+    head_ref: str  # existing PR branch ref; overrides slug-based refspec in finalize()
 
 
 @dataclasses.dataclass
@@ -84,8 +88,12 @@ class GitMock:
         )
 
         # Register batch push mock
+        from mergify_cli.stack.slug import slugify_title
+
         refspecs = [
-            f"{c['sha']}:refs/heads/current-branch/{c['change_id']}"
+            f"{c['sha']}:refs/heads/{c['head_ref']}"
+            if "head_ref" in c
+            else f"{c['sha']}:refs/heads/current-branch/{slugify_title(c['title'], c['change_id'])}"
             for c in self._commits
         ]
         if refspecs:

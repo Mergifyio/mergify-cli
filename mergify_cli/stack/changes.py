@@ -23,6 +23,7 @@ import typing
 from mergify_cli import console
 from mergify_cli import github_types
 from mergify_cli import utils
+from mergify_cli.stack.slug import slugify_title
 
 
 if typing.TYPE_CHECKING:
@@ -330,7 +331,7 @@ async def get_changes(
             sys.exit(1)
 
         changeid = ChangeId(changeids[-1])
-        pull = remaining_remote_changes.pop(changeid, None)
+        pull = pop_remote_change(remaining_remote_changes, changeid)
 
         action: ActionT
         if next_only and idx > 0:
@@ -344,6 +345,12 @@ async def get_changes(
         else:
             action = "update"
 
+        if pull is not None:
+            dest_branch = pull["head"]["ref"]
+        else:
+            slug = slugify_title(title, changeid)
+            dest_branch = f"{stack_prefix}/{slug}"
+
         changes.locals.append(
             LocalChange(
                 changeid,
@@ -352,7 +359,7 @@ async def get_changes(
                 title,
                 message,
                 changes.locals[-1].dest_branch if changes.locals else base_branch,
-                f"{stack_prefix}/{changeid}",
+                dest_branch,
                 action,
             ),
         )
