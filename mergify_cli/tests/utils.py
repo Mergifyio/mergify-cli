@@ -69,7 +69,11 @@ class GitMock:
         # Base commit SHA
         self.mock("merge-base", "--fork-point", "origin/main", output="base_commit_sha")
 
-    def finalize(self) -> None:
+    def finalize(
+        self,
+        *,
+        remote_shas: dict[str, str] | None = None,
+    ) -> None:
         # Register batch log mock
         records = []
         for c in self._commits:
@@ -83,13 +87,28 @@ class GitMock:
             output="\x1e".join(records) + "\x1e" if records else "",
         )
 
-        # Register batch push mock
-        refspecs = [
-            f"{c['sha']}:refs/heads/current-branch/{c['change_id']}"
-            for c in self._commits
-        ]
-        if refspecs:
-            self.mock("push", "-f", "origin", *refspecs, output="")
+        # Register batch push mock with explicit per-ref leases
+        if not self._commits:
+            return
+
+        lease_args: list[str] = []
+        refspecs: list[str] = []
+        for c in self._commits:
+            branch = f"current-branch/{c['change_id']}"
+            expected_sha = (remote_shas or {}).get(c["change_id"], "")
+            lease_args.append(
+                f"--force-with-lease=refs/heads/{branch}:{expected_sha}",
+            )
+            refspecs.append(f"{c['sha']}:refs/heads/{branch}")
+
+        self.mock(
+            "push",
+            "--atomic",
+            *lease_args,
+            "origin",
+            *refspecs,
+            output="",
+        )
 
 
 @dataclasses.dataclass
