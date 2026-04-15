@@ -241,7 +241,7 @@ async def stack_push(
         console.print(
             f"Your local branch `{dest_branch}` targets itself: `{remote}/{base_branch}` (at {remote_url}@{base_branch}).\n"
             f"You should either fix the target branch or rename your local branch.\n\n"
-            f"* To fix the target branch: `git branch {dest_branch} --set-upstream-to={remote}/main>\n",
+            f"* To fix the target branch: `git branch {dest_branch} --set-upstream-to={remote}/{base_branch}`\n",
             f"* To rename your local branch: `git branch -M {dest_branch} new-branch-name`",
             style="red",
         )
