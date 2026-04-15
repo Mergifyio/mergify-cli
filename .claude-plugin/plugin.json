@@ -1,10 +1,24 @@
 {
-  "name": "mergify-stack",
-  "description": "Mergify CLI integration for stacked PRs, merge queues, and Git workflows",
+  "name": "mergify",
+  "description": "Mergify CLI integration for stacked PRs, merge queues, CI insights, scheduled freezes, and configuration management",
   "author": {
     "name": "Mergify"
   },
-  "keywords": ["git", "pr", "stacked-prs", "push", "commit", "branch", "rebase", "checkout", "workflow"],
+  "keywords": [
+    "git",
+    "pr",
+    "stacked-prs",
+    "merge-queue",
+    "ci",
+    "freeze",
+    "config",
+    "push",
+    "commit",
+    "branch",
+    "rebase",
+    "checkout",
+    "workflow"
+  ],
   "license": "Apache-2.0",
   "repository": "https://github.com/Mergifyio/mergify-cli"
 }
