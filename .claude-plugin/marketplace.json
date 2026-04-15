@@ -1,18 +1,36 @@
 {
-  "name": "mergify-marketplace",
+  "name": "mergify",
   "owner": {
     "name": "Mergify"
+  },
+  "metadata": {
+    "description": "Mergify CLI skills for stacked PRs, merge queues, CI insights, scheduled freezes, and configuration management"
   },
   "plugins": [
     {
       "name": "mergify-stack",
       "source": "./",
-      "description": "Stacked PRs, merge queues, and Git workflow automation"
+      "description": "Stacked PRs and Git workflow automation"
     },
     {
       "name": "mergify-merge-queue",
       "source": "./",
       "description": "Monitor, inspect, pause, and manage the Mergify merge queue"
+    },
+    {
+      "name": "mergify-ci",
+      "source": "./",
+      "description": "CI insights: JUnit test results, git refs detection, scopes, and merge queue metadata"
+    },
+    {
+      "name": "mergify-config",
+      "source": "./",
+      "description": "Validate and simulate Mergify configuration files"
+    },
+    {
+      "name": "mergify-freeze",
+      "source": "./",
+      "description": "Create and manage scheduled merge freezes"
     }
   ]
 }
