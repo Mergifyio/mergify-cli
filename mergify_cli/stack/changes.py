@@ -71,7 +71,7 @@ class Change:
     @property
     def pull_head_sha(self) -> str:
         if self.pull is None:
-            raise PullRequestNotExistError
+            raise PullRequestNotExistError("Pull request does not exist")
         return self.pull["head"]["sha"]
 
     @property
