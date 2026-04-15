@@ -1341,3 +1341,104 @@ def test_pop_remote_change_no_match() -> None:
     )
     assert result is None
     assert len(remote) == 1
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_get_remote_changes_new_format_branch(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """get_remote_changes correctly extracts Change-Id from new-format slug--hex8 branches."""
+    import httpx
+
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/1",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/1").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/1",
+            "number": 1,
+            "title": "Add auth model",
+            "head": {
+                "sha": "abc123",
+                "ref": "my-stack/add-auth-model--29617d37",
+            },
+            "body": "description",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+
+    async with httpx.AsyncClient(base_url="https://api.github.com/") as client:
+        result = await changes.get_remote_changes(
+            client,
+            user="user",
+            repo="repo",
+            stack_prefix="my-stack",
+            author="author",
+        )
+
+    assert len(result) == 1
+    assert changes.ChangeId("29617d37") in result
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_get_remote_changes_old_format_branch(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """get_remote_changes still works with old-format I-prefixed branches."""
+    import httpx
+
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/1",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/1").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/1",
+            "number": 1,
+            "title": "Add auth model",
+            "head": {
+                "sha": "abc123",
+                "ref": "my-stack/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "description",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+
+    async with httpx.AsyncClient(base_url="https://api.github.com/") as client:
+        result = await changes.get_remote_changes(
+            client,
+            user="user",
+            repo="repo",
+            stack_prefix="my-stack",
+            author="author",
+        )
+
+    assert len(result) == 1
+    cid = changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50")
+    assert cid in result

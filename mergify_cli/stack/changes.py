@@ -150,7 +150,10 @@ async def get_remote_changes(
         if pull["state"] == "closed" and pull["merged_at"] is None:
             continue
 
-        changeid = ChangeId(pull["head"]["ref"].split("/")[-1])
+        last_segment = pull["head"]["ref"].split("/")[-1]
+        changeid = extract_changeid_from_branch_segment(last_segment)
+        if changeid is None:
+            continue
 
         if changeid in remote_changes:
             other_pull = remote_changes[changeid]
