@@ -22,11 +22,11 @@ STATUS_STYLES: dict[str, tuple[str, str]] = {
     "failed": ("✗", "red"),
     "merged": ("✓", "dim green"),
     "waiting_for_merge": ("◎", "cyan"),
-    "waiting_for_previous_batches": ("⏳", "yellow"),
+    "waiting_for_previous_batches": ("○", "yellow"),
     "waiting_for_requeue": ("↻", "yellow"),
-    "waiting_schedule": ("⏰", "yellow"),
-    "waiting_for_batch": ("⏳", "dim"),
-    "frozen": ("❄", "cyan"),
+    "waiting_schedule": ("○", "yellow"),
+    "waiting_for_batch": ("○", "dim"),
+    "frozen": ("○", "cyan"),
 }
 
 CHECK_STATE_STYLES: dict[str, tuple[str, str]] = {
@@ -36,7 +36,7 @@ CHECK_STATE_STYLES: dict[str, tuple[str, str]] = {
     "error": ("✗", "red"),
     "cancelled": ("○", "dim"),
     "action_required": ("!", "red"),
-    "timed_out": ("⏰", "red"),
+    "timed_out": ("✗", "red"),
     "neutral": ("○", "dim"),
     "skipped": ("○", "dim"),
     "stale": ("○", "dim"),
@@ -407,7 +407,7 @@ async def status(ctx: click.Context, *, branch: str | None, output_json: bool) -
     if pause is not None:
         pause_rel = _relative_time(pause["paused_at"])
         pause_text = Text()
-        pause_text.append("⚠  Queue is paused: ", style="bold yellow")
+        pause_text.append("!  Queue is paused: ", style="bold yellow")
         pause_text.append(f'"{pause["reason"]}"')
         if pause_rel:
             pause_text.append(f" (since {pause_rel})", style="dim")
@@ -484,7 +484,7 @@ async def pause(ctx: click.Context, *, reason: str, yes_i_am_sure: bool) -> None
         )
 
     pause_text = Text()
-    pause_text.append("⚠  Queue paused", style="bold yellow")
+    pause_text.append("!  Queue paused", style="bold yellow")
     pause_text.append(f': "{data["reason"]}"')
     if data.get("paused_at"):
         pause_rel = _relative_time(data["paused_at"])
