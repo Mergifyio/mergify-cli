@@ -23,6 +23,7 @@ import click
 import httpx
 
 from mergify_cli import VERSION
+from mergify_cli import console
 from mergify_cli import utils
 from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.config import cli as config_cli_mod
@@ -86,3 +87,6 @@ def main() -> None:
         if str(e.request.url).startswith(utils.get_mergify_api_url()):
             raise SystemExit(ExitCode.MERGIFY_API_ERROR) from None
         raise SystemExit(ExitCode.GITHUB_API_ERROR) from None
+    except utils.CommandError as e:
+        console.print(f"error: {e}", style="red")
+        raise SystemExit(ExitCode.GENERIC_ERROR) from None
