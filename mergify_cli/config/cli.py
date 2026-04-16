@@ -16,6 +16,7 @@ from mergify_cli.ci.detector import MERGIFY_CONFIG_PATHS
 from mergify_cli.ci.detector import get_mergify_config_path
 from mergify_cli.config import validate as config_validate
 from mergify_cli.dym import DYMGroup
+from mergify_cli.exit_codes import ExitCode
 
 
 def _resolve_config_path(config_path: str | None) -> str:
@@ -89,7 +90,7 @@ def validate(ctx: click.Context) -> None:
             f"  [red]- {escape(error.path)}: {escape(error.message)}[/]",
         )
 
-    raise SystemExit(1)
+    raise SystemExit(ExitCode.CONFIGURATION_ERROR)
 
 
 _PR_URL_RE = re.compile(
@@ -122,7 +123,7 @@ def _parse_pr_url(url: str) -> tuple[str, int]:
     "-u",
     help="URL of the Mergify API",
     envvar="MERGIFY_API_URL",
-    default="https://api.mergify.com",
+    default=utils.MERGIFY_API_DEFAULT_URL,
     show_default=True,
 )
 @click.pass_context

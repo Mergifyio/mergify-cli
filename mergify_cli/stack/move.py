@@ -20,6 +20,7 @@ import sys
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.reorder import display_plan
 from mergify_cli.stack.reorder import get_stack_commits
 from mergify_cli.stack.reorder import match_commit
@@ -50,21 +51,21 @@ async def stack_move(
                 f"error: '{position}' requires a target commit",
                 style="red",
             )
-            sys.exit(1)
+            sys.exit(ExitCode.INVALID_STATE)
         target = match_commit(target_prefix, commits)
         if commit[0] == target[0]:
             console.print(
                 "error: commit and target are the same",
                 style="red",
             )
-            sys.exit(1)
+            sys.exit(ExitCode.INVALID_STATE)
     elif position in {"first", "last"}:
         if target_prefix is not None:
             console.print(
                 f"error: '{position}' does not accept a target commit",
                 style="red",
             )
-            sys.exit(1)
+            sys.exit(ExitCode.INVALID_STATE)
 
     # Compute new order
     remaining = [c for c in commits if c[0] != commit[0]]

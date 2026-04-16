@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.reorder import get_stack_commits
 from mergify_cli.stack.reorder import match_commit
 from mergify_cli.stack.reorder import stack_reorder
@@ -146,7 +147,7 @@ class TestMatchCommit:
         ]
         with pytest.raises(SystemExit) as exc_info:
             match_commit("zzz", commits)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND
 
     def test_ambiguous_match_exits(self) -> None:
         commits = [
@@ -155,7 +156,7 @@ class TestMatchCommit:
         ]
         with pytest.raises(SystemExit) as exc_info:
             match_commit("abc123", commits)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
 
 class TestStackReorder:
@@ -254,7 +255,7 @@ class TestStackReorder:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_reorder([sha_a, sha_b], dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_reorder_wrong_count_too_many(
         self,
@@ -273,7 +274,7 @@ class TestStackReorder:
                 [sha_a, sha_b, sha_c, sha_a],
                 dry_run=False,
             )
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_reorder_unknown_prefix(
         self,
@@ -291,7 +292,7 @@ class TestStackReorder:
                 [sha_a, sha_b, "deadbeef1234"],
                 dry_run=False,
             )
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND
 
     async def test_reorder_ambiguous_prefix(self) -> None:
         """Test match_commit logic with ambiguous prefix."""
@@ -314,7 +315,7 @@ class TestStackReorder:
         ]
         with pytest.raises(SystemExit) as exc_info:
             match_commit("abc123", commits)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_reorder_duplicate_prefix(
         self,
@@ -329,7 +330,7 @@ class TestStackReorder:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_reorder([sha_a, sha_a, sha_b], dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_reorder_empty_stack(
         self,

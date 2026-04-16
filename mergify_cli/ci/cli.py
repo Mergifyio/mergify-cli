@@ -68,7 +68,7 @@ ci = click.Group(
     help="URL of the Mergify API",
     required=True,
     envvar="MERGIFY_API_URL",
-    default="https://api.mergify.com",
+    default=utils.MERGIFY_API_DEFAULT_URL,
     show_default=True,
 )
 @click.option(
@@ -150,7 +150,7 @@ async def junit_upload(
     help="URL of the Mergify API",
     required=True,
     envvar="MERGIFY_API_URL",
-    default="https://api.mergify.com",
+    default=utils.MERGIFY_API_DEFAULT_URL,
     show_default=True,
 )
 @click.option(
@@ -306,7 +306,7 @@ def scopes(
     help="URL of the Mergify API",
     required=True,
     envvar="MERGIFY_API_URL",
-    default="https://api.mergify.com",
+    default=utils.MERGIFY_API_DEFAULT_URL,
     show_default=True,
 )
 @click.option(

@@ -9,6 +9,7 @@ import opentelemetry.trace
 from mergify_cli.ci.junit_processing import junit
 from mergify_cli.ci.junit_processing import quarantine
 from mergify_cli.ci.junit_processing import upload
+from mergify_cli.exit_codes import ExitCode
 
 
 if typing.TYPE_CHECKING:
@@ -52,14 +53,14 @@ async def process_junit_files(
             f"Failed to parse JUnit XML: {e.details}",
             "Check that your test framework is generating valid JUnit XML output.",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.GENERIC_ERROR)
 
     if not spans:
         _print_early_exit_error(
             "No spans found in the JUnit files",
             "Check that the JUnit XML files are not empty.",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.GENERIC_ERROR)
 
     tests_cases = [
         span
@@ -72,7 +73,7 @@ async def process_junit_files(
             "No test cases found in the JUnit files",
             "Check that your test step ran successfully before this step.",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.GENERIC_ERROR)
 
     nb_failing_spans = len(
         [
@@ -187,9 +188,9 @@ async def process_junit_files(
         click.echo(
             "❌ FAIL — test runner exited with an error but no failures were reported",
         )
-        click.echo("  Exit code: 1")
+        click.echo(f"  Exit code: {int(ExitCode.GENERIC_ERROR)}")
         click.echo(SEPARATOR)
-        sys.exit(1)
+        sys.exit(ExitCode.GENERIC_ERROR)
 
     # ── Verdict ──
     nb_quarantined_failures = len(result.failing_spans) if result is not None else 0

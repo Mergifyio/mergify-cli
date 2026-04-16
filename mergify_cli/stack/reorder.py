@@ -24,6 +24,7 @@ import tempfile
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.changes import CHANGEID_RE
 from mergify_cli.stack.changes import is_change_id_prefix
 
@@ -79,7 +80,7 @@ def match_commit(
             f"error: no commit found matching {field_name} prefix '{prefix}'",
             style="red",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.STACK_NOT_FOUND)
     if len(matches) > 1:
         console.print(
             f"error: ambiguous {field_name} prefix '{prefix}' matches {len(matches)} commits:",
@@ -87,7 +88,7 @@ def match_commit(
         )
         for sha, subject, change_id in matches:
             console.print(f"  {sha[:12]} {subject} ({change_id[:12]})", style="red")
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_STATE)
 
     return matches[0]
 
@@ -126,7 +127,7 @@ def run_scripted_rebase(base: str, script_content: str) -> None:
             console.print(
                 "Or abort the rebase with: git rebase --abort",
             )
-            sys.exit(1)
+            sys.exit(ExitCode.CONFLICT)
     finally:
         tmp_file = pathlib.Path(tmp_path)
         if tmp_file.exists():
@@ -196,7 +197,7 @@ async def stack_reorder(
             f"error: expected {len(commits)} commits but got {len(commit_prefixes)} prefixes",
             style="red",
         )
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_STATE)
 
     # Match each prefix to a commit
     matched = [match_commit(p, commits) for p in commit_prefixes]
@@ -211,7 +212,7 @@ async def stack_reorder(
                     f"error: duplicate — prefix '{prefix}' resolves to the same commit as another prefix",
                     style="red",
                 )
-                sys.exit(1)
+                sys.exit(ExitCode.INVALID_STATE)
             seen.add(sha)
 
     # Check if already in order

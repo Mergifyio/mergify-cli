@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.move import stack_move
 
 
@@ -231,7 +232,7 @@ class TestStackMove:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_move(sha_a, "before", sha_a, dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_move_target_missing_for_before(
         self,
@@ -245,7 +246,7 @@ class TestStackMove:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_move(sha_a, "before", None, dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_move_target_missing_for_after(
         self,
@@ -259,7 +260,7 @@ class TestStackMove:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_move(sha_a, "after", None, dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_move_target_provided_for_first(
         self,
@@ -274,7 +275,7 @@ class TestStackMove:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_move(sha_a, "first", sha_b, dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_move_target_provided_for_last(
         self,
@@ -289,7 +290,7 @@ class TestStackMove:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_move(sha_a, "last", sha_b, dry_run=False)
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.INVALID_STATE
 
     async def test_move_with_change_id(
         self,

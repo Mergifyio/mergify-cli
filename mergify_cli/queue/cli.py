@@ -10,6 +10,7 @@ from rich.tree import Tree
 from mergify_cli import console
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.queue import api as queue_api
 
 
@@ -338,7 +339,7 @@ def _add_condition_nodes(
     "-u",
     help="URL of the Mergify API",
     envvar="MERGIFY_API_URL",
-    default="https://api.mergify.com",
+    default=utils.MERGIFY_API_DEFAULT_URL,
     show_default=True,
 )
 @click.option(
@@ -465,7 +466,7 @@ async def pause(ctx: click.Context, *, reason: str, yes_i_am_sure: bool) -> None
                 "[red]Error:[/] refusing to pause without confirmation. "
                 "Pass --yes-i-am-sure to proceed.",
             )
-            raise SystemExit(1)
+            raise SystemExit(ExitCode.INVALID_STATE)
         click.confirm(
             f"You are about to pause the merge queue for {repository}. Proceed?",
             abort=True,
@@ -509,7 +510,7 @@ async def unpause(ctx: click.Context) -> None:
                 "Queue is not currently paused",
                 style="yellow",
             )
-            raise SystemExit(1) from None
+            raise SystemExit(ExitCode.MERGIFY_API_ERROR) from None
         raise
 
     console.print("[green]Queue unpaused successfully.[/]")
@@ -556,7 +557,7 @@ async def show(
                 f"PR #{pr_number} is not in the merge queue",
                 style="yellow",
             )
-            raise SystemExit(1) from None
+            raise SystemExit(ExitCode.MERGIFY_API_ERROR) from None
         raise
 
     if output_json:

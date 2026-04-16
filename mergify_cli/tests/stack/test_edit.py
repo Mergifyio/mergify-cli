@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.edit import stack_edit
 
 
@@ -178,7 +179,7 @@ class TestStackEdit:
 
         with pytest.raises(SystemExit) as exc_info:
             await stack_edit(commit_prefix="deadbeef1234")
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND
 
     async def test_edit_empty_stack(
         self,
