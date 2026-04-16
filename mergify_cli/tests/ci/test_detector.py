@@ -125,6 +125,7 @@ async def test_get_head_sha_circle_ci(
         ("https://github.com/my-org.name/my-repo.name", "my-org.name/my-repo.name"),
         ("https://git.example.com:8080/owner/repo", "owner/repo"),
         ("https://github.com/owner123/repo456", "owner123/repo456"),
+        ("https://github.com/owner/repo.git", "owner/repo"),
         ("git@github.com:owner/repo.git", "owner/repo"),
         ("git@github.com:owner/repo", "owner/repo"),
         ("git@gitlab.com:owner/repo.git", "owner/repo"),
@@ -272,3 +273,111 @@ def test_get_mergify_config_path_none_when_missing(
 
     result = detector.get_mergify_config_path()
     assert result is None
+
+
+# --- Buildkite provider tests ---
+
+
+@pytest.fixture
+def _buildkite_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set up a minimal Buildkite CI environment."""
+    # Clear other CI providers
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("CIRCLECI", raising=False)
+    monkeypatch.delenv("JENKINS_URL", raising=False)
+    # Set Buildkite
+    monkeypatch.setenv("BUILDKITE", "true")
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_ci_provider_buildkite() -> None:
+    assert detector.get_ci_provider() == "buildkite"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_pipeline_name_buildkite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BUILDKITE_PIPELINE_SLUG", "my-pipeline")
+    assert detector.get_pipeline_name() == "my-pipeline"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_job_name_buildkite_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BUILDKITE_LABEL", "Run tests")
+    assert detector.get_job_name() == "Run tests"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_job_name_buildkite_step_key_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BUILDKITE_LABEL", raising=False)
+    monkeypatch.setenv("BUILDKITE_STEP_KEY", "test-step")
+    assert detector.get_job_name() == "test-step"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_head_ref_name_buildkite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature/my-branch")
+    assert detector.get_head_ref_name() == "feature/my-branch"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+async def test_get_head_sha_buildkite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BUILDKITE_COMMIT", "abc123def456")
+    assert await detector.get_head_sha() == "abc123def456"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_cicd_pipeline_runner_name_buildkite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_AGENT_NAME", "agent-1")
+    assert detector.get_cicd_pipeline_runner_name() == "agent-1"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_cicd_pipeline_run_id_buildkite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_BUILD_ID", "018f3e2a-1234-5678-9abc-def012345678")
+    assert detector.get_cicd_pipeline_run_id() == "018f3e2a-1234-5678-9abc-def012345678"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_cicd_pipeline_run_attempt_buildkite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_RETRY_COUNT", "2")
+    assert detector.get_cicd_pipeline_run_attempt() == 2
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_github_repository_buildkite_ssh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_REPO", "git@github.com:mergifyio/demo.git")
+    assert detector.get_github_repository() == "mergifyio/demo"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_github_repository_buildkite_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_REPO", "https://github.com/mergifyio/demo")
+    assert detector.get_github_repository() == "mergifyio/demo"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_github_pull_request_number_buildkite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    assert detector.get_github_pull_request_number() == 42
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_github_pull_request_number_buildkite_not_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+    assert detector.get_github_pull_request_number() is None

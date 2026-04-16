@@ -11,7 +11,7 @@ from mergify_cli import utils
 
 GIT_BRANCH_PREFIXES = ("origin/", "refs/heads/")
 
-CIProviderT = typing.Literal["github_actions", "circleci", "jenkins"]
+CIProviderT = typing.Literal["github_actions", "circleci", "jenkins", "buildkite"]
 
 
 def get_ci_provider() -> CIProviderT | None:
@@ -21,6 +21,8 @@ def get_ci_provider() -> CIProviderT | None:
         return "github_actions"
     if os.getenv("CIRCLECI") == "true":
         return "circleci"
+    if os.getenv("BUILDKITE") == "true":
+        return "buildkite"
     return None
 
 
@@ -30,6 +32,8 @@ def get_pipeline_name() -> str | None:
             return os.getenv("GITHUB_WORKFLOW")
         case "jenkins":
             return os.getenv("JOB_NAME")
+        case "buildkite":
+            return os.getenv("BUILDKITE_PIPELINE_SLUG")
 
     return None
 
@@ -42,6 +46,8 @@ def get_job_name() -> str | None:
             return os.getenv("CIRCLE_JOB")
         case "jenkins":
             return os.getenv("JOB_NAME")
+        case "buildkite":
+            return os.getenv("BUILDKITE_LABEL") or os.getenv("BUILDKITE_STEP_KEY")
         case _:
             return None
 
@@ -77,6 +83,8 @@ def get_head_ref_name() -> str | None:
             return os.getenv("CIRCLE_BRANCH")
         case "jenkins":
             return get_jenkins_head_ref_name()
+        case "buildkite":
+            return os.getenv("BUILDKITE_BRANCH")
         case _:
             return None
 
@@ -127,6 +135,8 @@ async def get_head_sha() -> str | None:
             return await get_circle_ci_head_sha()
         case "jenkins":
             return os.getenv("GIT_COMMIT")
+        case "buildkite":
+            return os.getenv("BUILDKITE_COMMIT")
         case _:
             return None
 
@@ -137,6 +147,8 @@ def get_cicd_pipeline_runner_name() -> str | None:
             return os.getenv("RUNNER_NAME")
         case "jenkins":
             return os.getenv("NODE_NAME")
+        case "buildkite":
+            return os.getenv("BUILDKITE_AGENT_NAME")
         case _:
             return None
 
@@ -151,6 +163,8 @@ def get_cicd_pipeline_run_id() -> int | str | None:
                 return int(os.environ["CIRCLE_WORKFLOW_ID"])
         case "jenkins":
             return os.getenv("BUILD_ID")
+        case "buildkite":
+            return os.getenv("BUILDKITE_BUILD_ID")
 
     return None
 
@@ -160,6 +174,8 @@ def get_cicd_pipeline_run_attempt() -> int | None:
         return int(os.environ["GITHUB_RUN_ATTEMPT"])
     if get_ci_provider() == "circleci" and "CIRCLE_BUILD_NUM" in os.environ:
         return int(os.environ["CIRCLE_BUILD_NUM"])
+    if get_ci_provider() == "buildkite" and "BUILDKITE_RETRY_COUNT" in os.environ:
+        return int(os.environ["BUILDKITE_RETRY_COUNT"])
 
     return None
 
@@ -182,7 +198,7 @@ def _get_github_repository_from_env(env: str) -> str | None:
         r"(https?://[\w.-]+(?::\d+)?/)?(?P<full_name>[\w.-]+/[\w.-]+)/?$",
         repository_url,
     ):
-        return match.group("full_name")
+        return match.group("full_name").removesuffix(".git")
 
     return None
 
@@ -198,6 +214,12 @@ def get_github_pull_request_number() -> int | None:
                 return None
             return event.pull_request.number
 
+        case "buildkite":
+            pr = os.getenv("BUILDKITE_PULL_REQUEST")
+            if pr and pr != "false":
+                return int(pr)
+            return None
+
         case _:
             return None
 
@@ -210,6 +232,8 @@ def get_github_repository() -> str | None:
             return _get_github_repository_from_env("CIRCLE_REPOSITORY_URL")
         case "jenkins":
             return _get_github_repository_from_env("GIT_URL")
+        case "buildkite":
+            return _get_github_repository_from_env("BUILDKITE_REPO")
         case _:
             return None
 
