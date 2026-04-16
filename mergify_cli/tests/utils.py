@@ -77,6 +77,7 @@ class GitMock:
         self,
         *,
         remote_shas: dict[str, str] | None = None,
+        no_verify: bool = False,
     ) -> None:
         # Register batch log mock
         records = []
@@ -110,9 +111,12 @@ class GitMock:
             )
             refspecs.append(f"{c['sha']}:refs/heads/{branch}")
 
+        no_verify_args: tuple[str, ...] = ("--no-verify",) if no_verify else ()
+
         self.mock(
             "push",
             "--atomic",
+            *no_verify_args,
             *lease_args,
             "origin",
             *refspecs,
