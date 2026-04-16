@@ -24,11 +24,15 @@ if typing.TYPE_CHECKING:
     from collections import abc
 
 
-class Commit(typing.TypedDict):
+class _CommitRequired(typing.TypedDict):
     sha: str
     title: str
     message: str
     change_id: str
+
+
+class Commit(_CommitRequired, total=False):
+    head_ref: str  # existing PR branch ref; overrides slug-based refspec in finalize()
 
 
 @dataclasses.dataclass
@@ -91,10 +95,15 @@ class GitMock:
         if not self._commits:
             return
 
+        from mergify_cli.stack.slug import slugify_title
+
         lease_args: list[str] = []
         refspecs: list[str] = []
         for c in self._commits:
-            branch = f"current-branch/{c['change_id']}"
+            if "head_ref" in c:
+                branch = c["head_ref"]
+            else:
+                branch = f"current-branch/{slugify_title(c['title'], c['change_id'])}"
             expected_sha = (remote_shas or {}).get(c["change_id"], "")
             lease_args.append(
                 f"--force-with-lease=refs/heads/{branch}:{expected_sha}",
