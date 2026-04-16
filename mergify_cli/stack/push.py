@@ -72,6 +72,8 @@ def format_pull_description(
 async def push_branches(
     remote: str,
     local_changes: list[changes.LocalChange],
+    *,
+    no_verify: bool = False,
 ) -> None:
     changes_to_push = [c for c in local_changes if c.action in {"create", "update"}]
     if not changes_to_push:
@@ -91,9 +93,17 @@ async def push_branches(
 
     refspecs = [f"{c.commit_sha}:refs/heads/{c.dest_branch}" for c in changes_to_push]
 
+    no_verify_args = ("--no-verify",) if no_verify else ()
     os.environ["MERGIFY_STACK_PUSH"] = "1"
     try:
-        await utils.git("push", "--atomic", *lease_args, remote, *refspecs)
+        await utils.git(
+            "push",
+            "--atomic",
+            *no_verify_args,
+            *lease_args,
+            remote,
+            *refspecs,
+        )
     finally:
         os.environ.pop("MERGIFY_STACK_PUSH", None)
 
@@ -225,6 +235,7 @@ async def stack_push(
     only_update_existing_pulls: bool = False,
     author: str | None = None,
     revision_history: bool = True,
+    no_verify: bool = False,
 ) -> None:
     os.chdir(await utils.git("rev-parse", "--show-toplevel"))
     dest_branch = await utils.git_get_branch_name()
@@ -378,7 +389,7 @@ async def stack_push(
                     )
 
         with console.status("Pushing stacked branches..."):
-            await push_branches(remote, planned_changes.locals)
+            await push_branches(remote, planned_changes.locals, no_verify=no_verify)
 
         console.log("Updating and/or creating stacked pull requests:", style="green")
 

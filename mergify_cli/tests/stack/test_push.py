@@ -61,6 +61,94 @@ def test_check_local_branch_invalid() -> None:
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_push_forwards_no_verify(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize(no_verify=True)
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+    respx_mock.post("/repos/user/repo/pulls").respond(
+        200,
+        json={
+            "html_url": "https://github.com/repo/user/pull/1",
+            "number": "1",
+            "title": "Title commit 1",
+            "head": {"sha": "commit1_sha"},
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
+
+    await push.stack_push(
+        github_server="https://api.github.com/",
+        token="",
+        skip_rebase=False,
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+        no_verify=True,
+    )
+
+    assert git_mock.has_been_called_with(
+        "push",
+        "--atomic",
+        "--no-verify",
+        "--force-with-lease=refs/heads/current-branch/title-commit-1--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/current-branch/title-commit-1--29617d37",
+    )
+
+
+async def test_push_branches_no_verify(git_mock: test_utils.GitMock) -> None:
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+            pull=None,
+            commit_sha="commit1_sha",
+            title="Title",
+            message="Message",
+            base_branch="main",
+            dest_branch="stack/title--29617d37",
+            action="create",
+        ),
+    ]
+    git_mock.mock(
+        "push",
+        "--atomic",
+        "--no-verify",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        output="",
+    )
+
+    await push.push_branches("origin", local_changes, no_verify=True)
+
+    assert git_mock.has_been_called_with(
+        "push",
+        "--atomic",
+        "--no-verify",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+    )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
 async def test_stack_create(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,

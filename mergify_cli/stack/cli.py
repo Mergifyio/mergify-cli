@@ -350,6 +350,12 @@ async def new(
     "Default fetched from git config if added with "
     "`git config --add mergify-cli.stack-revision-history false`",
 )
+@click.option(
+    "--no-verify",
+    is_flag=True,
+    default=False,
+    help="Skip pre-push git hooks",
+)
 @utils.run_with_asyncio
 async def push(
     ctx: click.Context,
@@ -366,6 +372,7 @@ async def push(
     branch_prefix: str | None,
     only_update_existing_pulls: bool,
     no_revision_history: bool,
+    no_verify: bool,
 ) -> None:
     if setup:
         # backward compat
@@ -389,6 +396,7 @@ async def push(
         only_update_existing_pulls=only_update_existing_pulls,
         author=author,
         revision_history=not no_revision_history,
+        no_verify=no_verify,
     )
 
 
