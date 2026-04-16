@@ -20,6 +20,7 @@ from unittest import mock
 import pytest
 
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import new as stack_new_mod
 
 
@@ -181,13 +182,13 @@ class TestStackNew:
                 checkout=True,
             )
 
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.GENERIC_ERROR
         assert git_mock.has_been_called_with("fetch", "origin", "main")
 
     async def test_stack_new_trunk_not_found(
         self,
     ) -> None:
-        """Should exit with code 1 when trunk cannot be determined."""
+        """Should exit with STACK_NOT_FOUND when trunk cannot be determined."""
 
         async def patched_get_trunk() -> str:
             raise utils.CommandError(("config", "--get"), 1, b"")
@@ -202,4 +203,4 @@ class TestStackNew:
                 checkout=True,
             )
 
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND

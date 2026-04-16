@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
 
 
@@ -81,7 +82,7 @@ async def stack_checkout(
                         "Unexpected stack layout, two root commits found",
                         style="red",
                     )
-                    sys.exit(1)
+                    sys.exit(ExitCode.INVALID_STATE)
                 root_node = node
 
         if root_node is None:

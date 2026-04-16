@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.tests import utils as test_utils
 
@@ -429,7 +430,7 @@ async def test_stack_list_on_trunk_branch_raises_error(
         output="https://github.com/foo/bar.git",
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match=str(ExitCode.INVALID_STATE)):
         await stack_list_mod.stack_list(
             github_server="https://api.github.com/",
             token="",
@@ -460,7 +461,7 @@ async def test_stack_list_on_generated_branch_raises_error(
         output="stack/author/my-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match=str(ExitCode.INVALID_STATE)):
         await stack_list_mod.stack_list(
             github_server="https://api.github.com/",
             token="",
@@ -480,7 +481,7 @@ async def test_stack_list_no_fork_point_raises_error(
     respx_mock.get("/user").respond(200, json={"login": "author"})
     git_mock.mock("merge-base", "--fork-point", "origin/main", output="")
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match=str(ExitCode.STACK_NOT_FOUND)):
         await stack_list_mod.stack_list(
             github_server="https://api.github.com/",
             token="",

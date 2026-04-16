@@ -19,6 +19,7 @@ import sys
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 
 
 async def stack_new(
@@ -43,7 +44,7 @@ async def stack_new(
                 "[red]Could not determine trunk branch. "
                 "Please set upstream tracking or use --base to specify the base branch.[/]",
             )
-            sys.exit(1)
+            sys.exit(ExitCode.STACK_NOT_FOUND)
         else:
             remote, base_branch = trunk.split("/", maxsplit=1)
     else:
@@ -67,7 +68,7 @@ async def stack_new(
                 await utils.git("branch", "--track", name, base_ref)
         except utils.CommandError as e:
             console.print(f"[red]Failed to create branch '{name}': {e}[/]")
-            sys.exit(1)
+            sys.exit(ExitCode.GENERIC_ERROR)
 
     console.print(f"[green]Created branch '{name}' tracking {base_ref}[/]")
 

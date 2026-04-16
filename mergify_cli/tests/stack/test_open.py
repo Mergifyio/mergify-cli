@@ -19,6 +19,7 @@ from unittest import mock
 
 import pytest
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.tests import utils as test_utils
 
@@ -221,7 +222,7 @@ async def test_stack_open_no_pr(
 
     with (
         mock.patch("webbrowser.open") as mock_open,
-        pytest.raises(SystemExit, match="1"),
+        pytest.raises(SystemExit, match=str(ExitCode.STACK_NOT_FOUND)),
     ):
         await stack_open_mod.stack_open(
             github_server="https://api.github.com/",
@@ -265,7 +266,7 @@ async def test_stack_open_commit_not_in_stack(
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(200, json={"items": []})
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match=str(ExitCode.STACK_NOT_FOUND)):
         await stack_open_mod.stack_open(
             github_server="https://api.github.com/",
             token="",
@@ -319,7 +320,7 @@ async def test_stack_open_invalid_commit(
 
     with (
         mock.patch("mergify_cli.utils.git", side_effect=git_with_invalid_ref),
-        pytest.raises(SystemExit, match="1"),
+        pytest.raises(SystemExit, match=str(ExitCode.STACK_NOT_FOUND)),
     ):
         await stack_open_mod.stack_open(
             github_server="https://api.github.com/",

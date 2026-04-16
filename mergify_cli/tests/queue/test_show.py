@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from httpx import Response
 import respx
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.queue.cli import queue
 
 
@@ -192,7 +193,7 @@ class TestShowCommand:
                 {"message": "Not Found"},
                 status_code=404,
             )
-        assert result.exit_code == 1
+        assert result.exit_code == ExitCode.MERGIFY_API_ERROR
         assert "not in the merge queue" in result.output
 
     def test_json_output(self) -> None:

@@ -138,6 +138,36 @@ npx skills add Mergifyio/mergify-cli
 /plugin install mergify
 ```
 
+## Exit Codes
+
+The CLI uses structured exit codes so scripts can distinguish failure modes
+without parsing stderr:
+
+| Code | Name | Meaning |
+|------|------|---------|
+| 0 | `SUCCESS` | Command completed successfully |
+| 1 | `GENERIC_ERROR` | Unclassified error |
+| 2 | *(Click)* | Invalid usage or bad arguments |
+| 3 | `STACK_NOT_FOUND` | Stack, branch, or commit not found |
+| 4 | `CONFLICT` | Rebase conflict |
+| 5 | `GITHUB_API_ERROR` | GitHub API failure |
+| 6 | `MERGIFY_API_ERROR` | Mergify API failure |
+| 7 | `INVALID_STATE` | Invalid state (e.g. branch targets itself, ambiguous commit) |
+| 8 | `CONFIGURATION_ERROR` | Configuration validation failed |
+
+Example usage in a script:
+
+```bash
+mergify stack push
+case $? in
+  0) echo "Success" ;;
+  3) echo "Not in a stack" ;;
+  4) echo "Rebase conflict — resolve and retry" ;;
+  5) echo "GitHub API error — check auth" ;;
+  *) echo "Failed with code $?" ;;
+esac
+```
+
 ## Contributing
 
 We welcome and appreciate contributions from the open-source community to make
