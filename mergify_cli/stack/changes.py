@@ -23,6 +23,7 @@ import typing
 from mergify_cli import console
 from mergify_cli import github_types
 from mergify_cli import utils
+from mergify_cli.stack.slug import slugify_title
 
 
 if typing.TYPE_CHECKING:
@@ -43,11 +44,55 @@ def is_change_id_prefix(prefix: str) -> bool:
     )
 
 
+_CHANGEID_FULL_RE = re.compile(r"^I[0-9a-f]{40}$")
+_SHORT_CHANGEID_RE = re.compile(r"--([0-9a-f]{8})$")
+
+
+def is_change_id(value: str) -> bool:
+    """Return True if *value* is a full 40-hex Change-Id (I-prefixed)."""
+    return bool(_CHANGEID_FULL_RE.match(value))
+
+
 ChangeId = typing.NewType("ChangeId", str)
 RemoteChanges = typing.NewType(
     "RemoteChanges",
     dict[ChangeId, github_types.PullRequest],
 )
+
+
+def extract_changeid_from_branch_segment(segment: str) -> ChangeId | None:
+    """Extract a Change-Id from the last segment of a branch name.
+
+    Supports both old format (full I-prefixed Change-Id) and new
+    format (slug--hex8).
+    """
+    if is_change_id(segment):
+        return ChangeId(segment)
+    match = _SHORT_CHANGEID_RE.search(segment)
+    if match:
+        return ChangeId(match.group(1))
+    return None
+
+
+def pop_remote_change(
+    remote_changes: RemoteChanges,
+    changeid: ChangeId,
+) -> github_types.PullRequest | None:
+    """Pop a remote change by exact or cross-format prefix match.
+
+    Handles matching between full Change-Ids (I-prefixed, 40 hex)
+    and short hex-only IDs (8 hex from new-format branch names).
+    """
+    if changeid in remote_changes:
+        return remote_changes.pop(changeid)
+
+    local_hex = changeid.removeprefix("I")
+    for remote_cid in list(remote_changes):
+        remote_hex = remote_cid.removeprefix("I")
+        if remote_hex.startswith(local_hex) or local_hex.startswith(remote_hex):
+            return remote_changes.pop(remote_cid)
+    return None
+
 
 ActionT = typing.Literal[
     "skip-merged",
@@ -106,7 +151,10 @@ async def get_remote_changes(
         if pull["state"] == "closed" and pull["merged_at"] is None:
             continue
 
-        changeid = ChangeId(pull["head"]["ref"].split("/")[-1])
+        last_segment = pull["head"]["ref"].split("/")[-1]
+        changeid = extract_changeid_from_branch_segment(last_segment)
+        if changeid is None:
+            continue
 
         if changeid in remote_changes:
             other_pull = remote_changes[changeid]
@@ -267,7 +315,7 @@ async def get_changes(
         )
 
     changes = Changes(stack_prefix)
-    remaining_remote_changes = remote_changes.copy()
+    remaining_remote_changes = RemoteChanges(remote_changes.copy())
 
     for idx, (commit, title, message) in enumerate(commit_infos):
         changeids = CHANGEID_RE.findall(message)
@@ -283,7 +331,7 @@ async def get_changes(
             sys.exit(1)
 
         changeid = ChangeId(changeids[-1])
-        pull = remaining_remote_changes.pop(changeid, None)
+        pull = pop_remote_change(remaining_remote_changes, changeid)
 
         action: ActionT
         if next_only and idx > 0:
@@ -297,6 +345,12 @@ async def get_changes(
         else:
             action = "update"
 
+        if pull is not None:
+            dest_branch = pull["head"]["ref"]
+        else:
+            slug = slugify_title(title, changeid)
+            dest_branch = f"{stack_prefix}/{slug}"
+
         changes.locals.append(
             LocalChange(
                 changeid,
@@ -305,7 +359,7 @@ async def get_changes(
                 title,
                 message,
                 changes.locals[-1].dest_branch if changes.locals else base_branch,
-                f"{stack_prefix}/{changeid}",
+                dest_branch,
                 action,
             ),
         )
