@@ -8,6 +8,7 @@ from urllib import parse
 import click
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.stack import checkout as stack_checkout_mod
@@ -58,8 +59,8 @@ async def get_default_token() -> str:
         try:
             token = await utils.run_command("gh", "auth", "token")
         except utils.CommandError:
-            console.print(
-                "error: please make sure that gh client is installed and you are authenticated, or set the "
+            console_error(
+                "please make sure that gh client is installed and you are authenticated, or set the "
                 "'GITHUB_TOKEN' environment variable",
             )
     if utils.is_debug():

@@ -8,6 +8,7 @@ from rich.text import Text
 from rich.tree import Tree
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.exit_codes import ExitCode
@@ -462,8 +463,8 @@ async def pause(ctx: click.Context, *, reason: str, yes_i_am_sure: bool) -> None
         import os
 
         if not os.isatty(0):
-            console.print(
-                "[red]Error:[/] refusing to pause without confirmation. "
+            console_error(
+                "refusing to pause without confirmation. "
                 "Pass --yes-i-am-sure to proceed.",
             )
             raise SystemExit(ExitCode.INVALID_STATE)
