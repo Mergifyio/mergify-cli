@@ -102,4 +102,4 @@ async def stack_move(
         return
 
     run_rebase(base, new_shas)
-    console.print("Commit moved successfully", style="green")
+    console.print("Commit moved successfully.", style="green")
