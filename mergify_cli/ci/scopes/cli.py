@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import typing
 import uuid
 
@@ -94,15 +95,11 @@ def maybe_write_github_outputs(
         )
 
 
-def maybe_write_github_step_summary(
+def _build_scopes_markdown(
     references: git_refs_detector.References,
     all_scopes: abc.Iterable[str],
     scopes_hit: set[str],
-) -> None:
-    gha = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not gha:
-        return
-    # Build a pretty Markdown table with emojis
+) -> str:
     markdown = "## Mergify CI Scope Matching Results"
     if references.base is not None:
         markdown += f" for `{references.base[:7]}...{references.head[:7]}` (source: `{references.source}`)"
@@ -111,9 +108,66 @@ def maybe_write_github_step_summary(
     for scope in sorted(all_scopes):
         emoji = "✅" if scope in scopes_hit else "❌"
         markdown += f"| `{scope}` | {emoji} |\n"
+    return markdown
 
+
+def maybe_write_github_step_summary(
+    references: git_refs_detector.References,
+    all_scopes: abc.Iterable[str],
+    scopes_hit: set[str],
+) -> None:
+    gha = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not gha:
+        return
+    markdown = _build_scopes_markdown(references, all_scopes, scopes_hit)
     with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
         fh.write(markdown)
+
+
+BUILDKITE_ANNOTATION_CONTEXT = "mergify-ci-scopes"
+
+
+def maybe_write_buildkite_annotation(
+    references: git_refs_detector.References,
+    all_scopes: abc.Iterable[str],
+    scopes_hit: set[str],
+) -> None:
+    if os.environ.get("BUILDKITE") != "true":
+        return
+
+    markdown = _build_scopes_markdown(references, all_scopes, scopes_hit)
+
+    # One annotation scoped to the current job (shown in the job card), and one
+    # at build scope (shown on the build page). Same context in each scope makes
+    # repeated runs update in place rather than duplicate.
+    for scope_label, extra_args in (("job", ["--scope=job"]), ("build", [])):
+        cmd = [
+            "buildkite-agent",
+            "annotate",
+            "--style",
+            "info",
+            "--context",
+            BUILDKITE_ANNOTATION_CONTEXT,
+            *extra_args,
+        ]
+        try:
+            subprocess.run(  # noqa: S603
+                cmd,
+                input=markdown,
+                text=True,
+                check=True,
+                capture_output=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = (
+                exc.stderr.strip()
+                if isinstance(exc, subprocess.CalledProcessError) and exc.stderr
+                else str(exc)
+            )
+            click.echo(
+                f"warning: failed to write Buildkite annotation ({scope_label} scope): {detail}",
+                err=True,
+            )
 
 
 class InvalidDetectedScopeError(exceptions.ScopesError):
@@ -192,6 +246,11 @@ def detect(
 
     maybe_write_github_outputs(all_scopes, scopes_hit)
     maybe_write_github_step_summary(
+        references,
+        all_scopes,
+        scopes_hit,
+    )
+    maybe_write_buildkite_annotation(
         references,
         all_scopes,
         scopes_hit,
