@@ -355,6 +355,31 @@ def test_scopes_send(
     assert sorted(payload["scopes"]) == ["backend", "foobar", "frontend"]
 
 
+def test_scopes_send_no_pull_request_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no pull request number is detected, scopes-send should skip gracefully."""
+    monkeypatch.delenv("BUILDKITE_PULL_REQUEST", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        ci_cli.scopes_send,
+        [
+            "--repository",
+            "owner/repository",
+            "--token",
+            "test-token",
+            "--scope",
+            "backend",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "No pull request number detected, skipping scopes upload." in result.output
+
+
 def test_scopes_empty_mergify_config_env_uses_autodetection(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
