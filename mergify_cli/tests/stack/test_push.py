@@ -1046,6 +1046,39 @@ def test_revision_history_is_revision_comment() -> None:
     )
 
 
+def test_revision_history_initial_populates_timestamp_iso() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    assert comment.entries[0].timestamp_iso == "2026-04-14T14:30:00Z"
+    assert comment.entries[1].timestamp_iso == "2026-04-14T14:30:00Z"
+
+
+def test_revision_history_append_populates_timestamp_iso() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    comment.append(
+        old_sha="def5678901234567890abcdef1234567890abcdef",
+        new_sha="789abcdef01234567890abcdef01234567890abcd",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, 45, tzinfo=datetime.UTC),
+    )
+    assert comment.entries[2].timestamp_iso == "2026-04-15T09:10:45Z"
+
+
 def test_revision_history_comment_unknown_type() -> None:
     comment = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
@@ -1586,3 +1619,12 @@ async def test_get_remote_changes_old_format_branch(
     assert len(result) == 1
     cid = changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50")
     assert cid in result
+
+
+def test_format_timestamp_iso_normalises_to_utc() -> None:
+    tz_ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    dt = datetime.datetime(2026, 4, 14, 20, 0, 0, tzinfo=tz_ist)  # 14:30:00 UTC
+    assert (
+        push.RevisionHistoryComment._format_timestamp_iso(dt)
+        == "2026-04-14T14:30:00Z"
+    )

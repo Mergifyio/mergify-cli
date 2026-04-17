@@ -500,7 +500,8 @@ class _RevisionEntry:
     change_type: str
     old_sha: str | None  # None for "initial"
     new_sha: str
-    timestamp: str  # "YYYY-MM-DD HH:MM UTC"
+    timestamp: str  # "YYYY-MM-DD HH:MM UTC" — human-readable form kept in the Markdown row
+    timestamp_iso: str  # ISO-8601 UTC with trailing "Z" — used in the JSON marker
 
 
 @dataclasses.dataclass
@@ -531,6 +532,10 @@ class RevisionHistoryComment:
     def _format_timestamp(dt: datetime.datetime) -> str:
         return dt.strftime("%Y-%m-%d %H:%M UTC")
 
+    @staticmethod
+    def _format_timestamp_iso(dt: datetime.datetime) -> str:
+        return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     @classmethod
     def create_initial(
         cls,
@@ -544,9 +549,10 @@ class RevisionHistoryComment:
         timestamp: datetime.datetime,
     ) -> RevisionHistoryComment:
         ts = cls._format_timestamp(timestamp)
+        ts_iso = cls._format_timestamp_iso(timestamp)
         entries = [
-            _RevisionEntry(1, "initial", None, old_sha, ts),
-            _RevisionEntry(2, change_type, old_sha, new_sha, ts),
+            _RevisionEntry(1, "initial", None, old_sha, ts, ts_iso),
+            _RevisionEntry(2, change_type, old_sha, new_sha, ts, ts_iso),
         ]
         return cls(
             github_server=github_server,
@@ -564,9 +570,10 @@ class RevisionHistoryComment:
         timestamp: datetime.datetime,
     ) -> None:
         ts = self._format_timestamp(timestamp)
+        ts_iso = self._format_timestamp_iso(timestamp)
         next_number = len(self.entries) + 1
         self.entries.append(
-            _RevisionEntry(next_number, change_type, old_sha, new_sha, ts),
+            _RevisionEntry(next_number, change_type, old_sha, new_sha, ts, ts_iso),
         )
 
     def _render_entry(self, entry: _RevisionEntry) -> str:
@@ -617,7 +624,7 @@ class RevisionHistoryComment:
             change_type = m.group(2)
             timestamp = m.group(3).strip()
             entries.append(
-                _RevisionEntry(number, change_type, None, "", timestamp),
+                _RevisionEntry(number, change_type, None, "", timestamp, ""),
             )
             raw_rows.append(line)
 
