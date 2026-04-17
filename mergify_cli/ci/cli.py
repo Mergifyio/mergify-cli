@@ -335,7 +335,6 @@ def scopes(
     help="pull_request number",
     type=int,
     default=detector.get_github_pull_request_number,
-    required=True,
 )
 @click.option("--scope", "-s", multiple=True, help="Scope to upload")
 @click.option(
@@ -349,10 +348,14 @@ async def scopes_send(
     api_url: str,
     token: str,
     repository: str,
-    pull_request: int,
+    pull_request: int | None,
     scope: tuple[str, ...],
     file: str | None,
 ) -> None:
+    if pull_request is None:
+        click.echo("No pull request number detected, skipping scopes upload.")
+        return
+
     scopes = list(scope)
     if file is not None:
         try:
