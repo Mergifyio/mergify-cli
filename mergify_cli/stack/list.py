@@ -21,6 +21,8 @@ import json
 import sys
 import typing
 
+import click
+
 from mergify_cli import console
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
@@ -479,6 +481,6 @@ async def stack_list(
     )
 
     if output_json:
-        console.print(json.dumps(output.to_dict(), indent=2))
+        click.echo(json.dumps(output.to_dict(), indent=2))
     else:
         display_stack_list(output, verbose=verbose)
