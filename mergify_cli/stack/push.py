@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import datetime
+import json
 import os
 import re
 import sys
@@ -500,7 +501,9 @@ class _RevisionEntry:
     change_type: str
     old_sha: str | None  # None for "initial"
     new_sha: str
-    timestamp: str  # "YYYY-MM-DD HH:MM UTC" — human-readable form kept in the Markdown row
+    timestamp: (
+        str  # "YYYY-MM-DD HH:MM UTC" — human-readable form kept in the Markdown row
+    )
     timestamp_iso: str  # ISO-8601 UTC with trailing "Z" — used in the JSON marker
 
 
@@ -584,7 +587,33 @@ class RevisionHistoryComment:
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
         return f"| {entry.number} | {entry.change_type} | {changes_cell} | {entry.timestamp} |"
 
-    def body(self) -> str:
+    def _json_marker(self, pull_number: int) -> str:
+        payload = {
+            "schema_version": 1,
+            "pull_number": pull_number,
+            "entries": [
+                {
+                    "number": e.number,
+                    "change_type": e.change_type,
+                    "old_sha": e.old_sha,
+                    "new_sha": e.new_sha,
+                    "timestamp_iso": e.timestamp_iso,
+                    "compare_url": (
+                        None
+                        if e.old_sha is None
+                        else self._compare_url(e.old_sha, e.new_sha)
+                    ),
+                }
+                for e in self.entries
+            ],
+        }
+        return (
+            "<!-- mergify-revision-data: "
+            + json.dumps(payload, separators=(",", ":"))
+            + " -->"
+        )
+
+    def body(self, pull_number: int) -> str:
         lines = [
             self.REVISION_COMMENT_FIRST_LINE,
             "| # | Type | Changes | Date |",
@@ -596,7 +625,7 @@ class RevisionHistoryComment:
                 lines.append(self._raw_rows[i])
             else:
                 lines.append(self._render_entry(entry))
-        return "\n".join(lines) + "\n"
+        return "\n".join(lines) + "\n" + self._json_marker(pull_number) + "\n"
 
     _ROW_RE: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^\| (\d+) \| (\w+) \| .+ \| (.+) \|$",
@@ -737,7 +766,7 @@ async def _update_revision_for_pull(
                         change_type=change_type,
                         timestamp=timestamp,
                     )
-                    new_body = parsed.body()
+                    new_body = parsed.body(pull_number)
                     if comment["body"] != new_body:
                         await client.patch(
                             comment["url"],
@@ -756,7 +785,7 @@ async def _update_revision_for_pull(
                 )
                 await client.patch(
                     comment["url"],
-                    json={"body": revision.body()},
+                    json={"body": revision.body(pull_number)},
                 )
                 return
 
@@ -772,7 +801,7 @@ async def _update_revision_for_pull(
         )
         await client.post(
             f"/repos/{user}/{repo}/issues/{pull_number}/comments",
-            json={"body": revision.body()},
+            json={"body": revision.body(pull_number)},
         )
 
 
