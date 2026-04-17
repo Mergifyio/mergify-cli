@@ -14,6 +14,7 @@ from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.queue import metadata as queue_metadata
 from mergify_cli.ci.scopes import cli as scopes_cli
 from mergify_cli.ci.scopes import exceptions as scopes_exc
+from mergify_cli.dym import DYMGroup
 
 
 class JUnitFile(click.Path):
@@ -55,10 +56,15 @@ def _process_tests_target_branch(
     return value.removeprefix("refs/heads/") if value else value
 
 
-ci = click.Group(
-    "ci",
+@click.group(
+    cls=DYMGroup,
+    invoke_without_command=True,
     help="Mergify's CI related commands",
 )
+@click.pass_context
+def ci(ctx: click.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 @ci.command(help="Upload JUnit XML reports", deprecated="Use `junit-process` instead")
