@@ -429,7 +429,7 @@ async def stack_push(
         with console.status("Updating comments..."):
             await create_or_update_comments(client, user, repo, pulls_to_comment)
 
-        console.log("[green]Comments updated")
+        console.log("[green]Comments updated[/]")
 
         if revision_history:
             updated_changes = [
@@ -445,7 +445,7 @@ async def stack_push(
                     github_server,
                     updated_changes,
                 )
-            console.log("[green]Revision history updated")
+            console.log("[green]Revision history updated[/]")
 
         with console.status("Deleting unused branches..."):
             if planned_changes.orphans:
