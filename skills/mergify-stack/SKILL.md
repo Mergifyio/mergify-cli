@@ -20,8 +20,8 @@ A branch is a stack. Keep stacks short and focused:
 
 - **Push**: Use `mergify stack push` (never `git push`)
 - **Fixes**: Use `git commit --amend` (never create new commits to fix issues)
-- **Mid-stack fixes**: Use `git rebase -i` to edit the specific commit, amend it, continue rebase, then `mergify stack push`
-- **Reordering**: Use `mergify stack reorder` (list all commits in desired order) or `mergify stack move` (move a single commit) instead of manual `git rebase -i` — non-interactive and avoids `GIT_SEQUENCE_EDITOR` quoting issues
+- **Mid-stack fixes**: Stash any local changes first (`git stash -u`), then use `git rebase -i` to edit the specific commit, amend it, continue rebase, then `mergify stack push`, then `git stash pop`
+- **Reordering**: Stash any local changes first (`git stash -u`), then use `mergify stack reorder` (list all commits in desired order) or `mergify stack move` (move a single commit) instead of manual `git rebase -i` — non-interactive and avoids `GIT_SEQUENCE_EDITOR` quoting issues
 - **Commit titles**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
 - **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.**
 - **Ticket references**: Include ticket/issue references (e.g., `MRGFY-1234`, `Fixes #123`) in the commit message body, not added separately to the PR.
@@ -39,6 +39,7 @@ A branch is a stack. Keep stacks short and focused:
 | `gh pr merge` or `gh pr close` | PR lifecycle is fully managed — do nothing | PR lifecycle is fully managed by the stack tool |
 | `git commit` on `main` | `mergify stack new <name>` first | `mergify stack push` will fail on the default branch |
 | Deferring lint fixes to a later commit | Include the fix in the commit that caused it | Each commit runs CI independently; later commits won't save earlier ones |
+| Rebase/reorder/checkout/sync with dirty worktree | `git stash -u` first, then `git stash pop` after | Uncommitted changes are lost or cause conflicts during these operations |
 
 ## Commands
 
@@ -74,6 +75,31 @@ mergify stack list
 - If you're on `main` (or the repo's default branch): you **MUST** create a feature branch first
 - **NEVER commit directly on `main`** — `mergify stack push` will fail
 - This check must happen before `git add`, not after `git commit`
+
+## CRITICAL: Stash Local Changes Before Worktree-Modifying Operations
+
+**BEFORE running any operation that rewrites history or switches branches**, check for uncommitted changes and stash them:
+
+```bash
+git status --short          # Check for uncommitted changes
+git stash -u                # Stash tracked + untracked changes if any
+```
+
+**Operations that require this check:**
+- `git rebase -i` (mid-stack fixes)
+- `mergify stack reorder` / `mergify stack move`
+- `mergify stack checkout`
+- `mergify stack sync`
+- `mergify stack new` (switches to new branch)
+- `git checkout <branch>`
+
+**After the operation completes**, restore the stashed changes:
+
+```bash
+git stash pop
+```
+
+If you skip this step, uncommitted work will be **silently lost** or cause rebase conflicts.
 
 ## Starting New Work
 
