@@ -184,6 +184,138 @@ async def test_sync_detects_merged_commits(
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
+async def test_sync_amended_after_merge_not_dropped(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """Test that a commit amended after its PR was merged is NOT dropped.
+
+    Scenario:
+    1. User creates commit (sha=original_sha, Change-Id=X), pushes → PR created
+    2. PR gets merged on GitHub (PR head.sha still = original_sha)
+    3. User amends the commit with new changes → local sha becomes amended_sha
+    4. User runs stack push/sync
+    5. The commit should NOT be marked skip-merged because it has new content
+    """
+    git_mock.mock("config", "--get", "mergify-cli.stack-branch-prefix", output="")
+
+    git_mock.commit(
+        test_utils.Commit(
+            sha="amended_sha",  # Different from PR's head.sha
+            title="Feature commit",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/1",
+                    },
+                },
+            ],
+        },
+    )
+    # PR is merged, but head.sha is the ORIGINAL sha, not the amended one
+    respx_mock.get("/repos/user/repo/pulls/1").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/1",
+            "number": "1",
+            "title": "Feature commit",
+            "head": {
+                "sha": "original_sha",  # Different from local amended_sha
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "state": "closed",
+            "merged_at": "2024-01-01T00:00:00Z",
+            "merge_commit_sha": "merge_sha_1",
+            "draft": False,
+            "node_id": "",
+        },
+    )
+
+    result = await stack_sync_mod.get_sync_status(
+        github_server="https://api.github.com/",
+        token="",
+        trunk=("origin", "main"),
+    )
+
+    # The commit was amended after merge — it must NOT be dropped
+    assert len(result.merged) == 0
+    assert len(result.remaining) == 1
+    assert result.remaining[0].title == "Feature commit"
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_sync_unmodified_merged_commit_is_dropped(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """Test that a merged commit with unchanged SHA IS correctly dropped."""
+    git_mock.mock("config", "--get", "mergify-cli.stack-branch-prefix", output="")
+
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Feature commit",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/1",
+                    },
+                },
+            ],
+        },
+    )
+    # PR is merged and head.sha matches local commit — no amendment
+    respx_mock.get("/repos/user/repo/pulls/1").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/1",
+            "number": "1",
+            "title": "Feature commit",
+            "head": {
+                "sha": "commit1_sha",  # Same as local
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "state": "closed",
+            "merged_at": "2024-01-01T00:00:00Z",
+            "merge_commit_sha": "merge_sha_1",
+            "draft": False,
+            "node_id": "",
+        },
+    )
+
+    result = await stack_sync_mod.get_sync_status(
+        github_server="https://api.github.com/",
+        token="",
+        trunk=("origin", "main"),
+    )
+
+    # SHA matches — safe to drop
+    assert len(result.merged) == 1
+    assert result.merged[0].title == "Feature commit"
+    assert len(result.remaining) == 0
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
 async def test_sync_up_to_date(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,
