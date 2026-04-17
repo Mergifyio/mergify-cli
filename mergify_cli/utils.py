@@ -27,6 +27,7 @@ import httpx
 
 from mergify_cli import VERSION
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli.ci import github_event
 
 
@@ -69,10 +70,7 @@ async def check_for_status(response: httpx.Response) -> None:
     except ValueError:
         pass
 
-    console.print(
-        f"error: API error (HTTP {response.status_code}): {detail}",
-        style="red",
-    )
+    console_error(f"API error (HTTP {response.status_code}): {detail}")
     console.print(f"url: {response.request.url}", style="red")
 
     if is_debug():
@@ -195,7 +193,7 @@ async def get_trunk() -> str:
     try:
         branch_name = await git_get_branch_name()
     except CommandError:
-        console.print("error: can't get the current branch", style="red")
+        console_error("can't get the current branch")
         raise
 
     target_branch = None
@@ -213,9 +211,8 @@ async def get_trunk() -> str:
         try:
             default_remote, default_branch = await _get_default_remote_branch()
         except CommandError:
-            console.print(
-                f"error: can't detect the remote target branch for {branch_name}",
-                style="red",
+            console_error(
+                f"can't detect the remote target branch for {branch_name}",
             )
             console.print(
                 f"Please set it with `git branch {branch_name} --set-upstream-to=<remote>/<branch>`",
@@ -386,10 +383,9 @@ async def get_default_token() -> str | None:
         try:
             token = await run_command("gh", "auth", "token")
         except CommandError:
-            console.print(
-                "error: please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, "
+            console_error(
+                "please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, "
                 "or make sure that gh client is installed and you are authenticated",
-                style="red",
             )
             return None
     return token

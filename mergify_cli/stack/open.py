@@ -24,6 +24,7 @@ import webbrowser
 import questionary
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.list import get_stack_list
@@ -96,7 +97,7 @@ async def stack_open(
         try:
             commit_sha = await utils.git("rev-parse", commit)
         except utils.CommandError:
-            console.print(f"[red]Commit `{commit}` not found[/]")
+            console_error(f"commit `{commit}` not found")
             sys.exit(ExitCode.STACK_NOT_FOUND)
 
         # Find entry matching the commit SHA
@@ -106,8 +107,8 @@ async def stack_open(
         )
 
         if found_entry is None:
-            console.print(
-                f"[red]Commit `{commit}` ({commit_sha[:7]}) not found in stack[/]",
+            console_error(
+                f"commit `{commit}` ({commit_sha[:7]}) not found in stack",
             )
             sys.exit(ExitCode.STACK_NOT_FOUND)
 
