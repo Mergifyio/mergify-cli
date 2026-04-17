@@ -425,12 +425,12 @@ async def stack_push(
                 ),
             )
 
-        pulls_to_comment = [
-            task.change.pull for task in tasks if task.change.pull is not None
+        changes_to_comment = [
+            task.change for task in tasks if task.change.pull is not None
         ]
 
         with console.status("Updating comments..."):
-            await create_or_update_comments(client, user, repo, pulls_to_comment)
+            await create_or_update_comments(client, user, repo, changes_to_comment)
 
         console.log("[green]Comments updated.[/]")
 
@@ -464,7 +464,7 @@ async def stack_push(
 
 @dataclasses.dataclass
 class StackComment:
-    pulls: list[github_types.PullRequest]
+    local_changes: list[changes.LocalChange]
 
     _STACK_COMMENT_OLD_HEADER: typing.ClassVar[str] = (
         "This pull request is part of a stack:\n"
@@ -480,11 +480,16 @@ class StackComment:
         body += "| # | Pull Request | Link | |\n"
         body += "|--:|---|---|---|\n"
 
-        for i, pull in enumerate(self.pulls, 1):
+        row = 0
+        for change in self.local_changes:
+            if change.pull is None:
+                continue
+            row += 1
+            pull = change.pull
             title = pull["title"].replace("|", "\\|")
             link = f"[#{pull['number']}]({pull['html_url']})"
             status = "👈" if pull == current_pull else ""
-            body += f"| {i} | {title} | {link} | {status} |\n"
+            body += f"| {row} | {title} | {link} | {status} |\n"
 
         return body
 
@@ -754,9 +759,10 @@ async def create_or_update_comments(
     client: httpx.AsyncClient,
     user: str,
     repo: str,
-    pulls: list[github_types.PullRequest],
+    local_changes: list[changes.LocalChange],
 ) -> None:
-    stack_comment = StackComment(pulls)
+    stack_comment = StackComment(local_changes)
+    pulls = [c.pull for c in local_changes if c.pull is not None]
     sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
     await asyncio.gather(
