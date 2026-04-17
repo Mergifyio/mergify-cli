@@ -339,8 +339,13 @@ async def get_changes(
             action = "skip-next-only"
         elif pull is None:
             action = "skip-create" if only_update_existing_pulls else "create"
-        elif pull["merged_at"]:
+        elif pull["merged_at"] and pull["head"]["sha"] == commit:
             action = "skip-merged"
+        elif pull["merged_at"]:
+            # Commit was amended after its PR was merged — don't drop it.
+            # Disassociate from the merged PR and treat it like a missing PR.
+            pull = None
+            action = "skip-create" if only_update_existing_pulls else "create"
         elif pull["head"]["sha"] == commit:
             action = "skip-up-to-date"
         else:
