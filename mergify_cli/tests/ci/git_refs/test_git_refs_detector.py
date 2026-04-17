@@ -188,3 +188,35 @@ def test_detect_unhandled_event(
     result = detector.detect()
 
     assert result == detector.References(None, "HEAD", "github_event_other")
+
+
+def test_detect_buildkite_pull_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.setenv("BUILDKITE", "true")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main")
+    monkeypatch.setenv("BUILDKITE_COMMIT", "abc123")
+
+    result = detector.detect()
+
+    assert result == detector.References(
+        "main",
+        "abc123",
+        "buildkite_pull_request",
+    )
+
+
+def test_detect_buildkite_not_pr_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.setenv("BUILDKITE", "true")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+
+    result = detector.detect()
+
+    assert result == detector.References("HEAD^", "HEAD", "fallback_last_commit")
