@@ -627,6 +627,10 @@ class RevisionHistoryComment:
                 lines.append(self._render_entry(entry))
         return "\n".join(lines) + "\n" + self._json_marker(pull_number) + "\n"
 
+    _JSON_MARKER_RE: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^<!-- mergify-revision-data: (?P<payload>\{.*\}) -->$",
+    )
+
     _ROW_RE: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^\| (\d+) \| (\w+) \| .+ \| (.+) \|$",
     )
@@ -645,27 +649,64 @@ class RevisionHistoryComment:
 
         entries: list[_RevisionEntry] = []
         raw_rows: list[str] = []
+        marker_entries: list[typing.Any] | None = None
         for line in body.splitlines():
             m = cls._ROW_RE.match(line)
-            if not m:
+            if m:
+                number = int(m.group(1))
+                change_type = m.group(2)
+                timestamp_str = m.group(3).strip()
+                try:
+                    timestamp = datetime.datetime.strptime(
+                        timestamp_str,
+                        "%Y-%m-%d %H:%M UTC",
+                    ).replace(tzinfo=datetime.UTC)
+                except ValueError:
+                    timestamp = None
+                entries.append(
+                    _RevisionEntry(number, change_type, None, "", timestamp),
+                )
+                raw_rows.append(line)
                 continue
-            number = int(m.group(1))
-            change_type = m.group(2)
-            timestamp_str = m.group(3).strip()
-            try:
-                timestamp = datetime.datetime.strptime(
-                    timestamp_str,
-                    "%Y-%m-%d %H:%M UTC",
-                ).replace(tzinfo=datetime.UTC)
-            except ValueError:
-                timestamp = None
-            entries.append(
-                _RevisionEntry(number, change_type, None, "", timestamp),
-            )
-            raw_rows.append(line)
+            marker_match = cls._JSON_MARKER_RE.match(line)
+            if marker_match:
+                try:
+                    payload = json.loads(marker_match.group("payload"))
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    isinstance(payload, dict)
+                    and payload.get("schema_version") == 1
+                    and isinstance(payload.get("entries"), list)
+                ):
+                    marker_entries = payload["entries"]
 
         if not entries:
             return None
+
+        if marker_entries is not None and len(marker_entries) == len(entries):
+            for entry, data in zip(entries, marker_entries, strict=True):
+                if not isinstance(data, dict):
+                    continue
+                if data.get("number") != entry.number:
+                    continue
+                old_sha = data.get("old_sha")
+                new_sha = data.get("new_sha")
+                timestamp_iso = data.get("timestamp_iso")
+                if isinstance(old_sha, str) or old_sha is None:
+                    entry.old_sha = old_sha
+                if isinstance(new_sha, str):
+                    entry.new_sha = new_sha
+                if isinstance(timestamp_iso, str):
+                    try:
+                        entry.timestamp = datetime.datetime.strptime(
+                            timestamp_iso,
+                            "%Y-%m-%dT%H:%M:%SZ",
+                        ).replace(tzinfo=datetime.UTC)
+                    except ValueError:
+                        pass
+                elif timestamp_iso is None:
+                    entry.timestamp = None
 
         return cls(
             github_server=github_server,
