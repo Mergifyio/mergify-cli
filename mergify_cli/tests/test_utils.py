@@ -238,6 +238,7 @@ class TestCheckForStatus:
         mock_print.assert_any_call(
             "error: API error (HTTP 404): Not Found",
             style="red",
+            markup=False,
         )
         mock_print.assert_any_call(
             "url: https://api.mergify.com/v1/repos/jd/home/scheduled_freeze",
@@ -260,6 +261,7 @@ class TestCheckForStatus:
         mock_print.assert_any_call(
             "error: API error (HTTP 500): Internal Server Error",
             style="red",
+            markup=False,
         )
 
     async def test_error_hides_request_data_by_default(self) -> None:

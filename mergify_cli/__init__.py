@@ -17,3 +17,4 @@ from __future__ import annotations
 
 from mergify_cli._globals import VERSION as VERSION
 from mergify_cli._globals import console as console
+from mergify_cli._globals import console_error as console_error

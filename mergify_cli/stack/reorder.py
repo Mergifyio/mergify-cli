@@ -23,6 +23,7 @@ import sys
 import tempfile
 
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.changes import CHANGEID_RE
@@ -76,15 +77,11 @@ def match_commit(
         field_name = "SHA"
 
     if len(matches) == 0:
-        console.print(
-            f"error: no commit found matching {field_name} prefix '{prefix}'",
-            style="red",
-        )
+        console_error(f"no commit found matching {field_name} prefix '{prefix}'")
         sys.exit(ExitCode.STACK_NOT_FOUND)
     if len(matches) > 1:
-        console.print(
-            f"error: ambiguous {field_name} prefix '{prefix}' matches {len(matches)} commits:",
-            style="red",
+        console_error(
+            f"ambiguous {field_name} prefix '{prefix}' matches {len(matches)} commits:",
         )
         for sha, subject, change_id in matches:
             console.print(f"  {sha[:12]} {subject} ({change_id[:12]})", style="red")
@@ -117,10 +114,7 @@ def run_scripted_rebase(base: str, script_content: str) -> None:
         )
 
         if result.returncode != 0:
-            console.print(
-                "error: rebase failed — there may be conflicts",
-                style="red",
-            )
+            console_error("rebase failed — there may be conflicts")
             console.print(
                 "Resolve conflicts then run: git rebase --continue",
             )
@@ -193,9 +187,8 @@ async def stack_reorder(
         return
 
     if len(commit_prefixes) != len(commits):
-        console.print(
-            f"error: expected {len(commits)} commits but got {len(commit_prefixes)} prefixes",
-            style="red",
+        console_error(
+            f"expected {len(commits)} commits but got {len(commit_prefixes)} prefixes",
         )
         sys.exit(ExitCode.INVALID_STATE)
 
@@ -208,9 +201,8 @@ async def stack_reorder(
         seen: set[str] = set()
         for prefix, sha in zip(commit_prefixes, matched_shas, strict=True):
             if sha in seen:
-                console.print(
-                    f"error: duplicate — prefix '{prefix}' resolves to the same commit as another prefix",
-                    style="red",
+                console_error(
+                    f"duplicate — prefix '{prefix}' resolves to the same commit as another prefix",
                 )
                 sys.exit(ExitCode.INVALID_STATE)
             seen.add(sha)
