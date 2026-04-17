@@ -29,6 +29,7 @@ ReferencesSource = typing.Literal[
     "github_event_other",
     "github_event_pull_request",
     "github_event_push",
+    "buildkite_pull_request",
 ]
 
 
@@ -85,7 +86,28 @@ def _detect_from_push_event(ev: github_event.GitHubEvent) -> References | None:
     return None
 
 
+def _detect_from_buildkite() -> References | None:
+    """Detect base/head references from Buildkite environment variables."""
+    pr = os.getenv("BUILDKITE_PULL_REQUEST")
+    if pr and pr != "false":
+        base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
+        commit = os.getenv("BUILDKITE_COMMIT", "HEAD")
+        if base_branch:
+            return References(
+                base_branch,
+                commit,
+                "buildkite_pull_request",
+            )
+    return None
+
+
 def detect() -> References:
+    # Try Buildkite-specific detection first
+    if os.getenv("BUILDKITE") == "true":
+        result = _detect_from_buildkite()
+        if result:
+            return result
+
     try:
         event_name, event = utils.get_github_event()
     except utils.GitHubEventNotFoundError:
