@@ -101,6 +101,8 @@ mergify stack checkout my-feature    # Checkout an existing stack from GitHub
 mergify ci junit-process results.xml # Upload test results + quarantine
 mergify ci scopes                    # Detect impacted scopes
 mergify ci git-refs                  # Detect base/head refs
+mergify ci git-refs --format=shell   # Emit MERGIFY_GIT_REFS_* vars for `eval`
+mergify ci git-refs --format=json    # Emit single-line JSON for jq
 
 # Merge queue
 mergify queue status                 # View queue state

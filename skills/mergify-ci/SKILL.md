@@ -76,6 +76,22 @@ mergify ci git-refs
 # Head: def5678
 ```
 
+**Output formats (`--format`):**
+- `text` (default) — human-readable `Base:` / `Head:` lines
+- `shell` — `MERGIFY_GIT_REFS_{BASE,HEAD,SOURCE}=...` lines suitable for `eval`, with POSIX-safe shell quoting. When base can't be detected, `MERGIFY_GIT_REFS_BASE=''`.
+- `json` — single-line JSON object with `base`, `head`, `source` keys. `base` may be `null` when it can't be detected (e.g., `workflow_dispatch` events); use `jq -r '.base // ""'` to coalesce to empty string.
+
+```bash
+# Consume values in a shell script without parsing:
+eval "$(mergify ci git-refs --format=shell)"
+nx show projects --affected \
+  --base="$MERGIFY_GIT_REFS_BASE" \
+  --head="$MERGIFY_GIT_REFS_HEAD"
+
+# Or with jq:
+BASE=$(mergify ci git-refs --format=json | jq -r '.base // ""')
+```
+
 Sources detected (in priority order): merge queue context, GitHub pull request event, GitHub push event, fallback to last commit.
 
 ## Scopes (`scopes`)
