@@ -320,13 +320,14 @@ def test_scopes_send(
 ) -> None:
     """Test scopes command with all required parameters."""
 
-    # Create config file
-    scopes_file = tmp_path / "scopes.json"
-    scopes_file.write_text(
+    scopes_json = tmp_path / "scopes.json"
+    scopes_json.write_text(
         json.dumps(
             {"base_ref": "base", "head_ref": "head", "scopes": ["backend", "frontend"]},
         ),
     )
+    scopes_file = tmp_path / "scopes.txt"
+    scopes_file.write_text("docs\n\n  infra  \n")
 
     runner = testing.CliRunner()
 
@@ -345,14 +346,62 @@ def test_scopes_send(
             "test-token",
             "--scope",
             "foobar",
-            "--file",
+            "--scopes-json",
+            str(scopes_json),
+            "--scopes-file",
             str(scopes_file),
         ],
     )
 
     assert result.exit_code == 0, result.output
     payload = json.loads(post_mock.calls[0].request.content)
-    assert sorted(payload["scopes"]) == ["backend", "foobar", "frontend"]
+    assert sorted(payload["scopes"]) == [
+        "backend",
+        "docs",
+        "foobar",
+        "frontend",
+        "infra",
+    ]
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+def test_scopes_send_file_deprecated(
+    respx_mock: respx.MockRouter,
+    tmp_path: pathlib.Path,
+) -> None:
+    """`--file` still works but emits a deprecation warning on stderr."""
+
+    scopes_json = tmp_path / "scopes.json"
+    scopes_json.write_text(
+        json.dumps(
+            {"base_ref": "base", "head_ref": "head", "scopes": ["backend"]},
+        ),
+    )
+
+    runner = testing.CliRunner()
+
+    post_mock = respx_mock.post(
+        "https://api.mergify.com/v1/repos/owner/repository/pulls/123/scopes",
+        headers={"Authorization": "Bearer test-token"},
+    ).respond(200)
+    result = runner.invoke(
+        ci_cli.scopes_send,
+        [
+            "--pull-request",
+            "123",
+            "--repository",
+            "owner/repository",
+            "--token",
+            "test-token",
+            "--file",
+            str(scopes_json),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "--file is deprecated" in result.stderr
+    payload = json.loads(post_mock.calls[0].request.content)
+    assert payload["scopes"] == ["backend"]
 
 
 def test_scopes_send_no_pull_request_skips(
