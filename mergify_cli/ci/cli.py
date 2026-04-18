@@ -237,6 +237,7 @@ def git_refs() -> None:
     click.echo(f"Base: {ref.base}")
     click.echo(f"Head: {ref.head}")
     ref.maybe_write_to_github_outputs()
+    ref.maybe_write_to_buildkite_metadata()
 
 
 @ci.command(
