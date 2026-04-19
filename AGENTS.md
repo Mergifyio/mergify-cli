@@ -16,8 +16,60 @@ updated terminal output consistent and avoids rendering issues across terminals.
 and other emoji. They can render at inconsistent widths across terminals and
 break column alignment.
 
-**Exception:** Emoji are acceptable in markdown output destined for GitHub
-(PR comments, CI summaries) where they render consistently.
+**Exceptions — emoji are acceptable in:**
+- Markdown output destined for GitHub (PR comments, CI summaries)
+- CI log output (`ci junit-process`, `ci scopes`) — these are read in CI
+  runners (GitHub Actions, CircleCI, etc.) where emoji render consistently
+  and improve log scanability
+
+## Error Messages
+
+Use `console_error(message)` from `mergify_cli` for all user-facing error
+messages. It prints `error: {message}` in red with `markup=False` (safe for
+user data containing `[`/`]`). Keep the message
+lowercase after `error:` (the function adds the prefix).
+
+```python
+from mergify_cli import console_error
+
+console_error("commit not found")          # -> "error: commit not found"
+console_error(f"failed to fetch: {e}")     # -> "error: failed to fetch: ..."
+```
+
+For follow-up hints after an error, use plain `console.print()`:
+```python
+console_error("rebase failed — there may be conflicts")
+console.print("Resolve conflicts then run: git rebase --continue")
+```
+
+Do **not** use `console.print(..., style="red")` or `[red]...[/]` markup
+for error messages — use `console_error()` instead.
+
+## Success Messages
+
+End success messages with a period:
+```python
+console.print("[green]Freeze created successfully.[/]")
+console.print("Stack reordered successfully.", style="green")
+```
+
+## JSON Output
+
+Commands with `--json` flags must write JSON to **stdout** using
+`click.echo()`, not `console.print()` (which may add Rich formatting).
+This ensures clean output pipeable to `jq` and other tools.
+
+```python
+if output_json:
+    click.echo(json.dumps(data, indent=2))
+```
+
+## Command Groups
+
+All top-level command groups must use `DYMGroup` (from `mergify_cli.dym`)
+with `invoke_without_command=True` for consistent "did you mean?"
+suggestions. Add an explicit `click.echo(ctx.get_help())` in the group
+callback when `ctx.invoked_subcommand is None` for help display.
 
 ## Documentation
 
