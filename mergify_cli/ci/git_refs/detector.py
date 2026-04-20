@@ -56,7 +56,7 @@ class References:
         if not gha:
             return
         with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
-            fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={self.base}\n")
+            fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={self.base or ''}\n")
             fh.write(f"{GITHUB_ACTIONS_HEAD_OUTPUT_NAME}={self.head}\n")
 
     def maybe_write_to_buildkite_metadata(self) -> None:
