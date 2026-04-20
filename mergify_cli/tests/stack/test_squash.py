@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.squash import stack_fixup
 
 
@@ -120,3 +121,106 @@ class TestStackFixup:
         assert (repo / "a.txt").exists()
         assert (repo / "b.txt").exists()
         assert (repo / "c.txt").exists()
+
+    async def test_fixup_multiple_into_parents(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """fixup B C: B folds into A, C folds into (now A+B); stack becomes [A]."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_b = commits[1][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_fixup([sha_b, sha_c], dry_run=False)
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        assert feature == ["Commit A"]
+        assert (repo / "a.txt").exists()
+        assert (repo / "b.txt").exists()
+        assert (repo / "c.txt").exists()
+
+    async def test_fixup_first_commit_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """fixup A (the first stack commit) must error — no parent in stack."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_fixup([sha_a], dry_run=False)
+        assert exc_info.value.code == ExitCode.INVALID_STATE
+
+    async def test_fixup_unknown_prefix_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, _commits = stack_repo
+        os.chdir(repo)
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_fixup(["deadbeef"], dry_run=False)
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND
+
+    async def test_fixup_duplicate_prefix_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_b = commits[1][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_fixup([sha_b, sha_b], dry_run=False)
+        assert exc_info.value.code == ExitCode.INVALID_STATE
+
+    async def test_fixup_dry_run(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        head_before = _run_git("rev-parse", "HEAD", cwd=repo)
+
+        sha_b = commits[1][0][:12]
+        await stack_fixup([sha_b], dry_run=True)
+
+        head_after = _run_git("rev-parse", "HEAD", cwd=repo)
+        assert head_before == head_after
+
+    async def test_fixup_empty_stack(
+        self,
+        git_repo_with_hooks: pathlib.Path,
+    ) -> None:
+        repo = git_repo_with_hooks
+        (repo / "init.txt").write_text("init")
+        _run_git("add", "init.txt", cwd=repo)
+        _run_git("commit", "-m", "Initial commit", cwd=repo)
+        _setup_tracking(repo)
+        _run_git("checkout", "-b", "feature", "main", cwd=repo)
+        _run_git("branch", "--set-upstream-to=origin/main", cwd=repo)
+
+        os.chdir(repo)
+
+        # Should print no-op message and return without raising
+        await stack_fixup(["anything"], dry_run=False)
+
+    async def test_fixup_with_change_id(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        cid_b = commits[1][1]
+        assert cid_b is not None
+
+        await stack_fixup([cid_b[:8]], dry_run=False)
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        assert feature == ["Commit A", "Commit C"]
