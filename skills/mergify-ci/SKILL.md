@@ -109,8 +109,11 @@ Sends scopes tied to a pull request to the Mergify API. Used when scopes are det
 # Send specific scopes
 mergify ci scopes-send -s frontend -s backend -p 123
 
-# Send scopes from a file
-mergify ci scopes-send --file scopes.json -p 123
+# Send scopes from a JSON file (produced by `mergify ci scopes --write`)
+mergify ci scopes-send --scopes-json scopes.json -p 123
+
+# Send scopes from a plain-text file (one scope per line)
+mergify ci scopes-send --scopes-file scopes.txt -p 123
 ```
 
 **Key options:**
@@ -118,7 +121,8 @@ mergify ci scopes-send --file scopes.json -p 123
 - `--repository` / `-r` -- Repository full name (auto-detected)
 - `--pull-request` / `-p` -- Pull request number (auto-detected in GitHub Actions)
 - `--scope` / `-s` -- Scope name (repeatable)
-- `--file` / `-f` -- File containing scopes to upload (JSON format from `scopes --write`)
+- `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
+- `--scopes-file` -- Plain-text file with one scope per line
 
 ## Queue Info (`queue-info`)
 
