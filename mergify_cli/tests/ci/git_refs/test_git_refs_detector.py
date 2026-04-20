@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from unittest import mock
 
 import pytest
 
@@ -220,3 +221,116 @@ def test_detect_buildkite_not_pr_falls_back(
     result = detector.detect()
 
     assert result == detector.References("HEAD^", "HEAD", "fallback_last_commit")
+
+
+def test_detect_buildkite_merge_queue_from_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a git note is present, Buildkite MQ builds report checking_base_sha."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.setenv("BUILDKITE", "true")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "99")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "mergify/merge-queue/abc")
+    monkeypatch.setenv("BUILDKITE_COMMIT", "headsha")
+    # Base branch env var is also present; the note must take precedence.
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main")
+
+    with mock.patch(
+        "mergify_cli.ci.queue.notes.read_mq_info_note",
+        return_value={
+            "checking_base_sha": "basesha",
+            "pull_requests": [{"number": 1}],
+            "previous_failed_batches": [],
+        },
+    ) as note_mock:
+        result = detector.detect()
+
+    note_mock.assert_called_once_with("mergify/merge-queue/abc", "headsha")
+    assert result == detector.References("basesha", "headsha", "merge_queue")
+
+
+def test_detect_buildkite_pr_falls_back_when_no_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing note means we fall back to the existing base-branch behavior."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.setenv("BUILDKITE", "true")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature-branch")
+    monkeypatch.setenv("BUILDKITE_COMMIT", "abc123")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main")
+
+    with mock.patch(
+        "mergify_cli.ci.queue.notes.read_mq_info_note",
+        return_value=None,
+    ):
+        result = detector.detect()
+
+    assert result == detector.References("main", "abc123", "buildkite_pull_request")
+
+
+def test_detect_gha_merge_queue_from_note(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """GitHub Actions PR event: the note takes precedence over PR body parsing."""
+    event_data = {
+        "pull_request": {
+            "number": 7,
+            "title": "regular PR title",
+            "head": {"ref": "mergify/merge-queue/abc", "sha": "headsha"},
+            "base": {"sha": "pr-base-sha"},
+        },
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    with mock.patch(
+        "mergify_cli.ci.queue.notes.read_mq_info_note",
+        return_value={
+            "checking_base_sha": "mq-base-sha",
+            "pull_requests": [{"number": 7}],
+            "previous_failed_batches": [],
+        },
+    ) as note_mock:
+        result = detector.detect()
+
+    note_mock.assert_called_once_with("mergify/merge-queue/abc", "headsha")
+    assert result == detector.References("mq-base-sha", "headsha", "merge_queue")
+
+
+def test_detect_gha_falls_back_to_pr_base_when_no_note(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Absent note → current PR-base-SHA path is preserved."""
+    event_data = {
+        "pull_request": {
+            "number": 7,
+            "title": "regular PR title",
+            "head": {"ref": "feature-branch", "sha": "headsha"},
+            "base": {"sha": "pr-base-sha"},
+        },
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    with mock.patch(
+        "mergify_cli.ci.queue.notes.read_mq_info_note",
+        return_value=None,
+    ):
+        result = detector.detect()
+
+    assert result == detector.References(
+        "pr-base-sha",
+        "headsha",
+        "github_event_pull_request",
+    )
