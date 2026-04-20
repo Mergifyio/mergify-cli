@@ -9,7 +9,8 @@ from mergify_cli.ci.queue import notes
 BRANCH = "mergify/merge-queue/abcdef0123"
 HEAD_SHA = "a" * 40
 BASE_SHA = "b" * 40
-NOTES_REF = f"refs/notes/{BRANCH}"
+NOTES_REF_SHORT = f"mergify/{BRANCH}"
+NOTES_REF = f"refs/notes/{NOTES_REF_SHORT}"
 
 
 def _completed(returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -50,7 +51,7 @@ checking_base_sha: {BASE_SHA}
 
     check_output_mock.assert_called_once()
     show_cmd = check_output_mock.call_args.args[0]
-    assert show_cmd == ["git", "notes", f"--ref={BRANCH}", "show", HEAD_SHA]
+    assert show_cmd == ["git", "notes", f"--ref={NOTES_REF_SHORT}", "show", HEAD_SHA]
 
     assert result is not None
     assert result["checking_base_sha"] == BASE_SHA
