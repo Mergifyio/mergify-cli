@@ -279,3 +279,65 @@ class TestStackSquash:
         assert "feat: combined A+C" in feature
         # Original "Commit A" title is gone — replaced by the custom one
         assert "Commit A" not in feature
+
+    async def test_squash_multiple_srcs_reordered(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """squash B C into A: B and C are folded into A; stack becomes [A]."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_b = commits[1][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_b, sha_c],
+            target_prefix=sha_a,
+            message=None,
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        assert feature == ["Commit A"]
+        assert (repo / "a.txt").exists()
+        assert (repo / "b.txt").exists()
+        assert (repo / "c.txt").exists()
+
+    async def test_squash_reorder_preserves_non_srcs(
+        self,
+        git_repo_with_hooks: pathlib.Path,
+    ) -> None:
+        """A, B, C, D: squash D into A. Non-SRCs B, C keep original order."""
+        repo = git_repo_with_hooks
+        (repo / "init.txt").write_text("init")
+        _run_git("add", "init.txt", cwd=repo)
+        _run_git("commit", "-m", "Initial commit", cwd=repo)
+        _setup_tracking(repo)
+        _run_git("checkout", "-b", "feature", "main", cwd=repo)
+        _run_git("branch", "--set-upstream-to=origin/main", cwd=repo)
+
+        commits = []
+        for label, filename in [
+            ("A", "a.txt"),
+            ("B", "b.txt"),
+            ("C", "c.txt"),
+            ("D", "d.txt"),
+        ]:
+            sha, _cid = _create_commit(
+                repo, filename, f"content {label}", f"Commit {label}",
+            )
+            commits.append(sha)
+
+        os.chdir(repo)
+        await stack_squash(
+            src_prefixes=[commits[3][:12]],
+            target_prefix=commits[0][:12],
+            message=None,
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        # A remains first; D folded into A; B and C keep original order.
+        assert feature == ["Commit A", "Commit B", "Commit C"]
