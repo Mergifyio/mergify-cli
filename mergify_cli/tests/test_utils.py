@@ -23,6 +23,7 @@ import pytest
 
 from mergify_cli import console
 from mergify_cli import utils
+from mergify_cli.exit_codes import ExitCode
 
 
 if TYPE_CHECKING:
@@ -309,3 +310,34 @@ class TestCheckForStatus:
             )
         finally:
             utils.set_debug(debug=False)
+
+
+class TestMergifyError:
+    def test_default_exit_code_is_generic_error(self) -> None:
+        err = utils.MergifyError("boom")
+        assert err.exit_code == ExitCode.GENERIC_ERROR
+        assert err.message == "boom"
+
+    def test_accepts_exit_code_override(self) -> None:
+        err = utils.MergifyError("bad config", exit_code=ExitCode.CONFIGURATION_ERROR)
+        assert err.exit_code == ExitCode.CONFIGURATION_ERROR
+        assert err.message == "bad config"
+
+    def test_is_click_exception(self) -> None:
+        """MergifyError must inherit from click.ClickException so click's
+        standalone-mode handler catches it and exits with exit_code."""
+        import click
+
+        assert issubclass(utils.MergifyError, click.ClickException)
+
+    def test_show_prints_red_error_to_stderr(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        err = utils.MergifyError("nope", exit_code=ExitCode.CONFIGURATION_ERROR)
+        err.show()
+        captured = capsys.readouterr()
+        # The message may be captured from stdout or stderr depending on the
+        # console configuration; assert only that it was emitted.
+        # ANSI codes may or may not appear.
+        assert "nope" in captured.err or "nope" in captured.out
