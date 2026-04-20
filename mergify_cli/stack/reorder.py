@@ -265,6 +265,23 @@ def display_plan(
         console.log(f"  {idx}. {sha[:12]} {subject}{cid_display}")
 
 
+def display_action_plan(
+    title: str,
+    commits: list[tuple[str, str, str]],
+    actions: dict[str, str],
+) -> None:
+    """Print the planned commit order, tagging rows with their action."""
+    console.log(title)
+    for idx, (sha, subject, change_id) in enumerate(commits, 1):
+        cid_display = f" ({change_id[:12]})" if change_id else ""
+        tag = ""
+        for act_sha, act in actions.items():
+            if sha.startswith(act_sha) or act_sha.startswith(sha):
+                tag = f" [{act}]"
+                break
+        console.log(f"  {idx}. {sha[:12]} {subject}{cid_display}{tag}")
+
+
 async def stack_reorder(
     commit_prefixes: list[str],
     *,
