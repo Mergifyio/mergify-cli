@@ -80,11 +80,12 @@ every row in the tables below has a corresponding test case.
 
 ### `mergify stack new NAME`
 
-| Failure mode                                | ExitCode                |
-|---------------------------------------------|-------------------------|
-| Branch already exists                       | `STACK_NOT_FOUND`       |
-| Git command failure                         | `GENERIC_ERROR`         |
-| Success                                     | `SUCCESS`               |
+| Failure mode                                      | ExitCode              |
+|---------------------------------------------------|-----------------------|
+| Could not determine trunk branch (no --base)      | `STACK_NOT_FOUND`     |
+| `git fetch` from remote failed                    | `GENERIC_ERROR`       |
+| Branch creation failed (e.g. already exists)      | `GENERIC_ERROR`       |
+| Success                                           | `SUCCESS`             |
 
 ### `mergify stack push`
 
@@ -115,11 +116,14 @@ every row in the tables below has a corresponding test case.
 
 ### `mergify stack open [COMMIT]`
 
-| Failure mode                                | ExitCode                |
-|---------------------------------------------|-------------------------|
-| Commit not found / not in stack             | `STACK_NOT_FOUND`       |
-| Success (no PR to open — returns 0)         | `SUCCESS`               |
-| Success                                     | `SUCCESS`               |
+| Failure mode                                   | ExitCode              |
+|------------------------------------------------|-----------------------|
+| Empty stack (no commits)                       | `STACK_NOT_FOUND`     |
+| Commit not resolvable via `git rev-parse`      | `STACK_NOT_FOUND`     |
+| Commit not in the current stack                | `STACK_NOT_FOUND`     |
+| Commit is in stack but has no associated PR    | `STACK_NOT_FOUND`     |
+| Interactive prompt cancelled (Ctrl+C)          | `SUCCESS`             |
+| Success (browser opened)                       | `SUCCESS`             |
 
 ### `mergify stack checkout`
 
