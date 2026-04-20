@@ -338,10 +338,21 @@ def scopes(
 )
 @click.option("--scope", "-s", multiple=True, help="Scope to upload")
 @click.option(
+    "--scopes-json",
+    help="JSON file containing scopes to upload (output of `mergify ci scopes --write`)",
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option(
+    "--scopes-file",
+    help="Plain-text file with one scope per line",
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option(
     "--file",
     "-f",
-    help="File containing scopes to upload",
-    type=click.Path(exists=True),
+    "file_deprecated",
+    type=click.Path(exists=True, dir_okay=False),
+    hidden=True,
 )
 @utils.run_with_asyncio
 async def scopes_send(
@@ -350,19 +361,40 @@ async def scopes_send(
     repository: str,
     pull_request: int | None,
     scope: tuple[str, ...],
-    file: str | None,
+    scopes_json: str | None,
+    scopes_file: str | None,
+    file_deprecated: str | None,
 ) -> None:
     if pull_request is None:
         click.echo("No pull request number detected, skipping scopes upload.")
         return
 
+    if file_deprecated is not None:
+        click.echo(
+            "Warning: --file is deprecated, use --scopes-json instead.",
+            err=True,
+        )
+        if scopes_json is None:
+            scopes_json = file_deprecated
+
     scopes = list(scope)
-    if file is not None:
+    if scopes_json is not None:
         try:
-            dump = scopes_cli.DetectedScope.load_from_file(file)
+            dump = scopes_cli.DetectedScope.load_from_file(scopes_json)
         except scopes_exc.ScopesError as e:
             raise click.ClickException(str(e)) from e
         scopes.extend(dump.scopes)
+    if scopes_file is not None:
+        scopes.extend(
+            line
+            for line in (
+                raw.strip()
+                for raw in pathlib.Path(scopes_file)
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
+            if line
+        )
 
     await scopes_cli.send_scopes(
         api_url,
