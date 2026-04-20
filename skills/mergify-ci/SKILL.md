@@ -67,7 +67,7 @@ mergify ci junit-process \
 
 ## Git References (`git-refs`)
 
-Detects the base and head git references for the current pull request context. Writes results to `GITHUB_OUTPUT` when running in GitHub Actions.
+Detects the base and head git references for the current pull request context. Writes results to `GITHUB_OUTPUT` when running in GitHub Actions, and to Buildkite meta-data (`mergify-ci.base`, `mergify-ci.head`, `mergify-ci.source`) when running in Buildkite.
 
 ```bash
 mergify ci git-refs
@@ -99,7 +99,7 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 - `--head` -- Head git reference (default: HEAD)
 - `--write` / `-w` -- Write detected scopes to a JSON file
 
-The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` as a JSON map of scope names to `"true"`/`"false"`.
+The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`.
 
 ## Scopes Send (`scopes-send`)
 

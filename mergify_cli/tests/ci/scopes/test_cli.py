@@ -345,6 +345,39 @@ def test_maybe_write_github_outputs_no_env(
     cli.maybe_write_github_outputs(["backend"], {"backend"})
 
 
+def test_maybe_write_buildkite_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE", "true")
+
+    with mock.patch("subprocess.check_call") as mock_check_call:
+        cli.maybe_write_buildkite_metadata(
+            ["backend", "frontend", "docs"],
+            {"backend", "docs"},
+        )
+
+    mock_check_call.assert_called_once_with(
+        [
+            "buildkite-agent",
+            "meta-data",
+            "set",
+            "mergify-ci.scopes",
+            '{"backend": "true", "docs": "true", "frontend": "false"}',
+        ],
+    )
+
+
+def test_maybe_write_buildkite_metadata_not_buildkite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BUILDKITE", raising=False)
+
+    with mock.patch("subprocess.check_call") as mock_check_call:
+        cli.maybe_write_buildkite_metadata(["backend"], {"backend"})
+
+    mock_check_call.assert_not_called()
+
+
 def test_maybe_write_buildkite_annotation_no_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import pathlib
+import subprocess
 import typing
 
 from mergify_cli import utils
@@ -17,6 +18,16 @@ if typing.TYPE_CHECKING:
 
 GITHUB_ACTIONS_BASE_OUTPUT_NAME = "base"
 GITHUB_ACTIONS_HEAD_OUTPUT_NAME = "head"
+
+BUILDKITE_BASE_METADATA_KEY = "mergify-ci.base"
+BUILDKITE_HEAD_METADATA_KEY = "mergify-ci.head"
+BUILDKITE_SOURCE_METADATA_KEY = "mergify-ci.source"
+
+
+def buildkite_meta_data_set(key: str, value: str) -> None:
+    subprocess.check_call(  # noqa: S603
+        ["buildkite-agent", "meta-data", "set", key, value],
+    )
 
 
 class BaseNotFoundError(exceptions.ScopesError):
@@ -47,6 +58,14 @@ class References:
         with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
             fh.write(f"{GITHUB_ACTIONS_BASE_OUTPUT_NAME}={self.base}\n")
             fh.write(f"{GITHUB_ACTIONS_HEAD_OUTPUT_NAME}={self.head}\n")
+
+    def maybe_write_to_buildkite_metadata(self) -> None:
+        if os.getenv("BUILDKITE") != "true":
+            return
+        if self.base is not None:
+            buildkite_meta_data_set(BUILDKITE_BASE_METADATA_KEY, self.base)
+        buildkite_meta_data_set(BUILDKITE_HEAD_METADATA_KEY, self.head)
+        buildkite_meta_data_set(BUILDKITE_SOURCE_METADATA_KEY, self.source)
 
 
 def _detect_from_pull_request_event(

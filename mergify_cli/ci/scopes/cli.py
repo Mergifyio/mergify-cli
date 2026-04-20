@@ -13,6 +13,7 @@ import click
 import pydantic
 
 from mergify_cli import utils
+from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.scopes import changed_files
 from mergify_cli.ci.scopes import config
 from mergify_cli.ci.scopes import exceptions
@@ -21,9 +22,8 @@ from mergify_cli.ci.scopes import exceptions
 if typing.TYPE_CHECKING:
     from collections import abc
 
-    from mergify_cli.ci.git_refs import detector as git_refs_detector
-
 GITHUB_ACTIONS_SCOPES_OUTPUT_NAME = "scopes"
+BUILDKITE_SCOPES_METADATA_KEY = "mergify-ci.scopes"
 
 
 # NOTE: We convert the pattern to a compiled regex using `glob.translate`,
@@ -93,6 +93,19 @@ def maybe_write_github_outputs(
         fh.write(
             f"{GITHUB_ACTIONS_SCOPES_OUTPUT_NAME}<<{delimiter}\n{json.dumps(data)}\n{delimiter}\n",
         )
+
+
+def maybe_write_buildkite_metadata(
+    all_scopes: abc.Iterable[str],
+    scopes_hit: set[str],
+) -> None:
+    if os.getenv("BUILDKITE") != "true":
+        return
+    data = {key: "true" if key in scopes_hit else "false" for key in sorted(all_scopes)}
+    git_refs_detector.buildkite_meta_data_set(
+        BUILDKITE_SCOPES_METADATA_KEY,
+        json.dumps(data),
+    )
 
 
 def _build_scopes_markdown(
@@ -245,6 +258,7 @@ def detect(
         click.echo("No scopes matched.")
 
     maybe_write_github_outputs(all_scopes, scopes_hit)
+    maybe_write_buildkite_metadata(all_scopes, scopes_hit)
     maybe_write_github_step_summary(
         references,
         all_scopes,

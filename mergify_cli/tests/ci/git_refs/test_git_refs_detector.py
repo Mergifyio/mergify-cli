@@ -210,6 +210,68 @@ def test_detect_buildkite_pull_request(
     )
 
 
+def test_maybe_write_to_buildkite_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE", "true")
+
+    ref = detector.References("abc123", "xyz987", "buildkite_pull_request")
+
+    with mock.patch("subprocess.check_call") as mock_check_call:
+        ref.maybe_write_to_buildkite_metadata()
+
+    assert mock_check_call.call_args_list == [
+        mock.call(["buildkite-agent", "meta-data", "set", "mergify-ci.base", "abc123"]),
+        mock.call(["buildkite-agent", "meta-data", "set", "mergify-ci.head", "xyz987"]),
+        mock.call(
+            [
+                "buildkite-agent",
+                "meta-data",
+                "set",
+                "mergify-ci.source",
+                "buildkite_pull_request",
+            ],
+        ),
+    ]
+
+
+def test_maybe_write_to_buildkite_metadata_no_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE", "true")
+
+    ref = detector.References(None, "HEAD", "github_event_other")
+
+    with mock.patch("subprocess.check_call") as mock_check_call:
+        ref.maybe_write_to_buildkite_metadata()
+
+    assert mock_check_call.call_args_list == [
+        mock.call(["buildkite-agent", "meta-data", "set", "mergify-ci.head", "HEAD"]),
+        mock.call(
+            [
+                "buildkite-agent",
+                "meta-data",
+                "set",
+                "mergify-ci.source",
+                "github_event_other",
+            ],
+        ),
+    ]
+
+
+def test_maybe_write_to_buildkite_metadata_not_buildkite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BUILDKITE", raising=False)
+
+    ref = detector.References("abc123", "xyz987", "manual")
+
+    with mock.patch("subprocess.check_call") as mock_check_call:
+        ref.maybe_write_to_buildkite_metadata()
+
+    mock_check_call.assert_not_called()
+
+
 def test_detect_buildkite_not_pr_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
