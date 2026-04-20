@@ -367,7 +367,7 @@ async def stack_push(
 
         if dry_run:
             console.log("[orange]Finished (dry-run mode).[/]")
-            sys.exit(0)
+            sys.exit(ExitCode.SUCCESS)
 
         if revision_history:
             # Fetch old PR heads for patch-id comparison before force-pushing

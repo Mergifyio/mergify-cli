@@ -3,16 +3,20 @@ from __future__ import annotations
 import typing
 from unittest import mock
 
-
-if typing.TYPE_CHECKING:
-    import pathlib
-
+from click import testing
 from click.testing import CliRunner
 from httpx import Response
 import respx
 
+from mergify_cli import cli as cli_mod
 from mergify_cli.config.cli import config
 from mergify_cli.exit_codes import ExitCode
+
+
+if typing.TYPE_CHECKING:
+    import pathlib
+
+    import pytest
 
 
 _MINIMAL_SCHEMA: dict[str, object] = {
@@ -237,3 +241,44 @@ def test_simulate_config_not_found() -> None:
     )
     assert result.exit_code != 0
     assert "not found" in result.output.lower()
+
+
+def test_config_not_found_exits_configuration_error(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """config validate with no config file available exits CONFIGURATION_ERROR."""
+    monkeypatch.chdir(tmp_path)  # no .mergify.yml anywhere
+    runner = testing.CliRunner()
+    result = runner.invoke(cli_mod.cli, ["config", "validate"])
+    assert result.exit_code == ExitCode.CONFIGURATION_ERROR, result.output
+
+
+def test_config_invalid_yaml_exits_configuration_error(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """config validate with invalid YAML exits CONFIGURATION_ERROR."""
+    cfg = tmp_path / ".mergify.yml"
+    cfg.write_text("not: valid: yaml: [")
+    monkeypatch.chdir(tmp_path)
+    runner = testing.CliRunner()
+    result = runner.invoke(cli_mod.cli, ["config", "validate"])
+    assert result.exit_code == ExitCode.CONFIGURATION_ERROR, result.output
+
+
+def test_config_simulate_invalid_url_exits_2(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """config simulate with a non-PR URL exits 2 (click.BadParameter)."""
+    cfg = tmp_path / ".mergify.yml"
+    cfg.write_text("pull_request_rules: []\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MERGIFY_TOKEN", "fake")
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        ["config", "simulate", "https://example.com/not-a-pr"],
+    )
+    assert result.exit_code == 2, result.output
