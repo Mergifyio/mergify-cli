@@ -26,6 +26,24 @@ jobs:
         shell: bash
         run: uv run --locked poe linters
 
+  compat-tests:
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: 3.14
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          version-file: requirements-uv.txt
+
+      - name: Compat tests
+        shell: bash
+        run: uv run --locked poe compat-test
+
   test:
     timeout-minutes: 10
     strategy:
@@ -70,6 +88,7 @@ jobs:
     needs:
       - test
       - linters
+      - compat-tests
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded

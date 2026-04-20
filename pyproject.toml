@@ -225,6 +225,12 @@ runtime-evaluated-decorators = [
     # Function is declared async, but doesn't await or use async features.
     "RUF029",
 ]
+"compat-tests/**/*.py" = [
+    # Use of assert detected — this is pytest
+    "S101",
+    # subprocess call: check for execution of untrusted input
+    "S603",
+]
 
 [tool.ruff.lint.isort]
 force-single-line = true

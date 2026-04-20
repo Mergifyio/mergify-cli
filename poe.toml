@@ -4,6 +4,10 @@ type = "uv"
 [tool.poe.tasks.test]
 cmd = "pytest -v --pyargs mergify_cli"
 
+[tool.poe.tasks.compat-test]
+help = "Run cross-implementation compat tests (see compat-tests/README.md)"
+cmd = "pytest -v compat-tests/"
+
 [tool.poe.tasks.linters]
 help = "Run linters"
 default_item_type = "cmd"
