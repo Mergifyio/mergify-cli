@@ -256,3 +256,26 @@ class TestStackSquash:
         # Message at A's position is still "Commit A"
         log = _run_git("log", "--format=%s", cwd=repo).splitlines()
         assert "Commit A" in log
+
+    async def test_squash_with_custom_message(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """squash C into A -m 'combined': final commit message is 'combined'."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_c],
+            target_prefix=sha_a,
+            message="feat: combined A+C",
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith(("Commit", "feat"))]
+        assert "feat: combined A+C" in feature
+        # Original "Commit A" title is gone — replaced by the custom one
+        assert "Commit A" not in feature
