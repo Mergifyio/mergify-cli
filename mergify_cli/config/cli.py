@@ -27,11 +27,11 @@ def _resolve_config_path(config_path: str | None) -> str:
     if config_path is None:
         locations = ", ".join(MERGIFY_CONFIG_PATHS)
         msg = f"Mergify configuration file not found. Looked in: {locations}"
-        raise click.ClickException(msg)
+        raise utils.MergifyError(msg, exit_code=ExitCode.CONFIGURATION_ERROR)
 
     if not pathlib.Path(config_path).is_file():
         msg = f"Configuration file not found: {config_path}"
-        raise click.ClickException(msg)
+        raise utils.MergifyError(msg, exit_code=ExitCode.CONFIGURATION_ERROR)
 
     return config_path
 
@@ -64,18 +64,30 @@ def validate(ctx: click.Context) -> None:
     try:
         config_data = config_validate.load_yaml(config_path)
     except yaml.YAMLError as e:
-        raise click.ClickException(f"Invalid YAML in {config_path}: {e}") from e
+        raise utils.MergifyError(
+            f"Invalid YAML in {config_path}: {e}",
+            exit_code=ExitCode.CONFIGURATION_ERROR,
+        ) from e
     except (TypeError, OSError) as e:
-        raise click.ClickException(str(e)) from e
+        raise utils.MergifyError(
+            str(e),
+            exit_code=ExitCode.CONFIGURATION_ERROR,
+        ) from e
 
     try:
         with httpx.Client(timeout=30) as client:
             schema = config_validate.fetch_schema(client)
         result = config_validate.validate_config(config_data, schema)
     except httpx.HTTPError as e:
-        raise click.ClickException(f"Failed to fetch validation schema: {e}") from e
+        raise utils.MergifyError(
+            f"Failed to fetch validation schema: {e}",
+            exit_code=ExitCode.MERGIFY_API_ERROR,
+        ) from e
     except (ValueError, TypeError) as e:
-        raise click.ClickException(f"Failed to parse validation schema: {e}") from e
+        raise utils.MergifyError(
+            f"Failed to parse validation schema: {e}",
+            exit_code=ExitCode.GENERIC_ERROR,
+        ) from e
 
     escaped_path = escape(config_path)
 
@@ -93,7 +105,10 @@ def validate(ctx: click.Context) -> None:
             markup=False,
         )
 
-    raise SystemExit(ExitCode.CONFIGURATION_ERROR)
+    raise utils.MergifyError(
+        "configuration validation failed",
+        exit_code=ExitCode.CONFIGURATION_ERROR,
+    )
 
 
 _PR_URL_RE = re.compile(
@@ -105,7 +120,7 @@ def _parse_pr_url(url: str) -> tuple[str, int]:
     m = _PR_URL_RE.match(url)
     if not m:
         msg = f"Invalid pull request URL: {url}"
-        raise click.ClickException(msg)
+        raise click.BadParameter(msg)
     return f"{m.group('owner')}/{m.group('repo')}", int(m.group("number"))
 
 

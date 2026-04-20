@@ -87,7 +87,7 @@ async def stack_checkout(
 
         if root_node is None:
             console.print("No stacked pull requests found")
-            sys.exit(0)
+            sys.exit(ExitCode.SUCCESS)
 
         console.log("Stacked pull requests:")
         node = root_node
