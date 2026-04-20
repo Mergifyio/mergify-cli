@@ -465,12 +465,100 @@ def test_git_refs(
     runner = testing.CliRunner()
     result = runner.invoke(ci_cli.git_refs, [])
     assert result.exit_code == 0, result.output
+    assert result.output == "Base: abc123\nHead: xyz987\n"
 
     content = output_file.read_text()
     expected = """base=abc123
 head=xyz987
 """
     assert content == expected
+
+
+def test_git_refs_format_shell(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {"before": "abc123", "after": "xyz987"}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.git_refs, ["--format", "shell"])
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "MERGIFY_GIT_REFS_BASE=abc123\n"
+        "MERGIFY_GIT_REFS_HEAD=xyz987\n"
+        "MERGIFY_GIT_REFS_SOURCE=github_event_push\n"
+    )
+
+
+def test_git_refs_format_shell_quotes_special_chars(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Values containing shell-special chars must be properly quoted so `eval` is safe."""
+    event_data = {
+        "repository": {"default_branch": "weird branch $name"},
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.git_refs, ["--format", "shell"])
+    assert result.exit_code == 0, result.output
+    # space and `$` both trigger shlex.quote to wrap the value in single quotes
+    assert "MERGIFY_GIT_REFS_BASE='weird branch $name'\n" in result.output
+
+
+def test_git_refs_format_shell_empty_base(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When base is None, shell format emits an empty quoted string."""
+    event_data: dict[str, object] = {}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.git_refs, ["--format", "shell"])
+    assert result.exit_code == 0, result.output
+    assert "MERGIFY_GIT_REFS_BASE=''\n" in result.output
+    assert "MERGIFY_GIT_REFS_HEAD=HEAD\n" in result.output
+    assert "MERGIFY_GIT_REFS_SOURCE=github_event_other\n" in result.output
+
+
+def test_git_refs_format_json(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_data = {"before": "abc123", "after": "xyz987"}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.git_refs, ["--format", "json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "base": "abc123",
+        "head": "xyz987",
+        "source": "github_event_push",
+    }
 
 
 def test_queue_info(

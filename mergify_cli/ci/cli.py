@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shlex
 import uuid
 
 import click
@@ -232,10 +233,33 @@ async def junit_process(
     help="""Give the base/head git references of the pull request""",
     short_help="""Give the base/head git references of the pull request""",
 )
-def git_refs() -> None:
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "shell", "json"]),
+    default="text",
+    show_default=True,
+    help=(
+        "Output format. 'text' is human-readable. "
+        "'shell' emits MERGIFY_GIT_REFS_{BASE,HEAD,SOURCE}=... lines for `eval`. "
+        "'json' emits a single-line JSON object."
+    ),
+)
+def git_refs(output_format: str) -> None:
     ref = git_refs_detector.detect()
-    click.echo(f"Base: {ref.base}")
-    click.echo(f"Head: {ref.head}")
+
+    if output_format == "shell":
+        click.echo(f"MERGIFY_GIT_REFS_BASE={shlex.quote(ref.base or '')}")
+        click.echo(f"MERGIFY_GIT_REFS_HEAD={shlex.quote(ref.head)}")
+        click.echo(f"MERGIFY_GIT_REFS_SOURCE={shlex.quote(ref.source)}")
+    elif output_format == "json":
+        click.echo(
+            json.dumps({"base": ref.base, "head": ref.head, "source": ref.source}),
+        )
+    else:
+        click.echo(f"Base: {ref.base}")
+        click.echo(f"Head: {ref.head}")
+
     ref.maybe_write_to_github_outputs()
     ref.maybe_write_to_buildkite_metadata()
 
