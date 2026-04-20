@@ -951,7 +951,7 @@ def test_revision_history_comment_first_update() -> None:
         change_type="content",
         timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
     )
-    body = comment.body()
+    body = comment.body(pull_number=1)
     assert body.startswith("### Revision history\n")
     assert "| 1 | initial |" in body
     assert "`abc1234`" in body
@@ -980,7 +980,7 @@ def test_revision_history_comment_append() -> None:
         change_type="rebase",
         timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
     )
-    body = comment.body()
+    body = comment.body(pull_number=1)
     assert "| 3 | rebase |" in body
     assert (
         "def5678901234567890abcdef1234567890abcdef...789abcdef01234567890abcdef01234567890abcd"
@@ -1000,7 +1000,7 @@ def test_revision_history_comment_parse_existing() -> None:
         change_type="content",
         timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
     )
-    body = original.body()
+    body = original.body(pull_number=1)
 
     parsed = push.RevisionHistoryComment.parse(
         body,
@@ -1016,7 +1016,7 @@ def test_revision_history_comment_parse_existing() -> None:
         change_type="rebase",
         timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
     )
-    new_body = parsed.body()
+    new_body = parsed.body(pull_number=1)
     assert "| 3 | rebase |" in new_body
     # Verify old rows are preserved verbatim (compare links intact)
     assert (
@@ -1046,6 +1046,39 @@ def test_revision_history_is_revision_comment() -> None:
     )
 
 
+def test_revision_history_initial_populates_timestamp_iso() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    assert comment.entries[0].timestamp_iso == "2026-04-14T14:30:00Z"
+    assert comment.entries[1].timestamp_iso == "2026-04-14T14:30:00Z"
+
+
+def test_revision_history_append_populates_timestamp_iso() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    comment.append(
+        old_sha="def5678901234567890abcdef1234567890abcdef",
+        new_sha="789abcdef01234567890abcdef01234567890abcd",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, 45, tzinfo=datetime.UTC),
+    )
+    assert comment.entries[2].timestamp_iso == "2026-04-15T09:10:45Z"
+
+
 def test_revision_history_comment_unknown_type() -> None:
     comment = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
@@ -1056,8 +1089,78 @@ def test_revision_history_comment_unknown_type() -> None:
         change_type="unknown",
         timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
     )
-    body = comment.body()
+    body = comment.body(pull_number=1)
     assert "| 2 | unknown |" in body
+
+
+def test_revision_history_body_contains_json_marker() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = comment.body(pull_number=42)
+
+    marker_prefix = "<!-- mergify-revision-data: "
+    marker_lines = [
+        line for line in body.splitlines() if line.startswith(marker_prefix)
+    ]
+    assert len(marker_lines) == 1
+    assert marker_lines[0].endswith(" -->")
+
+    payload_str = marker_lines[0][len(marker_prefix) : -len(" -->")]
+    payload = json.loads(payload_str)
+
+    assert payload == {
+        "schema_version": 1,
+        "pull_number": 42,
+        "entries": [
+            {
+                "number": 1,
+                "change_type": "initial",
+                "old_sha": None,
+                "new_sha": "abc1234567890abcdef1234567890abcdef123456",
+                "timestamp_iso": "2026-04-14T14:30:00Z",
+                "compare_url": None,
+            },
+            {
+                "number": 2,
+                "change_type": "content",
+                "old_sha": "abc1234567890abcdef1234567890abcdef123456",
+                "new_sha": "def5678901234567890abcdef1234567890abcdef",
+                "timestamp_iso": "2026-04-14T14:30:00Z",
+                "compare_url": (
+                    "https://github.com/owner/repo/compare/"
+                    "abc1234567890abcdef1234567890abcdef123456..."
+                    "def5678901234567890abcdef1234567890abcdef"
+                ),
+            },
+        ],
+    }
+
+
+def test_revision_history_body_json_marker_is_single_line_compact() -> None:
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = comment.body(pull_number=7)
+    marker_prefix = "<!-- mergify-revision-data: "
+    marker_line = next(
+        line for line in body.splitlines() if line.startswith(marker_prefix)
+    )
+    # Compact form: no spaces after separators.
+    assert '", ' not in marker_line
+    assert '": ' not in marker_line
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
@@ -1586,3 +1689,28 @@ async def test_get_remote_changes_old_format_branch(
     assert len(result) == 1
     cid = changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50")
     assert cid in result
+
+
+def test_revision_entry_timestamp_iso_normalises_to_utc() -> None:
+    tz_ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    dt = datetime.datetime(2026, 4, 14, 20, 0, 0, tzinfo=tz_ist)  # 14:30:00 UTC
+    entry = push._RevisionEntry(
+        number=1,
+        change_type="content",
+        old_sha=None,
+        new_sha="abc",
+        timestamp=dt,
+    )
+    assert entry.timestamp_iso == "2026-04-14T14:30:00Z"
+
+
+def test_revision_entry_timestamp_iso_returns_none_for_unknown() -> None:
+    entry = push._RevisionEntry(
+        number=1,
+        change_type="content",
+        old_sha=None,
+        new_sha="abc",
+        timestamp=None,
+    )
+    assert entry.timestamp_iso is None
+    assert not entry.timestamp_human
