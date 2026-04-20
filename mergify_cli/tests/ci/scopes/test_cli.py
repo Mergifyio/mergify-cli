@@ -345,6 +345,134 @@ def test_maybe_write_github_outputs_no_env(
     cli.maybe_write_github_outputs(["backend"], {"backend"})
 
 
+def test_maybe_write_buildkite_annotation_no_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BUILDKITE", raising=False)
+
+    with mock.patch("subprocess.run") as mock_run:
+        cli.maybe_write_buildkite_annotation(
+            git_refs_detector.References("old", "new", "github_event_pull_request"),
+            ["backend"],
+            {"backend"},
+        )
+
+    mock_run.assert_not_called()
+
+
+def test_maybe_write_buildkite_annotation_runs_both_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE", "true")
+
+    with mock.patch("subprocess.run") as mock_run:
+        cli.maybe_write_buildkite_annotation(
+            git_refs_detector.References(
+                "da26838azertyuiopqsdfghjkxcvbn",
+                "HEAD",
+                "github_event_pull_request",
+            ),
+            ["backend", "frontend", "docs"],
+            {"backend", "docs"},
+        )
+
+    expected_markdown = """## Mergify CI Scope Matching Results for `da26838...HEAD` (source: `github_event_pull_request`)
+
+| 🎯 Scope | ✅ Match |
+|:--|:--|
+| `backend` | ✅ |
+| `docs` | ✅ |
+| `frontend` | ❌ |
+"""
+
+    assert mock_run.call_count == 2
+
+    job_call, build_call = mock_run.call_args_list
+    assert job_call.args[0] == [
+        "buildkite-agent",
+        "annotate",
+        "--style",
+        "info",
+        "--context",
+        "mergify-ci-scopes",
+        "--scope=job",
+    ]
+    assert job_call.kwargs["input"] == expected_markdown
+    assert job_call.kwargs["check"] is True
+    assert job_call.kwargs["text"] is True
+
+    assert build_call.args[0] == [
+        "buildkite-agent",
+        "annotate",
+        "--style",
+        "info",
+        "--context",
+        "mergify-ci-scopes",
+    ]
+    assert build_call.kwargs["input"] == expected_markdown
+
+
+def test_maybe_write_buildkite_annotation_warns_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import subprocess
+
+    monkeypatch.setenv("BUILDKITE", "true")
+
+    def boom(
+        cmd: list[str],
+        **_: object,
+    ) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=cmd,
+            stderr="buildkite-agent: boom\n",
+        )
+
+    with mock.patch("subprocess.run", side_effect=boom):
+        # Must not raise
+        cli.maybe_write_buildkite_annotation(
+            git_refs_detector.References("old", "new", "github_event_pull_request"),
+            ["backend"],
+            {"backend"},
+        )
+
+    captured = capsys.readouterr()
+    assert (
+        "warning: failed to write Buildkite annotation (job scope): buildkite-agent: boom"
+        in captured.err
+    )
+    assert (
+        "warning: failed to write Buildkite annotation (build scope): buildkite-agent: boom"
+        in captured.err
+    )
+
+
+def test_maybe_write_buildkite_annotation_warns_on_missing_binary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("BUILDKITE", "true")
+
+    with mock.patch("subprocess.run", side_effect=FileNotFoundError("no such binary")):
+        cli.maybe_write_buildkite_annotation(
+            git_refs_detector.References("old", "new", "github_event_pull_request"),
+            ["backend"],
+            {"backend"},
+        )
+
+    captured = capsys.readouterr()
+    assert (
+        "warning: failed to write Buildkite annotation (job scope): no such binary"
+        in captured.err
+    )
+    assert (
+        "warning: failed to write Buildkite annotation (build scope): no such binary"
+        in captured.err
+    )
+
+
 @mock.patch("mergify_cli.ci.scopes.changed_files.git_changed_files")
 @mock.patch("mergify_cli.ci.scopes.cli.maybe_write_github_outputs")
 def test_detect_with_matches(
