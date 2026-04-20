@@ -24,6 +24,7 @@ import pytest
 
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.squash import stack_fixup
+from mergify_cli.stack.squash import stack_squash
 
 
 if TYPE_CHECKING:
@@ -224,3 +225,34 @@ class TestStackFixup:
         await stack_fixup([cid_b[:8]], dry_run=False)
         feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
         assert feature == ["Commit A", "Commit C"]
+
+
+class TestStackSquash:
+    async def test_squash_single_into_target_no_message(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """squash C into A (no -m): C folds into A keeping A's message."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_c],
+            target_prefix=sha_a,
+            message=None,
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        # C was reordered adjacent to A, then folded in; B stays where it was.
+        assert feature == ["Commit A", "Commit B"]
+        # All content preserved
+        assert (repo / "a.txt").exists()
+        assert (repo / "b.txt").exists()
+        assert (repo / "c.txt").exists()
+        # Message at A's position is still "Commit A"
+        log = _run_git("log", "--format=%s", cwd=repo).splitlines()
+        assert "Commit A" in log

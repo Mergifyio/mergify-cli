@@ -85,5 +85,57 @@ async def stack_squash(
     message: str | None,
     dry_run: bool,
 ) -> None:
-    # Placeholder — implemented in a later task.
-    raise NotImplementedError
+    os.chdir(await utils.git("rev-parse", "--show-toplevel"))
+    trunk = await utils.get_trunk()
+    base = await utils.git("merge-base", trunk, "HEAD")
+    commits = get_stack_commits(base)
+
+    if not commits:
+        console.print("No commits in the stack", style="green")
+        return
+
+    target = match_commit(target_prefix, commits)
+    srcs = [match_commit(p, commits) for p in src_prefixes]
+
+    # Validate: TARGET not among SRCs
+    if any(s[0] == target[0] for s in srcs):
+        console_error("a source commit cannot be the same as the target")
+        sys.exit(ExitCode.INVALID_STATE)
+
+    # Validate: no duplicate SRCs
+    src_shas = [s[0] for s in srcs]
+    if len(set(src_shas)) != len(src_shas):
+        seen: set[str] = set()
+        for prefix, sha in zip(src_prefixes, src_shas, strict=True):
+            if sha in seen:
+                console_error(
+                    f"duplicate — source prefix '{prefix}' resolves to the same commit as another",
+                )
+                sys.exit(ExitCode.INVALID_STATE)
+            seen.add(sha)
+
+    # Build new order: keep non-SRCs in original order; re-insert SRCs
+    # immediately after TARGET in the listed order.
+    src_sha_set = set(src_shas)
+    new_order: list[tuple[str, str, str]] = []
+    for commit in commits:
+        if commit[0] in src_sha_set:
+            continue
+        new_order.append(commit)
+        if commit[0] == target[0]:
+            new_order.extend(srcs)
+
+    # Action: SRCs are "fixup" when message is None (keeps TARGET's message),
+    # else "squash" (GIT_EDITOR writes the custom message).
+    action = "fixup" if message is None else "squash"
+    actions = dict.fromkeys(src_shas, action)
+
+    display_action_plan("Squash plan:", new_order, actions)
+
+    if dry_run:
+        console.print("Dry run — no changes made", style="green")
+        return
+
+    new_shas = [c[0] for c in new_order]
+    run_action_rebase(base, new_shas, actions, commit_message=message)
+    console.print("Commits squashed successfully.", style="green")
