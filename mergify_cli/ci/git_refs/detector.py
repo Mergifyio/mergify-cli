@@ -7,6 +7,7 @@ import typing
 
 from mergify_cli import utils
 from mergify_cli.ci.queue import metadata as queue_metadata
+from mergify_cli.ci.queue import notes as queue_notes
 from mergify_cli.ci.scopes import exceptions
 
 
@@ -55,7 +56,17 @@ def _detect_from_pull_request_event(
     if ev.pull_request and ev.pull_request.head:
         head = ev.pull_request.head.sha
 
-    # 0) merge-queue PR override
+    # 0a) Merge-queue info via git note (published by the engine for newer MQs).
+    # Falls back to the PR-body parsing below when the note is absent.
+    if ev.pull_request and ev.pull_request.head and ev.pull_request.head.ref:
+        note = queue_notes.read_mq_info_note(
+            ev.pull_request.head.ref,
+            ev.pull_request.head.sha,
+        )
+        if note is not None:
+            return References(note["checking_base_sha"], head, "merge_queue")
+
+    # 0b) merge-queue PR override
     content = queue_metadata.extract_from_event(ev)
     if content:
         return References(content["checking_base_sha"], head, "merge_queue")
@@ -89,15 +100,27 @@ def _detect_from_push_event(ev: github_event.GitHubEvent) -> References | None:
 def _detect_from_buildkite() -> References | None:
     """Detect base/head references from Buildkite environment variables."""
     pr = os.getenv("BUILDKITE_PULL_REQUEST")
-    if pr and pr != "false":
-        base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
-        commit = os.getenv("BUILDKITE_COMMIT", "HEAD")
-        if base_branch:
-            return References(
-                base_branch,
-                commit,
-                "buildkite_pull_request",
-            )
+    if not pr or pr == "false":
+        return None
+
+    commit = os.getenv("BUILDKITE_COMMIT", "HEAD")
+    branch = os.getenv("BUILDKITE_BRANCH")
+
+    # Merge-queue info via git note (published by the engine). When present,
+    # overrides the standard PR base branch so scope detection compares
+    # against the MQ checking base rather than the target branch.
+    if branch:
+        note = queue_notes.read_mq_info_note(branch, commit)
+        if note is not None:
+            return References(note["checking_base_sha"], commit, "merge_queue")
+
+    base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
+    if base_branch:
+        return References(
+            base_branch,
+            commit,
+            "buildkite_pull_request",
+        )
     return None
 
 
