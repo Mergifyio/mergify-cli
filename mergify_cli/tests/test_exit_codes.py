@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 
 
@@ -30,3 +31,12 @@ class TestExitCode:
         assert int(ExitCode.MERGIFY_API_ERROR) == 6
         assert int(ExitCode.INVALID_STATE) == 7
         assert int(ExitCode.CONFIGURATION_ERROR) == 8
+
+
+class TestMergifyErrorCarriesExitCode:
+    def test_each_exit_code_round_trips_through_mergify_error(self) -> None:
+        """Every ExitCode value can be stored in and retrieved from MergifyError."""
+        for code in ExitCode:
+            err = utils.MergifyError(f"message for {code.name}", exit_code=code)
+            assert err.exit_code == code
+            assert int(err.exit_code) == int(code)

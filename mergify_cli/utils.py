@@ -23,12 +23,14 @@ import pathlib
 import typing
 from urllib import parse
 
+import click
 import httpx
 
 from mergify_cli import VERSION
 from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli.ci import github_event
+from mergify_cli.exit_codes import ExitCode
 
 
 if typing.TYPE_CHECKING:
@@ -91,6 +93,33 @@ class CommandError(Exception):
 
     def __str__(self) -> str:
         return f"failed to run `{' '.join(self.command_args)}`: {self.stdout.decode()}"
+
+
+class MergifyError(click.ClickException):
+    """CLI-level error with a typed exit code.
+
+    Raised from any command path that encounters a semantic failure.
+    Click's standalone-mode handler (used by the real entrypoint and by
+    CliRunner in tests) catches ClickException subclasses, calls
+    ``show()``, then exits with ``self.exit_code``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: ExitCode = ExitCode.GENERIC_ERROR,
+    ) -> None:
+        super().__init__(message)
+        # click.ClickException stores exit_code as an int class attribute.
+        # Override per-instance with the typed ExitCode coerced to int.
+        self.exit_code = int(exit_code)
+
+    def show(self, file: typing.IO[str] | None = None) -> None:
+        if file is None:
+            console_error(self.message)
+        else:
+            click.echo(self.message, file=file)
 
 
 async def run_command(*args: str) -> str:

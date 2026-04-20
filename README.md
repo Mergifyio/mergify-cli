@@ -141,7 +141,8 @@ npx skills add Mergifyio/mergify-cli
 ## Exit Codes
 
 The CLI uses structured exit codes so scripts can distinguish failure modes
-without parsing stderr:
+without parsing stderr. The authoritative contract per command is in
+[`docs/exit-codes.md`](docs/exit-codes.md). Summary:
 
 | Code | Name | Meaning |
 |------|------|---------|
