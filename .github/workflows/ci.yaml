@@ -44,6 +44,32 @@ jobs:
         shell: bash
         run: uv run --locked poe compat-test
 
+  rust:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt clippy --toolchain stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --workspace -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo build --release
+        run: cargo build --release
+
   test:
     timeout-minutes: 10
     strategy:
@@ -89,6 +115,7 @@ jobs:
       - test
       - linters
       - compat-tests
+      - rust
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded
