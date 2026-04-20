@@ -363,7 +363,7 @@ async def test_stack_list_json_output(
     )
 
     captured = capsys.readouterr()
-    output = json.loads(captured.out)
+    output = test_utils.assert_stdout_is_single_json_document(captured.out)
 
     # Schema lock: the output must parse cleanly into the pinned model
     # with extra="forbid". Any drift (new field, renamed field, wrong

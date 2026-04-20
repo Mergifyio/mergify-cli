@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import typing
 from unittest.mock import patch
 
@@ -11,6 +10,7 @@ import respx
 
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.queue.cli import queue
+from mergify_cli.tests import utils as test_utils
 
 
 FAKE_CHECK_SUCCESS = {
@@ -205,7 +205,7 @@ class TestShowCommand:
                 extra_args=["--json"],
             )
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = test_utils.assert_stdout_is_single_json_document(result.output)
         assert data["number"] == 123
         assert data["position"] == 3
         assert data["mergeability_check"]["ci_state"] == "pending"
