@@ -14,6 +14,7 @@ from mergify_cli.ci import cli as ci_cli
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.junit_processing import quarantine
 from mergify_cli.ci.junit_processing import upload
+from mergify_cli.exit_codes import ExitCode
 
 
 if TYPE_CHECKING:
@@ -443,8 +444,9 @@ def test_scopes_empty_mergify_config_env_uses_autodetection(
     runner = testing.CliRunner()
     result = runner.invoke(ci_cli.scopes, ["--base", "old", "--head", "new"])
 
-    # The command found the auto-detected config and ran (source is manual so exit 1)
-    assert result.exit_code == 1
+    # The command found the auto-detected config and ran; source is manual so
+    # ScopesError is raised -> CONFIGURATION_ERROR exit code.
+    assert result.exit_code == ExitCode.CONFIGURATION_ERROR
     assert "source `manual` has been set" in result.output
 
 
@@ -618,5 +620,5 @@ def test_queue_info_not_merge_queue(
 
     runner = testing.CliRunner()
     result = runner.invoke(ci_cli.queue_info, [])
-    assert result.exit_code == 1
+    assert result.exit_code == ExitCode.INVALID_STATE
     assert "Not running in a merge queue context" in result.output

@@ -553,3 +553,68 @@ async def test_traceparent_injection(
     assert spans[0].parent.span_id == 0x7A085853722DC6D2
     for span in spans:
         assert span.context.trace_id == 0x80E1AFED08E019FC1110464CFA66635C
+
+
+# ── Exit code pinning tests ──
+
+
+def test_junit_invalid_xml_exits_generic_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Malformed XML exits GENERIC_ERROR."""
+    from click import testing
+
+    from mergify_cli import cli as cli_mod
+    from mergify_cli.exit_codes import ExitCode
+
+    bad = tmp_path / "bad.xml"
+    bad.write_text("<not-well-formed>")
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "ci",
+            "junit-process",
+            "--token",
+            "fake",
+            "--api-url",
+            "https://api.mergify.com",
+            "--repository",
+            "owner/repo",
+            "--tests-target-branch",
+            "main",
+            str(bad),
+        ],
+    )
+    assert result.exit_code == ExitCode.GENERIC_ERROR, result.output
+
+
+def test_junit_empty_file_exits_generic_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """JUnit file with no test cases exits GENERIC_ERROR."""
+    from click import testing
+
+    from mergify_cli import cli as cli_mod
+    from mergify_cli.exit_codes import ExitCode
+
+    empty = tmp_path / "empty.xml"
+    empty.write_text('<?xml version="1.0"?><testsuites/>')
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "ci",
+            "junit-process",
+            "--token",
+            "fake",
+            "--api-url",
+            "https://api.mergify.com",
+            "--repository",
+            "owner/repo",
+            "--tests-target-branch",
+            "main",
+            str(empty),
+        ],
+    )
+    assert result.exit_code == ExitCode.GENERIC_ERROR, result.output
