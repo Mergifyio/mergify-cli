@@ -89,7 +89,7 @@ async def stack_open(
 
         if selected is None:
             # User cancelled (Ctrl+C)
-            sys.exit(0)
+            sys.exit(ExitCode.SUCCESS)
 
         entry = selected
     else:

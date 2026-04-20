@@ -15,6 +15,7 @@ from mergify_cli.ci.queue import metadata as queue_metadata
 from mergify_cli.ci.scopes import cli as scopes_cli
 from mergify_cli.ci.scopes import exceptions as scopes_exc
 from mergify_cli.dym import DYMGroup
+from mergify_cli.exit_codes import ExitCode
 
 
 class JUnitFile(click.Path):
@@ -279,11 +280,11 @@ def scopes(
     if config_path is None:
         locations = ", ".join(detector.MERGIFY_CONFIG_PATHS)
         msg = f"Mergify configuration file not found. Looked in: {locations}"
-        raise click.ClickException(msg)
+        raise utils.MergifyError(msg, exit_code=ExitCode.CONFIGURATION_ERROR)
 
     if not pathlib.Path(config_path).is_file():
         msg = f"Config file '{config_path}' does not exist."
-        raise click.ClickException(msg)
+        raise utils.MergifyError(msg, exit_code=ExitCode.CONFIGURATION_ERROR)
 
     if base or head:
         ref = git_refs_detector.References(
@@ -300,7 +301,10 @@ def scopes(
             references=ref,
         )
     except scopes_exc.ScopesError as e:
-        raise click.ClickException(str(e)) from e
+        raise utils.MergifyError(
+            str(e),
+            exit_code=ExitCode.CONFIGURATION_ERROR,
+        ) from e
 
     if write is not None:
         scopes.save_to_file(write)
@@ -383,7 +387,10 @@ async def scopes_send(
         try:
             dump = scopes_cli.DetectedScope.load_from_file(scopes_json)
         except scopes_exc.ScopesError as e:
-            raise click.ClickException(str(e)) from e
+            raise utils.MergifyError(
+                str(e),
+                exit_code=ExitCode.CONFIGURATION_ERROR,
+            ) from e
         scopes.extend(dump.scopes)
     if scopes_file is not None:
         scopes.extend(
@@ -413,9 +420,10 @@ async def scopes_send(
 def queue_info() -> None:
     metadata = queue_metadata.detect()
     if metadata is None:
-        raise click.ClickException(
+        raise utils.MergifyError(
             "Not running in a merge queue context. "
             "This command must be run on a merge queue draft pull request.",
+            exit_code=ExitCode.INVALID_STATE,
         )
 
     click.echo(json.dumps(metadata, indent=2))

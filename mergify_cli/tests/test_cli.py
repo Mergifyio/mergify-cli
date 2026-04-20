@@ -37,3 +37,59 @@ def test_cli_shows_help_by_default() -> None:
     assert "--help" in result.output
     assert "stack*" not in result.output
     assert "stack" in result.output
+
+
+def test_clirunner_translates_mergify_error_to_exit_code() -> None:
+    """CliRunner must see the typed exit code when MergifyError is raised."""
+    import click
+
+    @click.command()
+    def fail_cmd() -> None:
+        raise utils.MergifyError(
+            "exploded",
+            exit_code=ExitCode.CONFIGURATION_ERROR,
+        )
+
+    runner = testing.CliRunner()
+    result = runner.invoke(fail_cmd, [])
+    assert result.exit_code == ExitCode.CONFIGURATION_ERROR, result.output
+    assert "error: exploded" in (result.output or "")
+
+
+def test_clirunner_mergify_error_default_is_generic() -> None:
+    """Default MergifyError exit code is GENERIC_ERROR (1)."""
+    import click
+
+    @click.command()
+    def fail_cmd() -> None:
+        raise utils.MergifyError("plain")
+
+    runner = testing.CliRunner()
+    result = runner.invoke(fail_cmd, [])
+    assert result.exit_code == ExitCode.GENERIC_ERROR, result.output
+
+
+def test_main_entrypoint_handles_mergify_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main() invokes click in standalone mode; MergifyError from inside
+    the CLI must cause SystemExit with the typed exit code."""
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["mergify"])
+
+    import click
+
+    @click.command()
+    def fail_cmd() -> None:
+        raise utils.MergifyError(
+            "nope",
+            exit_code=ExitCode.INVALID_STATE,
+        )
+
+    monkeypatch.setattr(cli_mod, "cli", fail_cmd)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_mod.main()
+
+    assert exc_info.value.code == ExitCode.INVALID_STATE
