@@ -90,23 +90,54 @@ def match_commit(
     return matches[0]
 
 
-def run_scripted_rebase(base: str, script_content: str) -> None:
+def run_scripted_rebase(
+    base: str,
+    script_content: str,
+    commit_message: str | None = None,
+) -> None:
     """Run ``git rebase -i`` with a custom sequence-editor script.
 
     Writes *script_content* to a temporary Python file, sets it as
-    ``GIT_SEQUENCE_EDITOR``, then executes the rebase.  The temp file
-    is cleaned up afterwards regardless of outcome.
+    ``GIT_SEQUENCE_EDITOR``, then executes the rebase.
+
+    If *commit_message* is provided, also writes a second temp Python
+    file and sets it as ``GIT_EDITOR``; that script overwrites whatever
+    file git passes it with *commit_message*. This lets callers drive a
+    ``squash`` action non-interactively.
+
+    All temp files are cleaned up regardless of outcome.
     """
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix="mergify_rebase_")
+    seq_fd, seq_path = tempfile.mkstemp(suffix=".py", prefix="mergify_rebase_")
+    editor_path: str | None = None
     try:
-        with os.fdopen(tmp_fd, "w") as f:
+        with os.fdopen(seq_fd, "w") as f:
             f.write(script_content)
-        pathlib.Path(tmp_path).chmod(0o755)
+        pathlib.Path(seq_path).chmod(0o755)
 
         env = os.environ.copy()
         python = shlex.quote(sys.executable)
-        script = shlex.quote(tmp_path)
-        env["GIT_SEQUENCE_EDITOR"] = f"{python} {script}"
+        seq_quoted = shlex.quote(seq_path)
+        env["GIT_SEQUENCE_EDITOR"] = f"{python} {seq_quoted}"
+
+        if commit_message is not None:
+            editor_fd, editor_path = tempfile.mkstemp(
+                suffix=".py",
+                prefix="mergify_editor_",
+            )
+            editor_script = (
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "message = " + repr(commit_message) + "\n"
+                "if not message.endswith('\\n'):\n"
+                "    message += '\\n'\n"
+                "with open(sys.argv[1], 'w') as f:\n"
+                "    f.write(message)\n"
+            )
+            with os.fdopen(editor_fd, "w") as f:
+                f.write(editor_script)
+            pathlib.Path(editor_path).chmod(0o755)
+            editor_quoted = shlex.quote(editor_path)
+            env["GIT_EDITOR"] = f"{python} {editor_quoted}"
 
         result = subprocess.run(  # noqa: S603
             ["git", "rebase", "-i", base],
@@ -123,9 +154,12 @@ def run_scripted_rebase(base: str, script_content: str) -> None:
             )
             sys.exit(ExitCode.CONFLICT)
     finally:
-        tmp_file = pathlib.Path(tmp_path)
-        if tmp_file.exists():
-            tmp_file.unlink()
+        for path in (seq_path, editor_path):
+            if path is None:
+                continue
+            tmp = pathlib.Path(path)
+            if tmp.exists():
+                tmp.unlink()
 
 
 def run_rebase(base: str, ordered_shas: list[str]) -> None:
