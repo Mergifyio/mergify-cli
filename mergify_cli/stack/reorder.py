@@ -94,8 +94,8 @@ def run_scripted_rebase(base: str, script_content: str) -> None:
     """Run ``git rebase -i`` with a custom sequence-editor script.
 
     Writes *script_content* to a temporary Python file, sets it as
-    ``GIT_SEQUENCE_EDITOR``, then executes the rebase.  The temp file
-    is cleaned up afterwards regardless of outcome.
+    ``GIT_SEQUENCE_EDITOR``, then executes the rebase. The temp file
+    is cleaned up regardless of outcome.
     """
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix="mergify_rebase_")
     try:
@@ -130,10 +130,37 @@ def run_scripted_rebase(base: str, script_content: str) -> None:
 
 def run_rebase(base: str, ordered_shas: list[str]) -> None:
     """Run ``git rebase -i`` reordering picks to match *ordered_shas*."""
+    run_action_rebase(base, ordered_shas, {})
+
+
+def run_action_rebase(
+    base: str,
+    ordered_shas: list[str],
+    actions: dict[str, str],
+    exec_after_sha: str | None = None,
+    exec_command: str | None = None,
+) -> None:
+    """Run ``git rebase -i`` reordering picks and changing their action.
+
+    *ordered_shas* is the desired full order (as in ``run_rebase``).
+
+    *actions* maps sha -> action string (``"fixup"`` is the expected
+    value for stack_squash/stack_fixup). Each listed sha has its
+    ``pick`` replaced by the given action. Shas not in *actions* stay
+    as ``pick``.
+
+    If *exec_after_sha* and *exec_command* are both provided, an
+    ``exec <exec_command>`` line is inserted right after the row for
+    *exec_after_sha*. Used by squash to amend the combined commit's
+    message while HEAD still points at it.
+    """
     script_content = (
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "order = " + repr(ordered_shas) + "\n"
+        "actions = " + repr(actions) + "\n"
+        "exec_after_sha = " + repr(exec_after_sha) + "\n"
+        "exec_command = " + repr(exec_command) + "\n"
         "todo_path = sys.argv[1]\n"
         "with open(todo_path) as f:\n"
         "    lines = f.readlines()\n"
@@ -151,10 +178,26 @@ def run_rebase(base: str, ordered_shas: list[str]) -> None:
         "        other_lines.append(line)\n"
         "reordered = []\n"
         "for sha in order:\n"
-        "    for key in pick_lines:\n"
+        "    matched = False\n"
+        "    for key, line in pick_lines.items():\n"
         "        if sha.startswith(key) or key.startswith(sha):\n"
-        "            reordered.append(pick_lines[key])\n"
+        "            matched = True\n"
+        "            action = None\n"
+        "            for act_sha, act in actions.items():\n"
+        "                if sha.startswith(act_sha) or act_sha.startswith(sha):\n"
+        "                    action = act\n"
+        "                    break\n"
+        "            if action is not None:\n"
+        "                _parts = line.split(None, 1)\n"
+        "                rest = _parts[1] if len(_parts) > 1 else ''\n"
+        "                line = action + ' ' + rest\n"
+        "            reordered.append(line)\n"
+        "            if exec_after_sha is not None and exec_command is not None:\n"
+        "                if sha.startswith(exec_after_sha) or exec_after_sha.startswith(sha):\n"
+        "                    reordered.append('exec ' + exec_command + '\\n')\n"
         "            break\n"
+        "    if not matched:\n"
+        "        raise SystemExit('no rebase-todo line matches sha ' + sha)\n"
         "with open(todo_path, 'w') as f:\n"
         "    f.writelines(reordered + other_lines)\n"
     )
@@ -170,6 +213,23 @@ def display_plan(
     for idx, (sha, subject, change_id) in enumerate(commits, 1):
         cid_display = f" ({change_id[:12]})" if change_id else ""
         console.log(f"  {idx}. {sha[:12]} {subject}{cid_display}")
+
+
+def display_action_plan(
+    title: str,
+    commits: list[tuple[str, str, str]],
+    actions: dict[str, str],
+) -> None:
+    """Print the planned commit order, tagging rows with their action."""
+    console.log(title)
+    for idx, (sha, subject, change_id) in enumerate(commits, 1):
+        cid_display = f" ({change_id[:12]})" if change_id else ""
+        tag = ""
+        for act_sha, act in actions.items():
+            if sha.startswith(act_sha) or act_sha.startswith(sha):
+                tag = f" [{act}]"
+                break
+        console.log(f"  {idx}. {sha[:12]} {subject}{cid_display}{tag}")
 
 
 async def stack_reorder(
