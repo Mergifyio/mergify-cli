@@ -581,3 +581,54 @@ async def open_cmd(
 @utils.run_with_asyncio
 async def fixup(*, commits: tuple[str, ...], dry_run: bool) -> None:
     await stack_squash_mod.stack_fixup(list(commits), dry_run=dry_run)
+
+
+@stack.command(help="Squash commits into a target commit")
+@click.argument("tokens", nargs=-1, required=True)
+@click.option(
+    "-m",
+    "--message",
+    "message",
+    default=None,
+    help="Final commit message (required to rename; otherwise target's is kept)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show the plan without rebasing",
+)
+@utils.run_with_asyncio
+async def squash(
+    *,
+    tokens: tuple[str, ...],
+    message: str | None,
+    dry_run: bool,
+) -> None:
+    srcs, target = _parse_squash_tokens(tokens)
+    await stack_squash_mod.stack_squash(
+        src_prefixes=srcs,
+        target_prefix=target,
+        message=message,
+        dry_run=dry_run,
+    )
+
+
+def _parse_squash_tokens(tokens: tuple[str, ...]) -> tuple[list[str], str]:
+    """Parse ``SRC... into TARGET`` from a flat tuple of tokens.
+
+    Raises :class:`click.BadParameter` on shape errors.
+    """
+    into_positions = [i for i, t in enumerate(tokens) if t == "into"]
+    if len(into_positions) != 1:
+        msg = "squash requires exactly one 'into' keyword: SRC... into TARGET"
+        raise click.BadParameter(msg)
+    idx = into_positions[0]
+    srcs = list(tokens[:idx])
+    after = tokens[idx + 1 :]
+    if not srcs:
+        raise click.BadParameter("at least one source commit required before 'into'")
+    if len(after) != 1:
+        raise click.BadParameter("exactly one target commit required after 'into'")
+    return srcs, after[0]
