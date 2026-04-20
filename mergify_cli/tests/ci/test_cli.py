@@ -476,6 +476,27 @@ head=xyz987
     assert content == expected
 
 
+def test_git_refs_github_output_empty_base_when_none(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When base can't be detected, GITHUB_OUTPUT gets `base=` (empty), not `base=None`."""
+    event_data: dict[str, object] = {}
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event_data))
+    output_file = tmp_path / "github_output"
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+
+    runner = testing.CliRunner()
+    result = runner.invoke(ci_cli.git_refs, [])
+    assert result.exit_code == 0, result.output
+
+    assert output_file.read_text() == "base=\nhead=HEAD\n"
+
+
 def test_git_refs_format_shell(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
