@@ -194,6 +194,24 @@ async def get_hooks_status() -> dict[str, Any]:
     }
 
 
+async def _ensure_notes_display_ref() -> None:
+    """Configure ``notes.displayRef`` so ``git log`` shows mergify notes."""
+    desired = "refs/notes/mergify/*"
+    try:
+        current = await utils.git(
+            "config",
+            "--local",
+            "--get-all",
+            "notes.displayRef",
+        )
+        current_refs = current.splitlines()
+    except utils.CommandError:
+        current_refs = []
+    if desired not in current_refs:
+        await utils.git("config", "--local", "--add", "notes.displayRef", desired)
+        console.log(f"Added notes.displayRef = {desired}")
+
+
 async def stack_setup(*, force: bool = False) -> None:
     """Set up git hooks for the stack workflow.
 
@@ -204,6 +222,8 @@ async def stack_setup(*, force: bool = False) -> None:
 
     for hook_name in _get_git_hook_names():
         _install_git_hook(hooks_dir, hook_name, force=force)
+
+    await _ensure_notes_display_ref()
 
 
 async def ensure_hooks_updated() -> None:
