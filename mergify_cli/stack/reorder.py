@@ -195,6 +195,65 @@ def run_rebase(base: str, ordered_shas: list[str]) -> None:
     run_scripted_rebase(base, script_content)
 
 
+def run_action_rebase(
+    base: str,
+    ordered_shas: list[str],
+    actions: dict[str, str],
+    commit_message: str | None = None,
+) -> None:
+    """Run ``git rebase -i`` reordering picks and changing their action.
+
+    *ordered_shas* is the desired full order (as in ``run_rebase``).
+
+    *actions* maps sha -> action string (``"squash"`` or ``"fixup"``).
+    Each listed sha has its ``pick`` replaced by the given action.
+    Shas not in *actions* stay as ``pick``.
+
+    *commit_message* is passed through to ``run_scripted_rebase`` and
+    sets ``GIT_EDITOR`` when provided — useful when ``actions`` contains
+    ``"squash"`` (which triggers git's commit-message editor).
+    """
+    script_content = (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "order = " + repr(ordered_shas) + "\n"
+        "actions = " + repr(actions) + "\n"
+        "todo_path = sys.argv[1]\n"
+        "with open(todo_path) as f:\n"
+        "    lines = f.readlines()\n"
+        "pick_lines = {}\n"
+        "other_lines = []\n"
+        "for line in lines:\n"
+        "    stripped = line.strip()\n"
+        "    if stripped and not stripped.startswith('#'):\n"
+        "        parts = stripped.split(None, 2)\n"
+        "        if len(parts) >= 2:\n"
+        "            pick_lines[parts[1]] = line\n"
+        "        else:\n"
+        "            other_lines.append(line)\n"
+        "    else:\n"
+        "        other_lines.append(line)\n"
+        "reordered = []\n"
+        "for sha in order:\n"
+        "    for key, line in pick_lines.items():\n"
+        "        if sha.startswith(key) or key.startswith(sha):\n"
+        "            action = None\n"
+        "            for act_sha, act in actions.items():\n"
+        "                if sha.startswith(act_sha) or act_sha.startswith(sha):\n"
+        "                    action = act\n"
+        "                    break\n"
+        "            if action is not None:\n"
+        "                _parts = line.split(None, 1)\n"
+        "                rest = _parts[1] if len(_parts) > 1 else ''\n"
+        "                line = action + ' ' + rest\n"
+        "            reordered.append(line)\n"
+        "            break\n"
+        "with open(todo_path, 'w') as f:\n"
+        "    f.writelines(reordered + other_lines)\n"
+    )
+    run_scripted_rebase(base, script_content, commit_message=commit_message)
+
+
 def display_plan(
     title: str,
     commits: list[tuple[str, str, str]],
