@@ -24,6 +24,7 @@ import pytest
 
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.squash import stack_fixup
+from mergify_cli.stack.squash import stack_squash
 
 
 if TYPE_CHECKING:
@@ -224,3 +225,272 @@ class TestStackFixup:
         await stack_fixup([cid_b[:8]], dry_run=False)
         feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
         assert feature == ["Commit A", "Commit C"]
+
+
+class TestStackSquash:
+    async def test_squash_single_into_target_no_message(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """squash C into A (no -m): C folds into A keeping A's message."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_c],
+            target_prefix=sha_a,
+            message=None,
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        # C was reordered adjacent to A, then folded in; B stays where it was.
+        assert feature == ["Commit A", "Commit B"]
+        # All content preserved
+        assert (repo / "a.txt").exists()
+        assert (repo / "b.txt").exists()
+        assert (repo / "c.txt").exists()
+        # Message at A's position is still "Commit A"
+        log = _run_git("log", "--format=%s", cwd=repo).splitlines()
+        assert "Commit A" in log
+
+    async def test_squash_with_custom_message(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """squash C into A -m 'combined': final commit message is 'combined'."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_c],
+            target_prefix=sha_a,
+            message="feat: combined A+C",
+            dry_run=False,
+        )
+
+        feature = [
+            s for s in _get_commit_subjects(repo) if s.startswith(("Commit", "feat"))
+        ]
+        assert "feat: combined A+C" in feature
+        # Original "Commit A" title is gone — replaced by the custom one
+        assert "Commit A" not in feature
+
+    async def test_squash_with_multiline_message(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """Multi-line message survives the rebase-todo / exec indirection."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        message = (
+            "feat: combined with body\n"
+            "\n"
+            "A body paragraph explaining the combined change.\n"
+            "Second line of the body with a 'single quote' and \"double\".\n"
+        )
+
+        await stack_squash(
+            src_prefixes=[sha_c],
+            target_prefix=sha_a,
+            message=message,
+            dry_run=False,
+        )
+
+        # The commit's full message should contain both the subject and body.
+        subjects = _get_commit_subjects(repo)
+        assert "feat: combined with body" in subjects
+        full_msg = _get_head_message(repo, "HEAD~1")
+        assert "A body paragraph explaining the combined change." in full_msg
+        assert "Second line of the body" in full_msg
+
+    async def test_squash_multiple_srcs_reordered(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        """squash B C into A: B and C are folded into A; stack becomes [A]."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_b = commits[1][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_b, sha_c],
+            target_prefix=sha_a,
+            message=None,
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        assert feature == ["Commit A"]
+        assert (repo / "a.txt").exists()
+        assert (repo / "b.txt").exists()
+        assert (repo / "c.txt").exists()
+
+    async def test_squash_reorder_preserves_non_srcs(
+        self,
+        git_repo_with_hooks: pathlib.Path,
+    ) -> None:
+        """A, B, C, D: squash D into A. Non-SRCs B, C keep original order."""
+        repo = git_repo_with_hooks
+        (repo / "init.txt").write_text("init")
+        _run_git("add", "init.txt", cwd=repo)
+        _run_git("commit", "-m", "Initial commit", cwd=repo)
+        _setup_tracking(repo)
+        _run_git("checkout", "-b", "feature", "main", cwd=repo)
+        _run_git("branch", "--set-upstream-to=origin/main", cwd=repo)
+
+        commits = []
+        for label, filename in [
+            ("A", "a.txt"),
+            ("B", "b.txt"),
+            ("C", "c.txt"),
+            ("D", "d.txt"),
+        ]:
+            sha, _cid = _create_commit(
+                repo,
+                filename,
+                f"content {label}",
+                f"Commit {label}",
+            )
+            commits.append(sha)
+
+        os.chdir(repo)
+        await stack_squash(
+            src_prefixes=[commits[3][:12]],
+            target_prefix=commits[0][:12],
+            message=None,
+            dry_run=False,
+        )
+
+        feature = [s for s in _get_commit_subjects(repo) if s.startswith("Commit")]
+        # A remains first; D folded into A; B and C keep original order.
+        assert feature == ["Commit A", "Commit B", "Commit C"]
+
+    async def test_squash_src_equals_target_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_squash(
+                src_prefixes=[sha_a],
+                target_prefix=sha_a,
+                message=None,
+                dry_run=False,
+            )
+        assert exc_info.value.code == ExitCode.INVALID_STATE
+
+    async def test_squash_duplicate_srcs_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+        sha_b = commits[1][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_squash(
+                src_prefixes=[sha_b, sha_b],
+                target_prefix=sha_a,
+                message=None,
+                dry_run=False,
+            )
+        assert exc_info.value.code == ExitCode.INVALID_STATE
+
+    async def test_squash_unknown_src_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_a = commits[0][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_squash(
+                src_prefixes=["deadbeef"],
+                target_prefix=sha_a,
+                message=None,
+                dry_run=False,
+            )
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND
+
+    async def test_squash_unknown_target_errors(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        sha_b = commits[1][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_squash(
+                src_prefixes=[sha_b],
+                target_prefix="deadbeef",
+                message=None,
+                dry_run=False,
+            )
+        assert exc_info.value.code == ExitCode.STACK_NOT_FOUND
+
+    async def test_squash_dry_run(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+    ) -> None:
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        head_before = _run_git("rev-parse", "HEAD", cwd=repo)
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        await stack_squash(
+            src_prefixes=[sha_c],
+            target_prefix=sha_a,
+            message=None,
+            dry_run=True,
+        )
+
+        head_after = _run_git("rev-parse", "HEAD", cwd=repo)
+        assert head_before == head_after
+
+    async def test_squash_empty_stack(
+        self,
+        git_repo_with_hooks: pathlib.Path,
+    ) -> None:
+        repo = git_repo_with_hooks
+        (repo / "init.txt").write_text("init")
+        _run_git("add", "init.txt", cwd=repo)
+        _run_git("commit", "-m", "Initial commit", cwd=repo)
+        _setup_tracking(repo)
+        _run_git("checkout", "-b", "feature", "main", cwd=repo)
+        _run_git("branch", "--set-upstream-to=origin/main", cwd=repo)
+
+        os.chdir(repo)
+
+        await stack_squash(
+            src_prefixes=["any"],
+            target_prefix="thing",
+            message=None,
+            dry_run=False,
+        )

@@ -16,7 +16,10 @@
 from __future__ import annotations
 
 import os
+import pathlib
+import shlex
 import sys
+import tempfile
 
 from mergify_cli import console
 from mergify_cli import console_error
@@ -85,5 +88,79 @@ async def stack_squash(
     message: str | None,
     dry_run: bool,
 ) -> None:
-    # Placeholder — implemented in a later task.
-    raise NotImplementedError
+    os.chdir(await utils.git("rev-parse", "--show-toplevel"))
+    trunk = await utils.get_trunk()
+    base = await utils.git("merge-base", trunk, "HEAD")
+    commits = get_stack_commits(base)
+
+    if not commits:
+        console.print("No commits in the stack", style="green")
+        return
+
+    target = match_commit(target_prefix, commits)
+    srcs = [match_commit(p, commits) for p in src_prefixes]
+
+    # Validate: TARGET not among SRCs
+    if any(s[0] == target[0] for s in srcs):
+        console_error("a source commit cannot be the same as the target")
+        sys.exit(ExitCode.INVALID_STATE)
+
+    # Validate: no duplicate SRCs
+    src_shas = [s[0] for s in srcs]
+    if len(set(src_shas)) != len(src_shas):
+        seen: set[str] = set()
+        for prefix, sha in zip(src_prefixes, src_shas, strict=True):
+            if sha in seen:
+                console_error(
+                    f"duplicate — source prefix '{prefix}' resolves to the same commit as another",
+                )
+                sys.exit(ExitCode.INVALID_STATE)
+            seen.add(sha)
+
+    # Build new order: keep non-SRCs in original order; re-insert SRCs
+    # immediately after TARGET in the listed order.
+    src_sha_set = set(src_shas)
+    new_order: list[tuple[str, str, str]] = []
+    for commit in commits:
+        if commit[0] in src_sha_set:
+            continue
+        new_order.append(commit)
+        if commit[0] == target[0]:
+            new_order.extend(srcs)
+
+    # Always use the fixup action: it folds without opening an editor and
+    # preserves TARGET's message and Change-Id. A custom message, if
+    # requested, is applied via an `exec git commit --amend -F <file> ...`
+    # line inserted right after the last fixup — while HEAD still points
+    # at the combined target commit. The amend runs prepare-commit-msg so
+    # the Change-Id is re-attached. The message is passed via a temp
+    # file (not `-m "..."`) so multi-line messages survive embedding
+    # into a single rebase-todo line.
+    actions = dict.fromkeys(src_shas, "fixup")
+
+    display_action_plan("Squash plan:", new_order, actions)
+
+    if dry_run:
+        console.print("Dry run — no changes made", style="green")
+        return
+
+    new_shas = [c[0] for c in new_order]
+
+    if message is None:
+        run_action_rebase(base, new_shas, actions)
+    else:
+        msg_fd, msg_path = tempfile.mkstemp(suffix=".txt", prefix="mergify_squash_msg_")
+        try:
+            with os.fdopen(msg_fd, "w") as f:
+                f.write(message)
+            run_action_rebase(
+                base,
+                new_shas,
+                actions,
+                exec_after_sha=src_shas[-1],
+                exec_command=f"git commit --amend -F {shlex.quote(msg_path)}",
+            )
+        finally:
+            pathlib.Path(msg_path).unlink(missing_ok=True)
+
+    console.print("Commits squashed successfully.", style="green")
