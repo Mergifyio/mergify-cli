@@ -10,6 +10,7 @@ import pytest
 import respx
 
 from mergify_cli.freeze.cli import freeze
+from mergify_cli.tests import utils as test_utils
 
 
 FAKE_FREEZE = {
@@ -78,7 +79,7 @@ def test_list_json() -> None:
         runner = CliRunner()
         result = runner.invoke(freeze, [*BASE_ARGS, "list", "--json"])
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = test_utils.assert_stdout_is_single_json_document(result.output)
         assert len(data) == 1
         assert data[0]["reason"] == "Release prep"
 
@@ -110,7 +111,7 @@ def test_list_json_with_exclude_conditions() -> None:
         runner = CliRunner()
         result = runner.invoke(freeze, [*BASE_ARGS, "list", "--json"])
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = test_utils.assert_stdout_is_single_json_document(result.output)
         assert data[0]["exclude_conditions"] == ["label=hotfix"]
 
 

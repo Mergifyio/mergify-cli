@@ -12,6 +12,7 @@ from mergify_cli.exit_codes import ExitCode
 from mergify_cli.queue.cli import _relative_time
 from mergify_cli.queue.cli import _topological_sort
 from mergify_cli.queue.cli import queue
+from mergify_cli.tests import utils as test_utils
 
 
 FAKE_PR = {
@@ -252,8 +253,6 @@ class TestStatusCommand:
         assert "Queue is empty" in result.output
 
     def test_json_output(self) -> None:
-        import json
-
         api_response = {
             "batches": [FAKE_BATCH],
             "waiting_pull_requests": [FAKE_PR],
@@ -262,7 +261,7 @@ class TestStatusCommand:
         with respx.mock(base_url="https://api.mergify.com") as mock:
             result = _invoke_status(mock, api_response, extra_args=["--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = test_utils.assert_stdout_is_single_json_document(result.output)
         assert len(data["batches"]) == 1
         assert len(data["waiting_pull_requests"]) == 1
 
