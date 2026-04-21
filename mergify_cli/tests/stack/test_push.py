@@ -109,8 +109,10 @@ async def test_stack_push_forwards_no_verify(
         "--atomic",
         "--no-verify",
         "--force-with-lease=refs/heads/current-branch/title-commit-1--29617d37:",
+        "--force-with-lease=refs/notes/mergify/stack:fake_notes_sha",
         "origin",
         "commit1_sha:refs/heads/current-branch/title-commit-1--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
     )
 
 
@@ -127,6 +129,8 @@ async def test_push_branches_no_verify(git_mock: test_utils.GitMock) -> None:
             action="create",
         ),
     ]
+    # Local notes ref exists; notes_ref_fetched=False so no lease, but refspec included
+    git_mock.mock("rev-parse", "--verify", "refs/notes/mergify/stack", output="abc123")
     git_mock.mock(
         "push",
         "--atomic",
@@ -134,10 +138,16 @@ async def test_push_branches_no_verify(git_mock: test_utils.GitMock) -> None:
         "--force-with-lease=refs/heads/stack/title--29617d37:",
         "origin",
         "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
         output="",
     )
 
-    await push.push_branches("origin", local_changes, no_verify=True)
+    await push.push_branches(
+        "origin",
+        local_changes,
+        no_verify=True,
+        notes_ref_fetched=False,
+    )
 
     assert git_mock.has_been_called_with(
         "push",
@@ -146,6 +156,7 @@ async def test_push_branches_no_verify(git_mock: test_utils.GitMock) -> None:
         "--force-with-lease=refs/heads/stack/title--29617d37:",
         "origin",
         "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
     )
 
 
@@ -1125,6 +1136,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "old_sha": None,
                 "new_sha": "abc1234567890abcdef1234567890abcdef123456",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
+                "reason": "",
                 "compare_url": None,
             },
             {
@@ -1133,6 +1145,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "old_sha": "abc1234567890abcdef1234567890abcdef123456",
                 "new_sha": "def5678901234567890abcdef1234567890abcdef",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
+                "reason": "",
                 "compare_url": (
                     "https://github.com/owner/repo/compare/"
                     "abc1234567890abcdef1234567890abcdef123456..."
@@ -1773,6 +1786,160 @@ def test_revision_history_parse_without_json_marker_recovers_timestamp() -> None
     assert parsed.entries[1].timestamp_iso == "2026-04-14T14:30:00Z"
 
 
+def test_local_change_has_reason_default_empty() -> None:
+    """LocalChange exposes a .reason attribute defaulting to ''."""
+    c = changes.LocalChange(
+        id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+        pull=None,
+        commit_sha="abc",
+        title="t",
+        message="m",
+        base_branch="main",
+        dest_branch="stack/t--29617d37",
+        action="create",
+    )
+    assert not c.reason
+
+
+async def test_read_reasons_reads_notes_for_updated_changes(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """read_reasons() fills LocalChange.reason from refs/notes/mergify/stack."""
+    from mergify_cli.stack.note import NOTES_REF
+
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("I1" + "a" * 39),
+            pull=None,
+            commit_sha="new1",
+            title="T1",
+            message="M",
+            base_branch="main",
+            dest_branch="stack/t1--deadbeef",
+            action="update",
+        ),
+        changes.LocalChange(
+            id=changes.ChangeId("I2" + "a" * 39),
+            pull=None,
+            commit_sha="new2",
+            title="T2",
+            message="M",
+            base_branch="main",
+            dest_branch="stack/t2--cafebabe",
+            action="update",
+        ),
+    ]
+    git_mock.mock(
+        "notes",
+        f"--ref={NOTES_REF}",
+        "show",
+        "new1",
+        output="reason one",
+    )
+    git_mock.mock(
+        "notes",
+        f"--ref={NOTES_REF}",
+        "show",
+        "new2",
+        output="",
+    )
+
+    await push.read_reasons(local_changes)
+
+    assert local_changes[0].reason == "reason one"
+
+
+def test_revision_history_comment_renders_reason_column() -> None:
+    """`body()` emits a 5-column table with a Reason cell."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        reason="fixed typo",
+    )
+    body = comment.body(pull_number=1)
+    assert "| # | Type | Changes | Reason | Date |" in body
+    # Row 2 has a reason, row 1 (initial) has an empty reason
+    assert "| 2 | content | " in body
+    assert "fixed typo" in body
+
+
+def test_revision_history_comment_escapes_reason() -> None:
+    """Newlines become `<br>` and pipes are backslash-escaped."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="a" * 40,
+        new_sha="b" * 40,
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        reason="line1\nline2 | pipe",
+    )
+    body = comment.body(pull_number=1)
+    assert "line1<br>line2 \\| pipe" in body
+
+
+def test_revision_history_comment_truncates_long_reason() -> None:
+    """Reasons over 200 chars are truncated with an ellipsis."""
+    reason = "x" * 250
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="a" * 40,
+        new_sha="b" * 40,
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        reason=reason,
+    )
+    body = comment.body(pull_number=1)
+    assert "x" * 199 + "…" in body
+
+
+def test_revision_history_comment_parse_legacy_4_column() -> None:
+    """Legacy (pre-reason) 4-column bodies parse and round-trip verbatim."""
+    legacy = (
+        "### Revision history\n"
+        "| # | Type | Changes | Date |\n"
+        "|---|------|---------|------|\n"
+        "| 1 | initial | `abc1234` | 2026-04-14 10:00 UTC |\n"
+        "| 2 | content | [`abc1234 \u2192 def5678`](https://github.com/owner/repo/compare/abc1234...def5678) | 2026-04-14 12:00 UTC |\n"
+    )
+    parsed = push.RevisionHistoryComment.parse(
+        legacy,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    assert parsed.entries[0].old_sha is None
+    assert not parsed.entries[0].new_sha
+    assert parsed.entries[0].timestamp_iso == "2026-04-14T10:00:00Z"
+    assert parsed.entries[1].old_sha is None
+    assert not parsed.entries[1].new_sha
+    assert parsed.entries[1].timestamp_iso == "2026-04-14T12:00:00Z"
+    # Appending a new row with a reason must preserve legacy rows verbatim
+    parsed.append(
+        old_sha="def5678901234567890abcdef1234567890abcdef",
+        new_sha="abcdef01234567890abcdef01234567890abcdef0",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
+        reason="rebased on main",
+    )
+    body = parsed.body(pull_number=1)
+    # Legacy rows unchanged
+    assert "| 1 | initial | `abc1234` | 2026-04-14 10:00 UTC |" in body
+    assert "| 2 | content | [`abc1234 \u2192 def5678`]" in body
+    # New row has the Reason column
+    assert "| 3 | rebase | " in body
+    assert "rebased on main" in body
+
+
 def test_revision_history_round_trip_preserves_full_data() -> None:
     original = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
@@ -1795,6 +1962,7 @@ def test_revision_history_round_trip_preserves_full_data() -> None:
         new_sha="789abcdef01234567890abcdef01234567890abcd",
         change_type="rebase",
         timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
+        reason="",
     )
     new_body = parsed.body(pull_number=1)
 
@@ -1810,3 +1978,322 @@ def test_revision_history_round_trip_preserves_full_data() -> None:
     assert payload["entries"][0]["old_sha"] is None
     assert payload["entries"][1]["old_sha"] is not None
     assert payload["entries"][2]["old_sha"] is not None
+
+
+def test_revision_history_comment_parse_5_column() -> None:
+    """New 5-column bodies parse and round-trip."""
+    new_format = (
+        "### Revision history\n"
+        "| # | Type | Changes | Reason | Date |\n"
+        "|---|------|---------|--------|------|\n"
+        "| 1 | initial | `abc1234` |  | 2026-04-14 10:00 UTC |\n"
+        "| 2 | content | [`abc1234 \u2192 def5678`](https://github.com/o/r/compare/abc1234...def5678) | fixed typo | 2026-04-14 12:00 UTC |\n"
+    )
+    parsed = push.RevisionHistoryComment.parse(
+        new_format,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    parsed.append(
+        old_sha="d" * 40,
+        new_sha="e" * 40,
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
+        reason="",
+    )
+    body = parsed.body(pull_number=1)
+    assert "| 3 | rebase |" in body
+    assert "fixed typo" in body  # row 2 preserved verbatim
+    assert "x" * 201 not in body
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_revision_comment_includes_reason_from_local_change(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """When a commit has a reason, it appears in the new revision row."""
+    from mergify_cli.stack.note import NOTES_REF
+
+    git_mock.commit(
+        test_utils.Commit(
+            sha="third_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "second_sha"},
+    )
+    # Override the empty-note default with an actual note
+    git_mock.mock(
+        "notes",
+        f"--ref={NOTES_REF}",
+        "show",
+        "third_sha",
+        output="fixed typo in sql",
+    )
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/123",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "second_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(200, json=[])
+    post_comment_mock = respx_mock.post(
+        "/repos/user/repo/issues/123/comments",
+    ).respond(200, json={})
+
+    with mock.patch.object(push, "detect_change_type", return_value="content"):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+    # Find the POST that created the revision comment
+    revision_posts = [
+        json.loads(call.request.content)["body"]
+        for call in post_comment_mock.calls
+        if json.loads(call.request.content)["body"].startswith("### Revision history")
+    ]
+    assert revision_posts, "expected a revision-history comment to be POSTed"
+    body = revision_posts[0]
+    assert "| # | Type | Changes | Reason | Date |" in body
+    assert "fixed typo in sql" in body
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_push_fetches_notes_ref(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """`stack push` fetches refs/notes/mergify/stack before planning."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="commit1_sha",
+            title="Title commit 1",
+            message="Message commit 1",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize()
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(200, json={"items": []})
+    respx_mock.post("/repos/user/repo/pulls").respond(
+        200,
+        json={
+            "html_url": "https://github.com/repo/user/pull/1",
+            "number": "1",
+            "title": "Title commit 1",
+            "head": {"sha": "commit1_sha"},
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.get("/repos/user/repo/issues/1/comments").respond(200, json=[])
+
+    await push.stack_push(
+        github_server="https://api.github.com/",
+        token="",
+        skip_rebase=False,
+        next_only=False,
+        branch_prefix="",
+        dry_run=False,
+        trunk=("origin", "main"),
+    )
+
+    assert git_mock.has_been_called_with(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
+
+
+async def test_fetch_notes_ref_skips_fetch_when_local_ref_exists(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """fetch_notes_ref returns True without fetching when the local ref already exists."""
+    git_mock.mock("rev-parse", "--verify", "refs/notes/mergify/stack", output="abc123")
+
+    result = await push.fetch_notes_ref("origin")
+
+    assert result is True
+    assert not git_mock.has_been_called_with(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
+
+
+async def test_push_branches_pushes_notes_ref_atomically(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """push_branches includes `+refs/notes/mergify/stack:refs/notes/mergify/stack` in the push."""
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+            pull=None,
+            commit_sha="commit1_sha",
+            title="Title",
+            message="Message",
+            base_branch="main",
+            dest_branch="stack/title--29617d37",
+            action="create",
+        ),
+    ]
+    # Notes ref existed on remote before push (lease uses fetched SHA "deadbeef")
+    git_mock.mock(
+        "rev-parse",
+        "--verify",
+        "refs/notes/mergify/stack",
+        output="deadbeef",
+    )
+    git_mock.mock(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "--force-with-lease=refs/notes/mergify/stack:deadbeef",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+        output="",
+    )
+
+    await push.push_branches("origin", local_changes, notes_ref_fetched=True)
+
+    assert git_mock.has_been_called_with(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "--force-with-lease=refs/notes/mergify/stack:deadbeef",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
+
+
+async def test_push_branches_first_push_omits_notes_lease(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """When the notes ref was not on the remote, omit its lease."""
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+            pull=None,
+            commit_sha="commit1_sha",
+            title="Title",
+            message="Message",
+            base_branch="main",
+            dest_branch="stack/title--29617d37",
+            action="create",
+        ),
+    ]
+    # Local notes ref exists (abc123), but wasn't fetched from remote — no lease, but include refspec
+    git_mock.mock("rev-parse", "--verify", "refs/notes/mergify/stack", output="abc123")
+    git_mock.mock(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+        output="",
+    )
+
+    await push.push_branches("origin", local_changes, notes_ref_fetched=False)
+
+    assert git_mock.has_been_called_with(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
+
+
+async def test_push_branches_skips_notes_when_local_ref_absent(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """When the local notes ref does not exist, omit it from the push entirely."""
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+            pull=None,
+            commit_sha="commit1_sha",
+            title="Title",
+            message="Message",
+            base_branch="main",
+            dest_branch="stack/title--29617d37",
+            action="create",
+        ),
+    ]
+    # Local notes ref does not exist — rev-parse --verify raises CommandError
+    git_mock.mock_error("rev-parse", "--verify", "refs/notes/mergify/stack")
+    git_mock.mock(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        output="",
+    )
+
+    await push.push_branches("origin", local_changes, notes_ref_fetched=False)
+
+    assert git_mock.has_been_called_with(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+    )
+    assert not git_mock.has_been_called_with(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
