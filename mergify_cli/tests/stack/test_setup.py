@@ -25,6 +25,13 @@ async def test_setup(
     hooks_dir = typing.cast("pathlib.Path", tmp_path) / ".git" / "hooks"
     hooks_dir.mkdir(parents=True)
     git_mock.mock("rev-parse", "--git-path", "hooks", output=str(hooks_dir))
+    git_mock.mock(
+        "config",
+        "--local",
+        "--get-all",
+        "notes.displayRef",
+        output="refs/notes/mergify/*",
+    )
     await setup.stack_setup()
 
     commit_msg_hook = hooks_dir / "commit-msg"
@@ -475,3 +482,36 @@ def test_duplicate_subject_gets_unique_change_ids(
         f"First:  {first_change_id}\n"
         f"Second: {second_change_id}"
     )
+
+
+async def test_setup_configures_notes_display_ref(
+    git_repo_with_hooks: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`stack setup` writes notes.displayRef = refs/notes/mergify once."""
+    monkeypatch.chdir(git_repo_with_hooks)
+    await setup.stack_setup()
+
+    value = subprocess.check_output(
+        ["git", "config", "--local", "--get", "notes.displayRef"],
+        text=True,
+        cwd=git_repo_with_hooks,
+    ).strip()
+    assert value == "refs/notes/mergify/*"
+
+
+async def test_setup_notes_display_ref_idempotent(
+    git_repo_with_hooks: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Running setup twice does not error and keeps the value."""
+    monkeypatch.chdir(git_repo_with_hooks)
+    await setup.stack_setup()
+    await setup.stack_setup()
+
+    value = subprocess.check_output(
+        ["git", "config", "--local", "--get", "notes.displayRef"],
+        text=True,
+        cwd=git_repo_with_hooks,
+    ).strip()
+    assert value == "refs/notes/mergify/*"
