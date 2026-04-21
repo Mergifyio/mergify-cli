@@ -21,6 +21,7 @@ import pytest
 
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import list as stack_list_mod
+from mergify_cli.stack import list_schema as stack_list_schema
 from mergify_cli.tests import utils as test_utils
 
 
@@ -363,6 +364,12 @@ async def test_stack_list_json_output(
 
     captured = capsys.readouterr()
     output = json.loads(captured.out)
+
+    # Schema lock: the output must parse cleanly into the pinned model
+    # with extra="forbid". Any drift (new field, renamed field, wrong
+    # type, new literal value) fails here. Update the model and the
+    # Rust port's matching types in lockstep.
+    stack_list_schema.StackListJsonOutput.model_validate(output)
 
     assert output["branch"] == "current-branch"
     assert output["trunk"] == "origin/main"

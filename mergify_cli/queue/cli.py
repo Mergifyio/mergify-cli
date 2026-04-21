@@ -395,6 +395,9 @@ async def status(ctx: click.Context, *, branch: str | None, output_json: bool) -
     if output_json:
         import json
 
+        # JSON output is a passthrough of the Mergify API response.
+        # The schema is Mergify's API contract, not this CLI's — the
+        # Rust port must preserve this passthrough behavior.
         click.echo(json.dumps(data, indent=2))
         return
 
@@ -564,6 +567,9 @@ async def show(
     if output_json:
         import json
 
+        # JSON output is a passthrough of the Mergify API response.
+        # The schema is Mergify's API contract, not this CLI's — the
+        # Rust port must preserve this passthrough behavior.
         click.echo(json.dumps(data, indent=2))
         return
 
