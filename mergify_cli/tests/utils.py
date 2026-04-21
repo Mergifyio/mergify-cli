@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import subprocess
 import typing
 from unittest import mock
@@ -22,6 +23,34 @@ from unittest import mock
 
 if typing.TYPE_CHECKING:
     from collections import abc
+
+
+def assert_stdout_is_single_json_document(stdout: str) -> typing.Any:
+    """Assert that ``stdout`` contains exactly one JSON document and return it.
+
+    Formalizes the ``--json`` output discipline: under ``--json`` mode,
+    stdout MUST be exactly one JSON document and nothing else — no
+    progress bars, no status messages, no prefix or suffix text. Any
+    non-JSON content breaks downstream scripts that pipe the output
+    into ``jq``, ``python -m json.tool``, or similar.
+
+    ``json.loads`` rejects trailing non-whitespace content, so calling
+    this is equivalent to calling ``json.loads(stdout)`` — the helper
+    exists to name the invariant and produce a clearer failure message.
+
+    Use this in any test that exercises a ``--json`` code path.
+    """
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        msg = (
+            "stdout is not a single JSON document — "
+            "likely a progress message, banner, or other text leaked "
+            "into the --json output path.\n"
+            f"json error: {e}\n"
+            f"stdout: {stdout!r}"
+        )
+        raise AssertionError(msg) from e
 
 
 class _CommitRequired(typing.TypedDict):
