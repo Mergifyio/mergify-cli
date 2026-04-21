@@ -182,6 +182,10 @@ async def list_cmd(ctx: click.Context, *, output_json: bool) -> None:
         freezes = await freeze_api.list_freezes(client, ctx.obj["repository"])
 
     if output_json:
+        # JSON output is a passthrough of the Mergify API response.
+        # The schema is Mergify's API contract, not this CLI's — no
+        # transformation, no renaming, no filtering. The Rust port
+        # must preserve this passthrough behavior.
         click.echo(json.dumps(freezes, indent=2))
     else:
         _print_freeze_table(freezes)
