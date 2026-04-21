@@ -28,6 +28,7 @@ from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
+from mergify_cli.stack import approvals as approvals_mod
 from mergify_cli.stack import changes
 from mergify_cli.stack.note import NOTES_REF
 
@@ -36,6 +37,7 @@ if typing.TYPE_CHECKING:
     import httpx
 
     from mergify_cli import github_types
+    from mergify_cli.stack import sync
 
 DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
 _SLUG_SUFFIX_RE = re.compile(r"--[0-9a-f]{8}$")
@@ -295,6 +297,99 @@ async def _process_change_task(
     task.pull_ready.set()
 
 
+def _log_rebase_performed(
+    dest_branch: str,
+    remote: str,
+    base_branch: str,
+    sync_status: sync.SyncStatus,
+    decision: approvals_mod.RebaseDecision,
+) -> None:
+    dropped = (
+        f" (dropped {len(sync_status.merged)} merged commit(s))"
+        if sync_status.merged
+        else ""
+    )
+    if decision.reason is approvals_mod.RebaseReason.CONFLICT_OVERRIDE:
+        numbers = ", ".join(f"#{p['number']}" for p in decision.approved_pulls)
+        console.log(
+            f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`{dropped} "
+            f"(bottom PR has conflicts; approvals on PR(s) {numbers} may be dismissed)",
+        )
+    elif decision.reason is approvals_mod.RebaseReason.FORCED:
+        console.log(
+            f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`{dropped} "
+            f"(--force-rebase; approvals may be dismissed)",
+        )
+    else:
+        console.log(
+            f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`{dropped}",
+        )
+
+
+def _log_rebase_skipped(
+    dest_branch: str,
+    decision: approvals_mod.RebaseDecision,
+) -> None:
+    if decision.reason is approvals_mod.RebaseReason.EXPLICIT_SKIP:
+        console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
+    elif decision.reason is approvals_mod.RebaseReason.SKIPPED_FOR_APPROVALS:
+        n = len(decision.approved_pulls)
+        plural = "s" if n != 1 else ""
+        verb = "have" if n != 1 else "has"
+        console.log(
+            f"branch `{dest_branch}` rebase skipped: {n} PR{plural} {verb} approvals "
+            f"(use --force-rebase to rebase anyway)",
+        )
+
+
+def _log_rebase_dry_run(
+    dest_branch: str,
+    remote: str,
+    base_branch: str,
+    commits_behind: int,
+    decision: approvals_mod.RebaseDecision,
+) -> None:
+    if decision.reason is approvals_mod.RebaseReason.EXPLICIT_SKIP:
+        console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
+        return
+
+    if decision.reason is approvals_mod.RebaseReason.SKIPPED_FOR_APPROVALS:
+        n = len(decision.approved_pulls)
+        plural = "s" if n != 1 else ""
+        console.log(
+            f"[orange]branch `{dest_branch}` rebase would be skipped: "
+            f"approvals detected on {n} PR{plural}[/]",
+        )
+        for pull in decision.approved_pulls:
+            console.log(f'  - PR #{pull["number"]} — "{pull["title"]}"')
+        console.log("  Use --force-rebase to rebase anyway.")
+        return
+
+    if decision.reason is approvals_mod.RebaseReason.CONFLICT_OVERRIDE:
+        numbers = ", ".join(f"#{p['number']}" for p in decision.approved_pulls)
+        console.log(
+            f"[orange]branch `{dest_branch}` would be rebased on `{remote}/{base_branch}` "
+            f"(bottom PR has conflicts; approvals on PR(s) {numbers} would be dismissed)[/]",
+        )
+        return
+
+    if decision.reason is approvals_mod.RebaseReason.FORCED:
+        console.log(
+            f"[orange]branch `{dest_branch}` would be rebased on `{remote}/{base_branch}` "
+            f"(--force-rebase; approvals may be dismissed)[/]",
+        )
+        return
+
+    # NO_APPROVALS: preserve existing dry-run behavior (only warn if behind).
+    if commits_behind > 0:
+        plural = "commit" if commits_behind == 1 else "commits"
+        console.log(
+            f"[orange]branch `{dest_branch}` is behind `{remote}/{base_branch}` "
+            f"by {commits_behind} {plural}, "
+            f"commit SHAs will differ after rebase[/]",
+        )
+
+
 # TODO(charly): fix code to conform to linter (number of arguments, local
 # variables, statements, positional arguments, branches)
 async def stack_push(
@@ -302,6 +397,7 @@ async def stack_push(
     token: str,
     *,
     skip_rebase: bool,
+    force_rebase: bool = False,
     next_only: bool,
     branch_prefix: str | None,
     dry_run: bool,
@@ -354,61 +450,22 @@ async def stack_push(
 
     stack_prefix = f"{branch_prefix}/{dest_branch}" if branch_prefix else dest_branch
 
-    if not dry_run:
-        if skip_rebase:
-            console.log(f"branch `{dest_branch}` rebase skipped (--skip-rebase)")
-        else:
-            from mergify_cli.stack import sync as stack_sync_mod
-
-            with console.status(
-                f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
-            ):
-                await utils.git("fetch", remote, base_branch)
-                sync_status = await stack_sync_mod.smart_rebase(
-                    github_server,
-                    token,
-                    trunk=trunk,
-                    branch_prefix=branch_prefix,
-                    author=author,
-                )
-            if sync_status.merged:
-                console.log(
-                    f"branch `{dest_branch}` rebased on `{remote}/{base_branch}` "
-                    f"(dropped {len(sync_status.merged)} merged commit(s))",
-                )
-            else:
-                console.log(
-                    f"branch `{dest_branch}` rebased on `{remote}/{base_branch}`",
-                )
-
-    rebase_required = False
-    if dry_run and not skip_rebase:
-        commits_behind = int(
-            await utils.git("rev-list", "--count", f"HEAD..{remote}/{base_branch}"),
-        )
-        rebase_required = commits_behind > 0
-
-        if rebase_required:
-            console.log(
-                f"[orange]branch `{dest_branch}` is behind `{remote}/{base_branch}` "
-                f"by {commits_behind} {'commit' if commits_behind == 1 else 'commits'}, "
-                f"commit SHAs will differ after rebase[/]",
-            )
-
-    base_commit_sha = await utils.git(
-        "merge-base",
-        "--fork-point",
-        f"{remote}/{base_branch}",
-    )
-    if not base_commit_sha:
-        console_error(
-            f"common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
-        )
-        sys.exit(ExitCode.STACK_NOT_FOUND)
-
-    notes_ref_fetched = await fetch_notes_ref(remote)
-
     async with utils.get_github_http_client(github_server, token) as client:
+        # Always fetch base branch — needed for merge-base and for any eventual rebase.
+        await utils.git("fetch", remote, base_branch)
+        notes_ref_fetched = await fetch_notes_ref(remote)
+
+        base_commit_sha = await utils.git(
+            "merge-base",
+            "--fork-point",
+            f"{remote}/{base_branch}",
+        )
+        if not base_commit_sha:
+            console_error(
+                f"common commit between `{remote}/{base_branch}` and `{dest_branch}` branches not found",
+            )
+            sys.exit(ExitCode.STACK_NOT_FOUND)
+
         with console.status("Retrieving latest pushed stacks"):
             remote_changes = await changes.get_remote_changes(
                 client,
@@ -430,11 +487,79 @@ async def stack_push(
                 next_only=next_only,
             )
 
-        if rebase_required:
-            # If the branch is behind, we know for sure that all the existing
-            # pull requests will need to be updated, so we can directly plan
-            # them as "update" instead of "skip-up-to-date".
-            planned_changes.replace_local_action(old="skip-up-to-date", new="update")
+        rebase_decision = await approvals_mod.decide_rebase(
+            client,
+            user,
+            repo,
+            planned_changes=planned_changes,
+            skip_rebase=skip_rebase,
+            force_rebase=force_rebase,
+        )
+
+        if not dry_run:
+            if rebase_decision.should_rebase:
+                from mergify_cli.stack import sync as stack_sync_mod
+
+                with console.status(
+                    f"Rebasing branch `{dest_branch}` on `{remote}/{base_branch}`...",
+                ):
+                    sync_status = await stack_sync_mod.smart_rebase(
+                        github_server,
+                        token,
+                        trunk=trunk,
+                        branch_prefix=branch_prefix,
+                        author=author,
+                    )
+                _log_rebase_performed(
+                    dest_branch,
+                    remote,
+                    base_branch,
+                    sync_status,
+                    rebase_decision,
+                )
+                # Rebase changed local SHAs; recompute base and planned changes.
+                base_commit_sha = await utils.git(
+                    "merge-base",
+                    "--fork-point",
+                    f"{remote}/{base_branch}",
+                )
+                if not base_commit_sha:
+                    console_error(
+                        f"common commit between `{remote}/{base_branch}` and "
+                        f"`{dest_branch}` branches not found after rebase",
+                    )
+                    sys.exit(ExitCode.STACK_NOT_FOUND)
+                planned_changes = await changes.get_changes(
+                    base_commit_sha=base_commit_sha,
+                    stack_prefix=stack_prefix,
+                    base_branch=base_branch,
+                    dest_branch=dest_branch,
+                    remote_changes=remote_changes,
+                    only_update_existing_pulls=only_update_existing_pulls,
+                    next_only=next_only,
+                )
+            else:
+                _log_rebase_skipped(dest_branch, rebase_decision)
+        else:
+            # Dry-run: always compute commits_behind (cheap), then delegate display.
+            commits_behind = int(
+                await utils.git("rev-list", "--count", f"HEAD..{remote}/{base_branch}"),
+            )
+            _log_rebase_dry_run(
+                dest_branch,
+                remote,
+                base_branch,
+                commits_behind,
+                rebase_decision,
+            )
+            if rebase_decision.should_rebase and commits_behind > 0:
+                # If the branch is behind, we know for sure that all the existing
+                # pull requests will need to be updated, so we can directly plan
+                # them as "update" instead of "skip-up-to-date".
+                planned_changes.replace_local_action(
+                    old="skip-up-to-date",
+                    new="update",
+                )
 
         await read_reasons(planned_changes.locals)
 

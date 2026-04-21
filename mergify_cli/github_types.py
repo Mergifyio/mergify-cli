@@ -21,6 +21,7 @@ class PullRequest(typing.TypedDict):
     merged_at: str | None
     merge_commit_sha: str | None
     mergeable: bool | None
+    mergeable_state: typing.NotRequired[str | None]
 
 
 class Comment(typing.TypedDict):

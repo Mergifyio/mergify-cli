@@ -71,6 +71,8 @@ async def get_default_token() -> str:
 
 
 def token_to_context(ctx: click.Context, _param: click.Parameter, value: str) -> None:
+    if ctx.obj is None:
+        ctx.obj = {}
     ctx.obj["token"] = value
 
 
@@ -79,6 +81,8 @@ def github_server_to_context(
     _param: click.Parameter,
     value: str,
 ) -> None:
+    if ctx.obj is None:
+        ctx.obj = {}
     ctx.obj["github_server"] = value
 
 
@@ -315,7 +319,13 @@ async def new(
     )
 
 
-@stack.command(help="Push/sync the pull requests stack")
+@stack.command(
+    help=(
+        "Push/sync the pull requests stack. "
+        "By default, `stack push` skips the rebase when any PR in the stack "
+        "has approvals; use --force-rebase to rebase anyway."
+    ),
+)
 @click.pass_context
 @click.option(
     "--setup",
@@ -339,6 +349,12 @@ async def new(
     "-R",
     is_flag=True,
     help="Skip stack rebase",
+)
+@click.option(
+    "--force-rebase",
+    is_flag=True,
+    help="Rebase the stack even if PRs have approvals "
+    "(mutually exclusive with --skip-rebase)",
 )
 @click.option(
     "--draft",
@@ -408,6 +424,7 @@ async def push(
     dry_run: bool,
     next_only: bool,
     skip_rebase: bool,
+    force_rebase: bool,
     draft: bool,
     keep_pull_request_title_and_body: bool,
     author: str,
@@ -417,6 +434,10 @@ async def push(
     no_revision_history: bool,
     no_verify: bool,
 ) -> None:
+    if skip_rebase and force_rebase:
+        msg = "--skip-rebase and --force-rebase are mutually exclusive"
+        raise click.UsageError(msg)
+
     if setup:
         # backward compat
         await stack_setup_mod.stack_setup()
@@ -430,6 +451,7 @@ async def push(
         github_server=ctx.obj["github_server"],
         token=ctx.obj["token"],
         skip_rebase=skip_rebase,
+        force_rebase=force_rebase,
         next_only=next_only,
         branch_prefix=branch_prefix,
         dry_run=dry_run,
