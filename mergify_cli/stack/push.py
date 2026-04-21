@@ -29,6 +29,7 @@ from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
+from mergify_cli.stack.note import NOTES_REF
 
 
 if typing.TYPE_CHECKING:
@@ -72,11 +73,47 @@ def format_pull_description(
     return message + depends_on_header
 
 
+async def fetch_notes_ref(remote: str) -> bool:
+    """Fetch ``refs/notes/mergify/stack`` from *remote* when the local ref
+    does not already exist.
+
+    Returns True when the local ref is present (either pre-existing or
+    newly fetched) so a lease SHA is available for the subsequent push.
+    Returns False only on first push (ref absent both locally and remotely).
+
+    If the local ref already exists (e.g. from a prior ``stack note`` that
+    hasn't been pushed yet), the fetch is skipped to avoid clobbering
+    unpushed local notes. A divergent remote is then caught by the
+    ``--force-with-lease`` check at push time.
+    """
+    try:
+        await utils.git("rev-parse", "--verify", NOTES_REF)
+    except utils.CommandError:
+        pass
+    else:
+        # Local ref exists; don't overwrite.
+        return True
+
+    try:
+        await utils.git(
+            "fetch",
+            remote,
+            "--no-write-fetch-head",
+            f"{NOTES_REF}:{NOTES_REF}",
+        )
+    except utils.CommandError as exc:
+        if b"couldn't find remote ref" not in exc.stdout:
+            raise
+        return False
+    return True
+
+
 async def push_branches(
     remote: str,
     local_changes: list[changes.LocalChange],
     *,
     no_verify: bool = False,
+    notes_ref_fetched: bool = False,
 ) -> None:
     changes_to_push = [c for c in local_changes if c.action in {"create", "update"}]
     if not changes_to_push:
@@ -85,16 +122,24 @@ async def push_branches(
     lease_args: list[str] = []
     for c in changes_to_push:
         if c.action == "update":
-            # Explicit lease: reject push if the remote branch has moved
-            # since we last read it via the GitHub API.
             lease_args.append(
                 f"--force-with-lease=refs/heads/{c.dest_branch}:{c.pull_head_sha}",
             )
         else:
-            # New branch — no remote ref expected; force is sufficient.
             lease_args.append(f"--force-with-lease=refs/heads/{c.dest_branch}:")
 
+    notes_local_sha: str | None = None
+    try:
+        notes_local_sha = await utils.git("rev-parse", "--verify", NOTES_REF)
+    except utils.CommandError:
+        pass
+
+    if notes_local_sha is not None and notes_ref_fetched:
+        lease_args.append(f"--force-with-lease={NOTES_REF}:{notes_local_sha}")
+
     refspecs = [f"{c.commit_sha}:refs/heads/{c.dest_branch}" for c in changes_to_push]
+    if notes_local_sha is not None:
+        refspecs.append(f"+{NOTES_REF}:{NOTES_REF}")
 
     no_verify_args = ("--no-verify",) if no_verify else ()
     os.environ["MERGIFY_STACK_PUSH"] = "1"
@@ -109,6 +154,34 @@ async def push_branches(
         )
     finally:
         os.environ.pop("MERGIFY_STACK_PUSH", None)
+
+
+async def read_reasons(local_changes: list[changes.LocalChange]) -> None:
+    """Populate ``c.reason`` from ``refs/notes/mergify/stack`` for each
+    change in ``create`` or ``update`` state.
+
+    Commits without a note get an empty string. Unexpected git errors
+    (missing binary, permission failures, corrupted object store, …)
+    propagate to the caller so real problems surface instead of being
+    silently swallowed.
+    """
+
+    async def read_one(c: changes.LocalChange) -> None:
+        if c.action not in {"create", "update"}:
+            return
+        try:
+            c.reason = await utils.git(
+                "notes",
+                f"--ref={NOTES_REF}",
+                "show",
+                c.commit_sha,
+            )
+        except utils.CommandError as exc:
+            if b"no note found" not in exc.stdout:
+                raise
+            c.reason = ""
+
+    await asyncio.gather(*(read_one(c) for c in local_changes))
 
 
 async def _git_patch_id(sha: str) -> str:
@@ -333,6 +406,8 @@ async def stack_push(
         )
         sys.exit(ExitCode.STACK_NOT_FOUND)
 
+    notes_ref_fetched = await fetch_notes_ref(remote)
+
     async with utils.get_github_http_client(github_server, token) as client:
         with console.status("Retrieving latest pushed stacks"):
             remote_changes = await changes.get_remote_changes(
@@ -360,6 +435,8 @@ async def stack_push(
             # pull requests will need to be updated, so we can directly plan
             # them as "update" instead of "skip-up-to-date".
             planned_changes.replace_local_action(old="skip-up-to-date", new="update")
+
+        await read_reasons(planned_changes.locals)
 
         changes.display_plan(
             planned_changes,
@@ -393,7 +470,12 @@ async def stack_push(
                     )
 
         with console.status("Pushing stacked branches..."):
-            await push_branches(remote, planned_changes.locals, no_verify=no_verify)
+            await push_branches(
+                remote,
+                planned_changes.locals,
+                no_verify=no_verify,
+                notes_ref_fetched=notes_ref_fetched,
+            )
 
         console.log("Updating and/or creating stacked pull requests:", style="green")
 
@@ -500,6 +582,19 @@ class StackComment:
         ) or comment["body"].startswith(StackComment._STACK_COMMENT_OLD_HEADER)
 
 
+_MAX_REASON_LEN = 200
+
+
+def _escape_reason(reason: str) -> str:
+    """Escape a reason for a markdown table cell (no newlines, no pipes)."""
+    if not reason:
+        return ""
+    s = reason.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+    if len(s) > _MAX_REASON_LEN:
+        s = s[: _MAX_REASON_LEN - 1] + "…"
+    return s
+
+
 @dataclasses.dataclass
 class _RevisionEntry:
     number: int
@@ -519,6 +614,8 @@ class _RevisionEntry:
         if self.timestamp is None:
             return None
         return self.timestamp.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    reason: str = ""
 
 
 @dataclasses.dataclass
@@ -556,10 +653,11 @@ class RevisionHistoryComment:
         new_sha: str,
         change_type: str,
         timestamp: datetime.datetime,
+        reason: str = "",
     ) -> RevisionHistoryComment:
         entries = [
             _RevisionEntry(1, "initial", None, old_sha, timestamp),
-            _RevisionEntry(2, change_type, old_sha, new_sha, timestamp),
+            _RevisionEntry(2, change_type, old_sha, new_sha, timestamp, reason=reason),
         ]
         return cls(
             github_server=github_server,
@@ -575,10 +673,18 @@ class RevisionHistoryComment:
         new_sha: str,
         change_type: str,
         timestamp: datetime.datetime,
+        reason: str = "",
     ) -> None:
         next_number = len(self.entries) + 1
         self.entries.append(
-            _RevisionEntry(next_number, change_type, old_sha, new_sha, timestamp),
+            _RevisionEntry(
+                next_number,
+                change_type,
+                old_sha,
+                new_sha,
+                timestamp,
+                reason=reason,
+            ),
         )
 
     def _render_entry(self, entry: _RevisionEntry) -> str:
@@ -587,9 +693,10 @@ class RevisionHistoryComment:
         else:
             url = self._compare_url(entry.old_sha, entry.new_sha)
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
+        reason_cell = _escape_reason(entry.reason)
         return (
-            f"| {entry.number} | {entry.change_type} | {changes_cell} "
-            f"| {entry.timestamp_human} |"
+            f"| {entry.number} | {entry.change_type} | {changes_cell} | "
+            f"{reason_cell} | {entry.timestamp_human} |"
         )
 
     def _json_marker(self, pull_number: int) -> str:
@@ -603,6 +710,7 @@ class RevisionHistoryComment:
                     "old_sha": e.old_sha,
                     "new_sha": e.new_sha,
                     "timestamp_iso": e.timestamp_iso,
+                    "reason": e.reason,
                     "compare_url": (
                         None
                         if e.old_sha is None
@@ -621,8 +729,8 @@ class RevisionHistoryComment:
     def body(self, pull_number: int) -> str:
         lines = [
             self.REVISION_COMMENT_FIRST_LINE,
-            "| # | Type | Changes | Date |",
-            "|---|------|---------|------|",
+            "| # | Type | Changes | Reason | Date |",
+            "|---|------|---------|--------|------|",
         ]
         for i, entry in enumerate(self.entries):
             if i < len(self._raw_rows):
@@ -636,8 +744,11 @@ class RevisionHistoryComment:
         r"^<!-- mergify-revision-data: (?P<payload>\{.*\}) -->$",
     )
 
-    _ROW_RE: typing.ClassVar[re.Pattern[str]] = re.compile(
+    _ROW_RE_4: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^\| (\d+) \| (\w+) \| .+ \| (.+) \|$",
+    )
+    _ROW_RE_5: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^\| (\d+) \| (\w+) \| .+ \| (.*) \| (.+) \|$",
     )
 
     @classmethod
@@ -656,20 +767,39 @@ class RevisionHistoryComment:
         raw_rows: list[str] = []
         marker_entries: list[typing.Any] | None = None
         for line in body.splitlines():
-            m = cls._ROW_RE.match(line)
-            if m:
-                number = int(m.group(1))
-                change_type = m.group(2)
-                timestamp_str = m.group(3).strip()
+            m5 = cls._ROW_RE_5.match(line)
+            if m5:
+                number = int(m5.group(1))
+                change_type = m5.group(2)
+                timestamp_str = m5.group(4).strip()
                 try:
-                    timestamp = datetime.datetime.strptime(
+                    parsed_timestamp: datetime.datetime | None = (
+                        datetime.datetime.strptime(
+                            timestamp_str,
+                            "%Y-%m-%d %H:%M UTC",
+                        ).replace(tzinfo=datetime.UTC)
+                    )
+                except ValueError:
+                    parsed_timestamp = None
+                entries.append(
+                    _RevisionEntry(number, change_type, None, "", parsed_timestamp),
+                )
+                raw_rows.append(line)
+                continue
+            m4 = cls._ROW_RE_4.match(line)
+            if m4:
+                number = int(m4.group(1))
+                change_type = m4.group(2)
+                timestamp_str = m4.group(3).strip()
+                try:
+                    parsed_timestamp = datetime.datetime.strptime(
                         timestamp_str,
                         "%Y-%m-%d %H:%M UTC",
                     ).replace(tzinfo=datetime.UTC)
                 except ValueError:
-                    timestamp = None
+                    parsed_timestamp = None
                 entries.append(
-                    _RevisionEntry(number, change_type, None, "", timestamp),
+                    _RevisionEntry(number, change_type, None, "", parsed_timestamp),
                 )
                 raw_rows.append(line)
                 continue
@@ -712,6 +842,9 @@ class RevisionHistoryComment:
                         pass
                 elif timestamp_iso is None:
                     entry.timestamp = None
+                reason = data.get("reason")
+                if isinstance(reason, str):
+                    entry.reason = reason
 
         return cls(
             github_server=github_server,
@@ -819,6 +952,7 @@ async def _update_revision_for_pull(
                         new_sha=new_sha,
                         change_type=change_type,
                         timestamp=timestamp,
+                        reason=change.reason,
                     )
                     new_body = parsed.body(pull_number)
                     if comment["body"] != new_body:
@@ -836,6 +970,7 @@ async def _update_revision_for_pull(
                     new_sha=new_sha,
                     change_type=change_type,
                     timestamp=timestamp,
+                    reason=change.reason,
                 )
                 await client.patch(
                     comment["url"],
@@ -852,6 +987,7 @@ async def _update_revision_for_pull(
             new_sha=new_sha,
             change_type=change_type,
             timestamp=timestamp,
+            reason=change.reason,
         )
         await client.post(
             f"/repos/{user}/{repo}/issues/{pull_number}/comments",

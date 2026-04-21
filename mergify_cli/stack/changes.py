@@ -183,6 +183,7 @@ class LocalChange(Change):
     base_branch: str
     dest_branch: str
     action: ActionT
+    reason: str = ""
 
     @property
     def commit_short_sha(self) -> str:
