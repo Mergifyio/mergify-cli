@@ -36,6 +36,16 @@ pub enum CliError {
     #[error("{0}")]
     Conflict(String),
 
+    /// GitHub API failure (HTTP error against github.com). Maps to
+    /// [`ExitCode::GitHubApiError`].
+    #[error("{0}")]
+    GitHubApi(String),
+
+    /// Mergify API failure (HTTP error against the Mergify
+    /// service). Maps to [`ExitCode::MergifyApiError`].
+    #[error("{0}")]
+    MergifyApi(String),
+
     /// Unclassified runtime failure (I/O error, bug, third-party
     /// panic captured and rethrown). Maps to
     /// [`ExitCode::GenericError`].
@@ -57,6 +67,8 @@ impl CliError {
             Self::InvalidState(_) => ExitCode::InvalidState,
             Self::StackNotFound(_) => ExitCode::StackNotFound,
             Self::Conflict(_) => ExitCode::Conflict,
+            Self::GitHubApi(_) => ExitCode::GitHubApiError,
+            Self::MergifyApi(_) => ExitCode::MergifyApiError,
             Self::Generic(_) | Self::Io(_) => ExitCode::GenericError,
         }
     }
@@ -83,6 +95,14 @@ mod tests {
         assert_eq!(
             CliError::Conflict("x".into()).exit_code(),
             ExitCode::Conflict
+        );
+        assert_eq!(
+            CliError::GitHubApi("x".into()).exit_code(),
+            ExitCode::GitHubApiError,
+        );
+        assert_eq!(
+            CliError::MergifyApi("x".into()).exit_code(),
+            ExitCode::MergifyApiError,
         );
         assert_eq!(
             CliError::Generic("x".into()).exit_code(),
