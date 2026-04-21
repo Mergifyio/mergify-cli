@@ -1714,3 +1714,99 @@ def test_revision_entry_timestamp_iso_returns_none_for_unknown() -> None:
     )
     assert entry.timestamp_iso is None
     assert not entry.timestamp_human
+
+
+def test_revision_history_parse_rehydrates_from_json_marker() -> None:
+    original = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = original.body(pull_number=7)
+
+    parsed = push.RevisionHistoryComment.parse(
+        body,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    assert parsed.entries[0].old_sha is None
+    assert parsed.entries[0].new_sha == "abc1234567890abcdef1234567890abcdef123456"
+    assert parsed.entries[0].timestamp_iso == "2026-04-14T14:30:00Z"
+    assert parsed.entries[1].old_sha == "abc1234567890abcdef1234567890abcdef123456"
+    assert parsed.entries[1].new_sha == "def5678901234567890abcdef1234567890abcdef"
+    assert parsed.entries[1].timestamp_iso == "2026-04-14T14:30:00Z"
+
+
+def test_revision_history_parse_without_json_marker_recovers_timestamp() -> None:
+    """Legacy bodies (no JSON marker) recover timestamp from the rendered row.
+
+    SHAs cannot be recovered from the Markdown row (only short SHAs are
+    rendered), but the human-readable timestamp string is parseable back to
+    a datetime, so timestamp_iso is non-null even without a JSON marker.
+    """
+    legacy_body = (
+        "### Revision history\n"
+        "| # | Type | Changes | Date |\n"
+        "|---|------|---------|------|\n"
+        "| 1 | initial | `abc1234` | 2026-04-14 14:30 UTC |\n"
+        "| 2 | content | [`abc1234 \u2192 def5678`]"
+        "(https://github.com/owner/repo/compare/abc1234...def5678) | 2026-04-14 14:30 UTC |\n"
+    )
+    parsed = push.RevisionHistoryComment.parse(
+        legacy_body,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    assert parsed.entries[0].old_sha is None
+    assert not parsed.entries[0].new_sha
+    assert parsed.entries[0].timestamp_iso == "2026-04-14T14:30:00Z"
+    assert parsed.entries[1].old_sha is None
+    assert not parsed.entries[1].new_sha
+    assert parsed.entries[1].timestamp_iso == "2026-04-14T14:30:00Z"
+
+
+def test_revision_history_round_trip_preserves_full_data() -> None:
+    original = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    parsed = push.RevisionHistoryComment.parse(
+        original.body(pull_number=1),
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    parsed.append(
+        old_sha="def5678901234567890abcdef1234567890abcdef",
+        new_sha="789abcdef01234567890abcdef01234567890abcd",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
+    )
+    new_body = parsed.body(pull_number=1)
+
+    marker_prefix = "<!-- mergify-revision-data: "
+    marker_line = next(
+        line for line in new_body.splitlines() if line.startswith(marker_prefix)
+    )
+    payload = json.loads(marker_line[len(marker_prefix) : -len(" -->")])
+    # Every entry has non-empty SHAs and timestamps (no degradation).
+    assert all(e["new_sha"] for e in payload["entries"])
+    assert all(e["timestamp_iso"] for e in payload["entries"])
+    # Entries 2 and 3 have old_sha set; entry 1 is "initial" with old_sha=None.
+    assert payload["entries"][0]["old_sha"] is None
+    assert payload["entries"][1]["old_sha"] is not None
+    assert payload["entries"][2]["old_sha"] is not None
