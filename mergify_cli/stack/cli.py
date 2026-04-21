@@ -16,6 +16,7 @@ from mergify_cli.stack import edit as stack_edit_mod
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import move as stack_move_mod
 from mergify_cli.stack import new as stack_new_mod
+from mergify_cli.stack import note as stack_note_mod
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import reorder as stack_reorder_mod
@@ -200,6 +201,46 @@ async def setup(*, force: bool, check: bool) -> None:
 @utils.run_with_asyncio
 async def edit(*, commit: str | None) -> None:
     await stack_edit_mod.stack_edit(commit_prefix=commit)
+
+
+@stack.command(help="Attach a 'why was this commit amended' note to a commit")
+@click.argument("commit", required=False, default=None)
+@click.option(
+    "-m",
+    "--message",
+    "message",
+    default=None,
+    help="Note message. If omitted, opens $GIT_EDITOR.",
+)
+@click.option(
+    "--append",
+    "do_append",
+    is_flag=True,
+    help="Append to an existing note instead of replacing",
+)
+@click.option(
+    "--remove",
+    "do_remove",
+    is_flag=True,
+    help="Remove the note on the target commit",
+)
+@utils.run_with_asyncio
+async def note(
+    *,
+    commit: str | None,
+    message: str | None,
+    do_append: bool,
+    do_remove: bool,
+) -> None:
+    if do_remove and (message is not None or do_append):
+        msg = "--remove cannot be combined with --message or --append"
+        raise click.UsageError(msg)
+    await stack_note_mod.stack_note(
+        commit=commit,
+        message=message,
+        append=do_append,
+        remove=do_remove,
+    )
 
 
 @stack.command(help="Reorder the stack's commits")

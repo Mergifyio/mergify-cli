@@ -20,6 +20,7 @@ the CLI handles creation, updates, rebasing, and synchronization.
 | `mergify stack list` | List commits and their associated PRs (with CI/review status) |
 | `mergify stack sync` | Fetch trunk, remove merged commits, rebase |
 | `mergify stack edit [COMMIT]` | Interactive edit of the stack history |
+| `mergify stack note [COMMIT]` | Attach a "why this commit was amended" note to a commit |
 | `mergify stack reorder C A B` | Reorder commits in the stack |
 | `mergify stack move X before Y` | Move a commit within the stack |
 | `mergify stack checkout` | Check out a stack from a remote repository |
