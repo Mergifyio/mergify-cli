@@ -1,0 +1,20 @@
+[package]
+name = "mergify-cli"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "mergify CLI — Rust implementation."
+publish = false
+
+[[bin]]
+name = "mergify"
+path = "src/main.rs"
+
+[dependencies]
+mergify-core = { path = "../mergify-core" }
+
+[lints]
+workspace = true
