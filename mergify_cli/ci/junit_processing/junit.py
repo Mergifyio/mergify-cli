@@ -69,14 +69,15 @@ async def junit_to_spans(
     # strict on the format, as there is no official standard and at least 3 versions
     # in Junit itself, most implementations never implement 100% of the original format.
 
-    if root.tag != "testsuites":
-        msg = "no testsuites tag found"
-        raise InvalidJunitXMLError(msg)
+    if root.tag == "testsuites":
+        testsuites = root.findall(".//{*}testsuite")
+    elif root.tag == "testsuite":
+        testsuites = [root, *root.findall(".//{*}testsuite")]
+    else:
+        testsuites = []
 
-    testsuites = root.findall(".//{*}testsuite")
     if not testsuites:
-        msg = "no testsuite tag found"
-        raise InvalidJunitXMLError(msg)
+        raise InvalidJunitXMLError("no testsuites or testsuite tag found")
 
     now = time.time_ns()
 

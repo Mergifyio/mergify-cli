@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Outer" time="3.0">
+    <testcase name="directCase" classname="Outer" time="1.0" />
+    <testsuite name="Inner" time="2.0">
+        <testcase name="nestedCase" classname="Inner" time="2.0" />
+    </testsuite>
+</testsuite>

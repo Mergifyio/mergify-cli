@@ -555,6 +555,243 @@ async def test_traceparent_injection(
         assert span.context.trace_id == 0x80E1AFED08E019FC1110464CFA66635C
 
 
+@mock.patch.object(detector, "get_ci_provider", return_value="github_actions")
+@mock.patch.object(detector, "get_pipeline_name", return_value="PIPELINE")
+@mock.patch.object(detector, "get_job_name", return_value="JOB")
+@mock.patch.object(
+    detector,
+    "get_cicd_pipeline_runner_name",
+    return_value="self-hosted",
+)
+@mock.patch.object(detector, "get_cicd_pipeline_run_id", return_value=123)
+@mock.patch.object(detector, "get_cicd_pipeline_run_attempt", return_value=1)
+@mock.patch.object(
+    detector,
+    "get_head_sha",
+    return_value="3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+)
+@mock.patch.object(
+    detector,
+    "get_head_ref_name",
+    return_value="refs/heads/main",
+)
+async def test_parse_single_suite(
+    _get_ci_provider: mock.Mock,
+    _get_pipeline_name: mock.Mock,
+    _get_job_name: mock.Mock,
+    _get_cicd_pipeline_runner_name: mock.Mock,
+    _get_cicd_pipeline_run_id: mock.Mock,
+    _get_cicd_pipeline_run_attempt: mock.Mock,
+    _get_head_sha: mock.Mock,
+    _get_head_ref_name: mock.Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MERGIFY_TEST_JOB_NAME", "foobar")
+    filename = (
+        pathlib.Path(__file__).parent / "fixtures" / "junit_example_single_suite.xml"
+    )
+    run_id = (32312).to_bytes(8, "big").hex()
+    spans = await junit.junit_to_spans(
+        run_id,
+        filename.read_bytes(),
+        "python",
+        "unittest",
+    )
+    assert spans[0].parent is None
+
+    dictified_spans = [json.loads(span.to_json()) for span in spans]
+    trace_id = "0x" + opentelemetry.trace.span.format_trace_id(
+        spans[1].context.trace_id,
+    )
+    resource_attributes = {
+        "test.run.id": run_id,
+        "cicd.pipeline.name": "PIPELINE",
+        "cicd.pipeline.task.name": "JOB",
+        "cicd.pipeline.run.id": 123,
+        "cicd.pipeline.run.attempt": 1,
+        "cicd.pipeline.runner.name": "self-hosted",
+        "cicd.provider.name": "github_actions",
+        "vcs.ref.head.revision": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+        "vcs.ref.head.name": "refs/heads/main",
+        "service.name": "unknown_service",
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": anys.ANY_STR,
+        "mergify.test.job.name": "foobar",
+    }
+    assert dictified_spans == [
+        {
+            "attributes": {
+                "test.framework": "unittest",
+                "test.language": "python",
+                "test.scope": "session",
+            },
+            "context": {
+                "span_id": anys.ANY_STR,
+                "trace_id": trace_id,
+                "trace_state": "[]",
+            },
+            "end_time": anys.ANY_DATETIME_STR,
+            "events": [],
+            "kind": "SpanKind.INTERNAL",
+            "links": [],
+            "name": "test session",
+            "parent_id": None,
+            "resource": {
+                "attributes": resource_attributes,
+                "schema_url": "",
+            },
+            "start_time": anys.ANY_DATETIME_STR,
+            "status": {
+                "status_code": "UNSET",
+            },
+        },
+        {
+            "attributes": {
+                "test.case.name": "Tests.Registration",
+                "test.scope": "suite",
+                "test.framework": "unittest",
+                "test.language": "python",
+            },
+            "context": {
+                "span_id": anys.ANY_STR,
+                "trace_id": trace_id,
+                "trace_state": "[]",
+            },
+            "end_time": anys.ANY_DATETIME_STR,
+            "events": [],
+            "kind": "SpanKind.INTERNAL",
+            "links": [],
+            "name": "Tests.Registration",
+            "parent_id": anys.ANY_STR,
+            "resource": {
+                "attributes": resource_attributes,
+                "schema_url": "",
+            },
+            "start_time": anys.ANY_DATETIME_STR,
+            "status": {
+                "status_code": "UNSET",
+            },
+        },
+        {
+            "attributes": {
+                "test.case.name": "Tests.Registration.testCase1",
+                "code.function.name": "Tests.Registration.testCase1",
+                "test.case.result.status": "passed",
+                "test.scope": "case",
+                "test.framework": "unittest",
+                "test.language": "python",
+                "cicd.test.quarantined": False,
+            },
+            "context": {
+                "span_id": anys.ANY_STR,
+                "trace_id": trace_id,
+                "trace_state": "[]",
+            },
+            "end_time": anys.ANY_DATETIME_STR,
+            "events": [],
+            "kind": "SpanKind.INTERNAL",
+            "links": [],
+            "name": "Tests.Registration.testCase1",
+            "parent_id": anys.ANY_STR,
+            "resource": {
+                "attributes": resource_attributes,
+                "schema_url": "",
+            },
+            "start_time": anys.ANY_DATETIME_STR,
+            "status": {
+                "status_code": "OK",
+            },
+        },
+        {
+            "attributes": {
+                "test.case.name": "Tests.Registration.testCase2",
+                "code.function.name": "Tests.Registration.testCase2",
+                "test.case.result.status": "skipped",
+                "test.scope": "case",
+                "test.framework": "unittest",
+                "test.language": "python",
+                "cicd.test.quarantined": False,
+            },
+            "context": {
+                "span_id": anys.ANY_STR,
+                "trace_id": trace_id,
+                "trace_state": "[]",
+            },
+            "end_time": anys.ANY_DATETIME_STR,
+            "events": [],
+            "kind": "SpanKind.INTERNAL",
+            "links": [],
+            "name": "Tests.Registration.testCase2",
+            "parent_id": anys.ANY_STR,
+            "resource": {
+                "attributes": resource_attributes,
+                "schema_url": "",
+            },
+            "start_time": anys.ANY_DATETIME_STR,
+            "status": {
+                "status_code": "OK",
+            },
+        },
+        {
+            "attributes": {
+                "exception.message": "invalid literal for int() with base 10: 'foobar'",
+                "exception.stacktrace": "bip, bip, bip, error!",
+                "exception.type": "ValueError",
+                "test.case.name": "Tests.Registration.testCase3",
+                "code.function.name": "Tests.Registration.testCase3",
+                "test.case.result.status": "failed",
+                "test.scope": "case",
+                "test.framework": "unittest",
+                "test.language": "python",
+                "cicd.test.quarantined": False,
+            },
+            "context": {
+                "span_id": anys.ANY_STR,
+                "trace_id": trace_id,
+                "trace_state": "[]",
+            },
+            "end_time": anys.ANY_DATETIME_STR,
+            "events": [],
+            "kind": "SpanKind.INTERNAL",
+            "links": [],
+            "name": "Tests.Registration.testCase3",
+            "parent_id": anys.ANY_STR,
+            "resource": {
+                "attributes": resource_attributes,
+                "schema_url": "",
+            },
+            "start_time": anys.ANY_DATETIME_STR,
+            "status": {
+                "status_code": "ERROR",
+            },
+        },
+    ]
+
+
+async def test_parse_single_suite_with_nested_suites() -> None:
+    filename = (
+        pathlib.Path(__file__).parent
+        / "fixtures"
+        / "junit_example_nested_single_suite.xml"
+    )
+    run_id = (32312).to_bytes(8, "big").hex()
+    spans = await junit.junit_to_spans(run_id, filename.read_bytes())
+
+    suite_names = [
+        span.attributes["test.case.name"]
+        for span in spans
+        if span.attributes is not None and span.attributes.get("test.scope") == "suite"
+    ]
+    case_names = [
+        span.attributes["test.case.name"]
+        for span in spans
+        if span.attributes is not None and span.attributes.get("test.scope") == "case"
+    ]
+    assert suite_names == ["Outer", "Inner"]
+    assert case_names == ["Outer.directCase", "Inner.nestedCase"]
+
+
 # ── Exit code pinning tests ──
 
 

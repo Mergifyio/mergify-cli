@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Tests.Registration" time="6.605871">
+    <testcase name="testCase1" classname="Tests.Registration" time="2.113871" />
+    <testcase name="testCase2" classname="Tests.Registration" time="1.051">
+        <skipped message="Test was skipped." />
+    </testcase>
+    <testcase name="testCase3" classname="Tests.Registration" time="3.441">
+        <error message="invalid literal for int() with base 10: 'foobar'" type="ValueError">
+            bip, bip, bip, error!
+        </error>
+    </testcase>
+</testsuite>
