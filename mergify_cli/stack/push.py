@@ -512,7 +512,13 @@ async def stack_push(
         ]
 
         with console.status("Updating comments..."):
-            await create_or_update_comments(client, user, repo, changes_to_comment)
+            await create_or_update_comments(
+                client,
+                user,
+                repo,
+                changes_to_comment,
+                stack_id=dest_branch,
+            )
 
         console.log("[green]Comments updated.[/]")
 
@@ -556,12 +562,45 @@ class StackComment:
         "This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):\n"
     )
 
-    def body(self, current_pull: github_types.PullRequest) -> str:
+    def _json_marker(
+        self,
+        current_pull: github_types.PullRequest,
+        stack_id: str,
+    ) -> str:
+        current_number = int(current_pull["number"])
+        payload = {
+            "schema_version": 1,
+            "stack_id": stack_id,
+            "pulls": [
+                {
+                    "number": int(change.pull["number"]),
+                    "change_id": change.id,
+                    "head_sha": change.commit_sha,
+                    "base_branch": change.base_branch,
+                    "dest_branch": change.dest_branch,
+                    "is_current": int(change.pull["number"]) == current_number,
+                }
+                for change in self.local_changes
+                if change.pull is not None
+            ],
+        }
+        return (
+            "<!-- mergify-stack-data: "
+            + json.dumps(payload, separators=(",", ":"))
+            + " -->"
+        )
+
+    def body(
+        self,
+        current_pull: github_types.PullRequest,
+        stack_id: str,
+    ) -> str:
         body = self.STACK_COMMENT_HEADER
         body += "\n"
         body += "| # | Pull Request | Link | |\n"
         body += "|--:|---|---|---|\n"
 
+        current_number = int(current_pull["number"])
         row = 0
         for change in self.local_changes:
             if change.pull is None:
@@ -570,9 +609,10 @@ class StackComment:
             pull = change.pull
             title = pull["title"].replace("|", "\\|")
             link = f"[#{pull['number']}]({pull['html_url']})"
-            status = "👈" if pull == current_pull else ""
+            status = "👈" if int(pull["number"]) == current_number else ""
             body += f"| {row} | {title} | {link} | {status} |\n"
 
+        body += self._json_marker(current_pull, stack_id) + "\n"
         return body
 
     @staticmethod
@@ -861,10 +901,11 @@ async def _update_comment_for_pull(
     repo: str,
     pull: github_types.PullRequest,
     stack_comment: StackComment,
+    stack_id: str,
     total_pulls: int,
     sem: asyncio.Semaphore,
 ) -> None:
-    new_body = stack_comment.body(pull)
+    new_body = stack_comment.body(pull, stack_id)
 
     async with sem:
         r = await client.get(
@@ -893,6 +934,7 @@ async def create_or_update_comments(
     user: str,
     repo: str,
     local_changes: list[changes.LocalChange],
+    stack_id: str,
 ) -> None:
     stack_comment = StackComment(local_changes)
     pulls = [c.pull for c in local_changes if c.pull is not None]
@@ -906,6 +948,7 @@ async def create_or_update_comments(
                 repo,
                 pull,
                 stack_comment,
+                stack_id,
                 len(pulls),
                 sem,
             )
