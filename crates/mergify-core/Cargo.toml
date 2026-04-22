@@ -1,0 +1,13 @@
+[package]
+name = "mergify-core"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared foundations for mergify-cli: HTTP, auth, errors, output, git, config, prompts."
+publish = false
+
+[lints]
+workspace = true
