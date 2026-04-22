@@ -10,7 +10,6 @@ shared:
 
 queue_rules:
   - name: dependencies
-    autoqueue: true
     queue_conditions:
       - base=main
       - label!=manual merge
@@ -22,7 +21,6 @@ queue_rules:
     batch_max_wait_time: 5min
     commit_message_template:
   - name: default
-    autoqueue: true
     queue_conditions:
       - base=main
       - label!=manual merge
@@ -68,3 +66,4 @@ merge_queue:
 
 merge_protections_settings:
   reporting_method: deployments
+  auto_merge: true
