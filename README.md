@@ -37,7 +37,7 @@ metadata.
 
 | Command | Description |
 |---------|-------------|
-| `mergify ci junit-process FILES...` | Upload JUnit XML reports and evaluate quarantine |
+| `mergify ci junit-process FILES...` | Upload JUnit XML reports (literals or quoted glob patterns) and evaluate quarantine |
 | `mergify ci git-refs` | Detect base/head git references for the current PR |
 | `mergify ci scopes` | Detect CI scopes impacted by changed files |
 | `mergify ci scopes-send` | Send scopes tied to a pull request to Mergify |
@@ -99,7 +99,11 @@ mergify stack sync                   # Sync with upstream
 mergify stack checkout my-feature    # Checkout an existing stack from GitHub
 
 # CI insights
-mergify ci junit-process results.xml # Upload test results + quarantine
+mergify ci junit-process results.xml   # Upload test results + quarantine
+mergify ci junit-process 'reports/**/*.xml'
+                                       # Quote globs so Mergify expands them
+                                       # instead of the shell (recommended
+                                       # for large test suites).
 mergify ci scopes                    # Detect impacted scopes
 mergify ci git-refs                  # Detect base/head refs
 mergify ci git-refs --format=shell   # Emit MERGIFY_GIT_REFS_* vars for `eval`

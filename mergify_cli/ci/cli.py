@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import json
 import os
 import pathlib
@@ -19,34 +20,57 @@ from mergify_cli.dym import DYMGroup
 from mergify_cli.exit_codes import ExitCode
 
 
-class JUnitFile(click.Path):
-    """Custom Click parameter type for JUnit files with better error messages."""
+def _expand_junit_patterns(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: tuple[str, ...],
+) -> tuple[str, ...]:
+    # Accept raw glob patterns and expand them here so callers don't have to
+    # rely on shell expansion — preferable for large test suites.
+    results: dict[str, None] = {}
+    for entry in value:
+        literal = pathlib.Path(entry)
+        # Existing literal paths take precedence so filenames that happen to
+        # contain glob metacharacters (e.g. `report[1].xml`) keep working.
+        if literal.is_file():
+            results.setdefault(entry, None)
+            continue
 
-    def __init__(self) -> None:
-        super().__init__(exists=True, dir_okay=False)
-
-    def convert(  # type: ignore[override]
-        self,
-        value: str,
-        param: click.Parameter | None,
-        ctx: click.Context | None,
-    ) -> str:
-        try:
-            return super().convert(value, param, ctx)
-        except click.BadParameter as e:
-            if "does not exist" in str(e):
-                # Provide a more helpful error message
-                error_msg = (
-                    f"JUnit XML file '{value}' does not exist. \n\n"
-                    "This usually indicates that a previous CI step failed to generate the test results.\n"
-                    "Please check if your test execution step completed successfully and produced the expected output file."
-                )
+        if glob.has_magic(entry):
+            matches = [
+                match
+                for match in glob.iglob(entry, recursive=True)  # noqa: PTH207
+                if pathlib.Path(match).is_file()
+            ]
+            if not matches:
                 raise click.BadParameter(
-                    error_msg,
+                    f"Pattern '{entry}' did not match any file.\n\n"
+                    "This usually indicates that a previous CI step failed to generate the test results.\n"
+                    "Please check if your test execution step completed successfully and produced the expected output files.",
                     ctx=ctx,
                     param=param,
-                ) from e
-            raise
+                )
+
+            results.update(dict.fromkeys(matches))
+            continue
+
+        if literal.is_dir():
+            raise click.BadParameter(
+                f"'{entry}' is a directory, not a JUnit XML file.\n\n"
+                "Pass a file path or a quoted glob pattern (e.g. 'reports/**/*.xml') instead.",
+                ctx=ctx,
+                param=param,
+            )
+
+        raise click.BadParameter(
+            f"JUnit XML file '{entry}' does not exist.\n\n"
+            "This usually indicates that a previous CI step failed to generate the test results.\n"
+            "Please check if your test execution step completed successfully and produced the expected output file.",
+            ctx=ctx,
+            param=param,
+        )
+
+    return tuple(results)
 
 
 def _process_tests_target_branch(
@@ -122,7 +146,7 @@ def ci(ctx: click.Context) -> None:
     "files",
     nargs=-1,
     required=True,
-    type=JUnitFile(),
+    callback=_expand_junit_patterns,
 )
 @utils.run_with_asyncio
 async def junit_upload(
@@ -149,8 +173,17 @@ async def junit_upload(
 
 
 @ci.command(
-    help="""Upload JUnit XML reports and ignore failed tests with Mergify's CI Insights Quarantine""",
-    short_help="""Upload JUnit XML reports and ignore failed tests with Mergify's CI Insights Quarantine""",
+    help=(
+        "Upload JUnit XML reports and ignore failed tests with Mergify's CI"
+        " Insights Quarantine.\n\nFILES can be literal paths or quoted glob"
+        " patterns (e.g. 'reports/**/*.xml'); quoting lets Mergify expand the"
+        " pattern rather than the shell, which is recommended for large test"
+        " suites."
+    ),
+    short_help=(
+        "Upload JUnit XML reports and ignore failed tests with Mergify's CI"
+        " Insights Quarantine"
+    ),
 )
 @click.option(
     "--api-url",
@@ -204,7 +237,7 @@ async def junit_upload(
     "files",
     nargs=-1,
     required=True,
-    type=JUnitFile(),
+    callback=_expand_junit_patterns,
 )
 @utils.run_with_asyncio
 async def junit_process(

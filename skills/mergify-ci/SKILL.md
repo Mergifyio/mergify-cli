@@ -32,6 +32,8 @@ mergify ci junit-process \
   path/to/junit-results.xml
 ```
 
+`FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Always quote the pattern so Mergify expands it rather than the shell — this is the recommended approach for large, sharded test suites.
+
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
 - `--repository` / `-r` -- Repository full name (auto-detected in GitHub Actions)
