@@ -1,14 +1,17 @@
 //! `mergify` binary entry point.
 //!
-//! Dispatch logic:
-//! - If the invocation is `mergify config validate [--config-file
-//!   PATH]`, run it natively via `mergify_config::validate`.
-//! - Anything else is handed to `mergify_py_shim::run`, which
-//!   extracts the embedded Python source on first use and invokes
-//!   `python3 -m mergify_cli`.
+//! Dispatch logic: every invocation is speculatively parsed with
+//! clap, which knows about the native commands
+//! ([`ConfigSubcommand::Validate`], [`ConfigSubcommand::Simulate`]).
+//! If clap succeeds with a known native variant the binary runs
+//! that code path natively. Any parse failure — including
+//! subcommands clap doesn't know about (``stack push``, ``ci
+//! junit-process``, …) — falls through to [`mergify_py_shim::run`],
+//! which hands the original argv to ``python3 -m mergify_cli``.
 //!
-//! As each command ports (Phase 1.4+), native dispatch grows and
-//! the shim fallback shrinks. Phase 6 deletes the shim entirely.
+//! As each command ports (Phase 1.4+), new variants land on the
+//! clap enum and the shim fallback shrinks. Phase 6 deletes the
+//! shim entirely.
 
 use std::env;
 use std::path::PathBuf;
@@ -16,14 +19,16 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use clap::Subcommand;
+use mergify_config::simulate::PullRequestRef;
+use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
 
-    if let Some(NativeCommand::ConfigValidate(opts)) = detect_native(&argv) {
-        return run_native_config_validate(&opts);
+    if let Some(cmd) = detect_native(&argv) {
+        return run_native(cmd);
     }
 
     match mergify_py_shim::run(&argv) {
@@ -35,7 +40,74 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_native_config_validate(opts: &ConfigValidateOpts) -> ExitCode {
+/// Native commands the Rust binary handles without delegating to
+/// the Python shim.
+enum NativeCommand {
+    ConfigValidate { config_file: Option<PathBuf> },
+    ConfigSimulate(ConfigSimulateOpts),
+}
+
+struct ConfigSimulateOpts {
+    config_file: Option<PathBuf>,
+    pull_request: PullRequestRef,
+    token: Option<String>,
+    api_url: Option<String>,
+}
+
+/// Try to recognize the invocation as a native command.
+///
+/// Returns ``None`` when the argv doesn't look like a native
+/// command — callers fall back to the Python shim, which produces
+/// the same error messages as before the port started. When the
+/// argv obviously targets a native command (contains ``config``
+/// and ``validate``/``simulate``) but clap can't parse it — e.g.
+/// the user gave a bad flag or an invalid URL — this function
+/// prints clap's formatted error to stderr and exits the process
+/// with clap's exit code (2), matching the Python CLI's behavior
+/// for argument errors.
+fn detect_native(argv: &[String]) -> Option<NativeCommand> {
+    let looks_native = {
+        let has_config = argv.iter().any(|a| a == "config");
+        let has_native_sub = argv.iter().any(|a| a == "validate" || a == "simulate");
+        has_config && has_native_sub
+    };
+
+    let parsed = match CliRoot::try_parse_from(
+        std::iter::once("mergify".to_string()).chain(argv.iter().cloned()),
+    ) {
+        Ok(parsed) => parsed,
+        Err(err) if looks_native => {
+            // Native intent + clap rejection = surface clap's error
+            // and exit. ``err.exit()`` prints to stderr and calls
+            // ``process::exit``; does not return.
+            err.exit()
+        }
+        Err(_) => return None,
+    };
+
+    match parsed.command {
+        Subcommands::Config(ConfigArgs {
+            config_file,
+            command: ConfigSubcommand::Validate(_),
+        }) => Some(NativeCommand::ConfigValidate { config_file }),
+        Subcommands::Config(ConfigArgs {
+            config_file,
+            command:
+                ConfigSubcommand::Simulate(SimulateCliArgs {
+                    pull_request,
+                    token,
+                    api_url,
+                }),
+        }) => Some(NativeCommand::ConfigSimulate(ConfigSimulateOpts {
+            config_file,
+            pull_request,
+            token,
+            api_url,
+        })),
+    }
+}
+
+fn run_native(cmd: NativeCommand) -> ExitCode {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -48,65 +120,34 @@ fn run_native_config_validate(opts: &ConfigValidateOpts) -> ExitCode {
     };
 
     let mut output = StdioOutput::new(OutputMode::Human);
-    let result = rt.block_on(mergify_config::validate::run(
-        opts.config_file.as_deref(),
-        &mut output,
-    ));
+
+    let result = rt.block_on(async {
+        match cmd {
+            NativeCommand::ConfigValidate { config_file } => {
+                mergify_config::validate::run(config_file.as_deref(), &mut output).await
+            }
+            NativeCommand::ConfigSimulate(opts) => {
+                mergify_config::simulate::run(
+                    SimulateOptions {
+                        pull_request: &opts.pull_request,
+                        config_file: opts.config_file.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
+        }
+    });
 
     match result {
         Ok(()) => ExitCode::from(mergify_core::ExitCode::Success.as_u8()),
         Err(err) => {
             let code = err.exit_code();
-            // Commands that emit their own details through `Output`
-            // (e.g. `config validate`'s per-error list) still get a
-            // top-level "mergify: <message>" line appended, matching
-            // the Python CLI's behavior.
             eprintln!("mergify: {err}");
             ExitCode::from(code.as_u8())
         }
-    }
-}
-
-/// Recognised native commands, paired with their pre-parsed options.
-enum NativeCommand {
-    ConfigValidate(ConfigValidateOpts),
-}
-
-#[derive(Debug, Default)]
-struct ConfigValidateOpts {
-    config_file: Option<PathBuf>,
-}
-
-/// Try to recognise the invocation as a native command. Returns
-/// `None` when the argv doesn't match any native command or when
-/// clap rejects it — in both cases the caller falls back to the
-/// Python shim (which produces the same error messages as before
-/// the port started).
-fn detect_native(argv: &[String]) -> Option<NativeCommand> {
-    // Quick cheap check: argv must contain "config" followed by
-    // "validate" to possibly be a native match. This avoids running
-    // clap on every command.
-    let has_config_validate = argv
-        .iter()
-        .position(|a| a == "config")
-        .is_some_and(|i| argv.get(i + 1).is_some_and(|a| a == "validate"));
-    if !has_config_validate {
-        return None;
-    }
-
-    match CliRoot::try_parse_from(
-        std::iter::once("mergify".to_string()).chain(argv.iter().cloned()),
-    ) {
-        Ok(CliRoot {
-            command:
-                Subcommands::Config(ConfigArgs {
-                    config_file,
-                    command: ConfigSubcommand::Validate(_),
-                }),
-        }) => Some(NativeCommand::ConfigValidate(ConfigValidateOpts {
-            config_file,
-        })),
-        _ => None,
     }
 }
 
@@ -139,7 +180,27 @@ struct ConfigArgs {
 enum ConfigSubcommand {
     /// Validate the Mergify configuration file against the schema.
     Validate(ValidateArgs),
+    /// Simulate Mergify actions on a pull request using the local
+    /// configuration.
+    Simulate(SimulateCliArgs),
 }
 
 #[derive(clap::Args)]
 struct ValidateArgs {}
+
+#[derive(clap::Args)]
+struct SimulateCliArgs {
+    /// Pull request URL (e.g. <https://github.com/owner/repo/pull/123>).
+    #[arg(value_name = "PULL_REQUEST_URL", value_parser = mergify_config::simulate::parse_pr_url)]
+    pull_request: PullRequestRef,
+
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+}

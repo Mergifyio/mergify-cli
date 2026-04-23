@@ -53,7 +53,7 @@ status = "shimmed"
 
 [[command]]
 path = ["config", "simulate"]
-status = "shimmed"
+status = "native"
 
 [[command]]
 path = ["config", "validate"]
