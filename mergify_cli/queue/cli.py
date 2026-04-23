@@ -8,7 +8,6 @@ from rich.text import Text
 from rich.tree import Tree
 
 from mergify_cli import console
-from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.exit_codes import ExitCode
@@ -431,93 +430,6 @@ async def status(ctx: click.Context, *, branch: str | None, output_json: bool) -
         if batches:
             console.print()
         _print_waiting_prs(waiting)
-
-
-def _validate_pause_reason(
-    ctx: click.Context,  # noqa: ARG001
-    param: click.Parameter,  # noqa: ARG001
-    value: str,
-) -> str:
-    if len(value) > 255:
-        msg = "must be 255 characters or fewer"
-        raise click.BadParameter(msg)
-    return value
-
-
-@queue.command(help="Pause the merge queue for the repository")
-@click.option(
-    "--reason",
-    required=True,
-    callback=_validate_pause_reason,
-    help="Reason for pausing the queue (max 255 chars)",
-)
-@click.option(
-    "--yes-i-am-sure",
-    is_flag=True,
-    default=False,
-    help="Skip confirmation prompt (required in non-interactive mode)",
-)
-@click.pass_context
-@utils.run_with_asyncio
-async def pause(ctx: click.Context, *, reason: str, yes_i_am_sure: bool) -> None:
-    repository = ctx.obj["repository"]
-
-    if not yes_i_am_sure:
-        import os
-
-        if not os.isatty(0):
-            console_error(
-                "refusing to pause without confirmation. "
-                "Pass --yes-i-am-sure to proceed.",
-            )
-            raise SystemExit(ExitCode.INVALID_STATE)
-        click.confirm(
-            f"You are about to pause the merge queue for {repository}. Proceed?",
-            abort=True,
-        )
-
-    async with utils.get_mergify_http_client(
-        ctx.obj["api_url"],
-        ctx.obj["token"],
-    ) as client:
-        data = await queue_api.pause_queue(
-            client,
-            repository,
-            reason=reason,
-        )
-
-    pause_text = Text()
-    pause_text.append("⚠  Queue paused", style="bold yellow")
-    pause_text.append(f': "{data["reason"]}"')
-    if data.get("paused_at"):
-        pause_rel = _relative_time(data["paused_at"])
-        if pause_rel:
-            pause_text.append(f" (since {pause_rel})", style="dim")
-    console.print(pause_text)
-
-
-@queue.command(help="Unpause the merge queue for the repository")
-@click.pass_context
-@utils.run_with_asyncio
-async def unpause(ctx: click.Context) -> None:
-    import httpx
-
-    try:
-        async with utils.get_mergify_http_client(
-            ctx.obj["api_url"],
-            ctx.obj["token"],
-        ) as client:
-            await queue_api.unpause_queue(client, ctx.obj["repository"])
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            console.print(
-                "Queue is not currently paused",
-                style="yellow",
-            )
-            raise SystemExit(ExitCode.MERGIFY_API_ERROR) from None
-        raise
-
-    console.print("[green]Queue unpaused successfully.[/]")
 
 
 @queue.command(help="Show detailed state of a pull request in the merge queue")
