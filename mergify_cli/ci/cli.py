@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import glob
-import json
-import os
 import pathlib
-import shlex
-import uuid
 
 import click
 
@@ -13,7 +9,6 @@ from mergify_cli import utils
 from mergify_cli.ci import detector
 from mergify_cli.ci.git_refs import detector as git_refs_detector
 from mergify_cli.ci.junit_processing import cli as junit_processing_cli
-from mergify_cli.ci.queue import metadata as queue_metadata
 from mergify_cli.ci.scopes import cli as scopes_cli
 from mergify_cli.ci.scopes import exceptions as scopes_exc
 from mergify_cli.dym import DYMGroup
@@ -264,41 +259,6 @@ async def junit_process(
 
 
 @ci.command(
-    help="""Give the base/head git references of the pull request""",
-    short_help="""Give the base/head git references of the pull request""",
-)
-@click.option(
-    "--format",
-    "output_format",
-    type=click.Choice(["text", "shell", "json"]),
-    default="text",
-    show_default=True,
-    help=(
-        "Output format. 'text' is human-readable. "
-        "'shell' emits MERGIFY_GIT_REFS_{BASE,HEAD,SOURCE}=... lines for `eval`. "
-        "'json' emits a single-line JSON object."
-    ),
-)
-def git_refs(output_format: str) -> None:
-    ref = git_refs_detector.detect()
-
-    if output_format == "shell":
-        click.echo(f"MERGIFY_GIT_REFS_BASE={shlex.quote(ref.base or '')}")
-        click.echo(f"MERGIFY_GIT_REFS_HEAD={shlex.quote(ref.head)}")
-        click.echo(f"MERGIFY_GIT_REFS_SOURCE={shlex.quote(ref.source)}")
-    elif output_format == "json":
-        click.echo(
-            json.dumps({"base": ref.base, "head": ref.head, "source": ref.source}),
-        )
-    else:
-        click.echo(f"Base: {ref.base}")
-        click.echo(f"Head: {ref.head}")
-
-    ref.maybe_write_to_github_outputs()
-    ref.maybe_write_to_buildkite_metadata()
-
-
-@ci.command(
     help="""Give the list scope impacted by changed files""",
     short_help="""Give the list scope impacted by changed files""",
 )
@@ -365,27 +325,3 @@ def scopes(
 
     if write is not None:
         scopes.save_to_file(write)
-
-
-@ci.command(
-    help="""Output merge queue batch metadata from the current pull request event""",
-    short_help="""Output merge queue batch metadata""",
-)
-def queue_info() -> None:
-    metadata = queue_metadata.detect()
-    if metadata is None:
-        raise utils.MergifyError(
-            "Not running in a merge queue context. "
-            "This command must be run on a merge queue draft pull request.",
-            exit_code=ExitCode.INVALID_STATE,
-        )
-
-    click.echo(json.dumps(metadata, indent=2))
-
-    gha = os.environ.get("GITHUB_OUTPUT")
-    if gha:
-        delimiter = f"ghadelimiter_{uuid.uuid4()}"
-        with pathlib.Path(gha).open("a", encoding="utf-8") as fh:
-            fh.write(
-                f"queue_metadata<<{delimiter}\n{json.dumps(metadata)}\n{delimiter}\n",
-            )
