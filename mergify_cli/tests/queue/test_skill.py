@@ -62,18 +62,25 @@ def test_skill_has_required_sections() -> None:
         assert section in content, f"Skill is missing required section: {section}"
 
 
+# Rust-native queue commands. Each port PR appends to this list when
+# it deletes the Python copy, so the validation below stays accurate
+# without needing to spawn the Rust binary at test time.
+NATIVE_QUEUE_COMMANDS: frozenset[str] = frozenset({"pause", "unpause"})
+
+
 def test_skill_references_valid_commands() -> None:
-    """Check that commands referenced in the skill exist in the CLI."""
+    """Every `mergify queue <cmd>` reference in the skill must resolve
+    to either a registered click command (still-shimmed) or a known
+    Rust-native command. Catches typos and skill drift after a port."""
     from mergify_cli.queue.cli import queue
 
     content = _get_skill_content()
-    # Extract `mergify queue <subcommand>` references
     referenced = set(re.findall(r"mergify queue ([\w-]+)", content))
-
-    available = set(queue.commands.keys())
+    available = set(queue.commands.keys()) | NATIVE_QUEUE_COMMANDS
 
     for cmd in referenced:
         assert cmd in available, (
-            f"Skill references 'mergify queue {cmd}' but it's not a registered command. "
+            f"Skill references 'mergify queue {cmd}' but it's neither a "
+            f"registered click command nor a known Rust-native command. "
             f"Available: {sorted(available)}"
         )
