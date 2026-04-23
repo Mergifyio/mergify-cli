@@ -32,7 +32,7 @@ mergify ci junit-process \
   path/to/junit-results.xml
 ```
 
-`FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Patterns are expanded inside mergify rather than by the shell, which avoids the OS `ARG_MAX` limit on large, sharded test suites. Always quote patterns so the shell leaves them intact.
+`FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Always quote the pattern so Mergify expands it rather than the shell — this is the recommended approach for large, sharded test suites.
 
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key

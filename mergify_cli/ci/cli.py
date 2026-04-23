@@ -25,8 +25,8 @@ def _expand_junit_patterns(
     param: click.Parameter,
     value: tuple[str, ...],
 ) -> tuple[str, ...]:
-    # Accept raw glob patterns so callers can avoid the shell's ARG_MAX limit
-    # on large test suites — expanding patterns inside Python sidesteps it.
+    # Accept raw glob patterns and expand them here so callers don't have to
+    # rely on shell expansion — preferable for large test suites.
     results: dict[str, None] = {}
     for entry in value:
         if glob.has_magic(entry):
@@ -161,8 +161,9 @@ async def junit_upload(
     help=(
         "Upload JUnit XML reports and ignore failed tests with Mergify's CI"
         " Insights Quarantine.\n\nFILES can be literal paths or quoted glob"
-        " patterns (e.g. 'reports/**/*.xml'). Patterns are expanded internally,"
-        " which avoids the shell's ARG_MAX limit on large test suites."
+        " patterns (e.g. 'reports/**/*.xml'); quoting lets Mergify expand the"
+        " pattern rather than the shell, which is recommended for large test"
+        " suites."
     ),
     short_help=(
         "Upload JUnit XML reports and ignore failed tests with Mergify's CI"

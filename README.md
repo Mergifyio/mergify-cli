@@ -101,9 +101,9 @@ mergify stack checkout my-feature    # Checkout an existing stack from GitHub
 # CI insights
 mergify ci junit-process results.xml   # Upload test results + quarantine
 mergify ci junit-process 'reports/**/*.xml'
-                                       # Quote globs so the shell leaves them
-                                       # to mergify — avoids ARG_MAX on large
-                                       # test suites.
+                                       # Quote globs so Mergify expands them
+                                       # instead of the shell (recommended
+                                       # for large test suites).
 mergify ci scopes                    # Detect impacted scopes
 mergify ci git-refs                  # Detect base/head refs
 mergify ci git-refs --format=shell   # Emit MERGIFY_GIT_REFS_* vars for `eval`
