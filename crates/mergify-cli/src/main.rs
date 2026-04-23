@@ -24,6 +24,8 @@ use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
+use mergify_queue::pause::PauseOptions;
+use mergify_queue::unpause::UnpauseOptions;
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
@@ -63,6 +65,8 @@ enum NativeCommand {
     ConfigValidate { config_file: Option<PathBuf> },
     ConfigSimulate(ConfigSimulateOpts),
     CiScopesSend(CiScopesSendOpts),
+    QueuePause(QueuePauseOpts),
+    QueueUnpause(QueueUnpauseOpts),
 }
 
 struct ConfigSimulateOpts {
@@ -83,13 +87,26 @@ struct CiScopesSendOpts {
     file_deprecated: Option<PathBuf>,
 }
 
+struct QueuePauseOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    reason: String,
+    yes_i_am_sure: bool,
+}
+
+struct QueueUnpauseOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+}
+
 /// Heuristic: does argv look like the user intended a native
-/// subcommand (`config validate`, `config simulate`, `ci
-/// scopes-send`)?
+/// subcommand?
 ///
 /// Used as a fallback when clap rejects the input — if the user
-/// clearly meant a native command, surface clap's error rather than
-/// silently dispatching to the Python shim. We look for two
+/// clearly meant a native command, surface clap's error rather
+/// than silently dispatching to the Python shim. We look for two
 /// *consecutive* tokens forming a `(group, subcommand)` pair so a
 /// flag value like `--repository config` doesn't accidentally
 /// classify the invocation as native.
@@ -97,7 +114,9 @@ fn looks_native(argv: &[String]) -> bool {
     argv.windows(2).any(|pair| {
         matches!(
             (pair[0].as_str(), pair[1].as_str()),
-            ("config", "validate" | "simulate") | ("ci", "scopes-send"),
+            ("config", "validate" | "simulate")
+                | ("ci", "scopes-send")
+                | ("queue", "pause" | "unpause"),
         )
     })
 }
@@ -121,12 +140,12 @@ fn is_help_or_version(err: &clap::Error) -> bool {
 /// Returns ``None`` when the argv doesn't look like a native
 /// command — callers fall back to the Python shim, which produces
 /// the same error messages as before the port started. When the
-/// argv obviously targets a native command (contains ``config``
-/// and ``validate``/``simulate``) but clap can't parse it — e.g.
-/// the user gave a bad flag or an invalid URL — this function
-/// prints clap's formatted error to stderr and exits the process
-/// with clap's exit code (2), matching the Python CLI's behavior
-/// for argument errors.
+/// argv obviously targets a native command (per [`looks_native`])
+/// but clap can't parse it — e.g. the user gave an unknown flag
+/// or omitted a required argument — this function prints clap's
+/// formatted error to stderr and exits the process with clap's
+/// exit code (2), matching the Python CLI's behavior for argument
+/// errors.
 ///
 /// Argument *values* that are accepted by clap as `String` but
 /// fail later domain validation (e.g. an `--api-url` that doesn't
@@ -200,6 +219,32 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             scopes_file,
             file_deprecated,
         })),
+        Subcommands::Queue(QueueArgs {
+            repository,
+            token,
+            api_url,
+            command:
+                QueueSubcommand::Pause(PauseCliArgs {
+                    reason,
+                    yes_i_am_sure,
+                }),
+        }) => Some(NativeCommand::QueuePause(QueuePauseOpts {
+            repository,
+            token,
+            api_url,
+            reason,
+            yes_i_am_sure,
+        })),
+        Subcommands::Queue(QueueArgs {
+            repository,
+            token,
+            api_url,
+            command: QueueSubcommand::Unpause,
+        }) => Some(NativeCommand::QueueUnpause(QueueUnpauseOpts {
+            repository,
+            token,
+            api_url,
+        })),
     }
 }
 
@@ -250,6 +295,30 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 )
                 .await
             }
+            NativeCommand::QueuePause(opts) => {
+                mergify_queue::pause::run(
+                    PauseOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        reason: &opts.reason,
+                        yes_i_am_sure: opts.yes_i_am_sure,
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::QueueUnpause(opts) => {
+                mergify_queue::unpause::run(
+                    UnpauseOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
         }
     });
 
@@ -277,6 +346,8 @@ enum Subcommands {
     Config(ConfigArgs),
     /// Mergify CI-related commands.
     Ci(CiArgs),
+    /// Manage the Mergify merge queue.
+    Queue(QueueArgs),
 }
 
 #[derive(clap::Args)]
@@ -371,4 +442,45 @@ struct ScopesSendCliArgs {
     /// Deprecated alias for ``--scopes-json``.
     #[arg(long = "file", short = 'f', hide = true)]
     file_deprecated: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct QueueArgs {
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't', global = true)]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u', global = true)]
+    api_url: Option<String>,
+
+    /// Repository full name (owner/repo). Falls back to
+    /// ``GITHUB_REPOSITORY`` env var.
+    #[arg(long, short = 'r', global = true)]
+    repository: Option<String>,
+
+    #[command(subcommand)]
+    command: QueueSubcommand,
+}
+
+#[derive(Subcommand)]
+enum QueueSubcommand {
+    /// Pause the merge queue for the repository.
+    Pause(PauseCliArgs),
+    /// Unpause the merge queue for the repository.
+    Unpause,
+}
+
+#[derive(clap::Args)]
+struct PauseCliArgs {
+    /// Reason for pausing the queue (max 255 characters).
+    #[arg(long, value_parser = mergify_queue::pause::parse_reason)]
+    reason: String,
+
+    /// Skip the confirmation prompt. Required in non-interactive
+    /// sessions.
+    #[arg(long = "yes-i-am-sure", default_value_t = false)]
+    yes_i_am_sure: bool,
 }

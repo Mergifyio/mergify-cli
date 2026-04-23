@@ -55,12 +55,6 @@ class QueuePause(typing.TypedDict):
     paused_at: str
 
 
-class QueuePauseResponse(typing.TypedDict):
-    paused: bool
-    reason: str | None
-    paused_at: str | None
-
-
 class QueueStatusResponse(typing.TypedDict, total=False):
     batches: typing.Required[list[QueueBatch]]
     waiting_pull_requests: typing.Required[list[QueuePullRequest]]
@@ -137,25 +131,3 @@ async def get_queue_pull(
         f"/v1/repos/{repository}/merge-queue/pull/{pr_number}",
     )
     return response.json()  # type: ignore[no-any-return]
-
-
-async def pause_queue(
-    client: httpx.AsyncClient,
-    repository: str,
-    *,
-    reason: str,
-) -> QueuePauseResponse:
-    response = await client.put(
-        f"/v1/repos/{repository}/merge-queue/pause",
-        json={"reason": reason},
-    )
-    return response.json()  # type: ignore[no-any-return]
-
-
-async def unpause_queue(
-    client: httpx.AsyncClient,
-    repository: str,
-) -> None:
-    await client.delete(
-        f"/v1/repos/{repository}/merge-queue/pause",
-    )
