@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import json
 import os
 import pathlib
@@ -19,34 +20,42 @@ from mergify_cli.dym import DYMGroup
 from mergify_cli.exit_codes import ExitCode
 
 
-class JUnitFile(click.Path):
-    """Custom Click parameter type for JUnit files with better error messages."""
-
-    def __init__(self) -> None:
-        super().__init__(exists=True, dir_okay=False)
-
-    def convert(  # type: ignore[override]
-        self,
-        value: str,
-        param: click.Parameter | None,
-        ctx: click.Context | None,
-    ) -> str:
-        try:
-            return super().convert(value, param, ctx)
-        except click.BadParameter as e:
-            if "does not exist" in str(e):
-                # Provide a more helpful error message
-                error_msg = (
-                    f"JUnit XML file '{value}' does not exist. \n\n"
-                    "This usually indicates that a previous CI step failed to generate the test results.\n"
-                    "Please check if your test execution step completed successfully and produced the expected output file."
-                )
+def _expand_junit_patterns(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: tuple[str, ...],
+) -> tuple[str, ...]:
+    # Accept raw glob patterns so callers can avoid the shell's ARG_MAX limit
+    # on large test suites — expanding patterns inside Python sidesteps it.
+    results: dict[str, None] = {}
+    for entry in value:
+        if glob.has_magic(entry):
+            matches = [
+                match
+                for match in glob.iglob(entry, recursive=True)  # noqa: PTH207
+                if pathlib.Path(match).is_file()
+            ]
+            if not matches:
                 raise click.BadParameter(
-                    error_msg,
+                    f"Pattern '{entry}' did not match any file.\n\n"
+                    "This usually indicates that a previous CI step failed to generate the test results.\n"
+                    "Please check if your test execution step completed successfully and produced the expected output files.",
                     ctx=ctx,
                     param=param,
-                ) from e
-            raise
+                )
+            results.update(dict.fromkeys(matches))
+        else:
+            if not pathlib.Path(entry).is_file():
+                raise click.BadParameter(
+                    f"JUnit XML file '{entry}' does not exist.\n\n"
+                    "This usually indicates that a previous CI step failed to generate the test results.\n"
+                    "Please check if your test execution step completed successfully and produced the expected output file.",
+                    ctx=ctx,
+                    param=param,
+                )
+            results.setdefault(entry, None)
+
+    return tuple(results)
 
 
 def _process_tests_target_branch(
@@ -122,7 +131,7 @@ def ci(ctx: click.Context) -> None:
     "files",
     nargs=-1,
     required=True,
-    type=JUnitFile(),
+    callback=_expand_junit_patterns,
 )
 @utils.run_with_asyncio
 async def junit_upload(
@@ -149,8 +158,16 @@ async def junit_upload(
 
 
 @ci.command(
-    help="""Upload JUnit XML reports and ignore failed tests with Mergify's CI Insights Quarantine""",
-    short_help="""Upload JUnit XML reports and ignore failed tests with Mergify's CI Insights Quarantine""",
+    help=(
+        "Upload JUnit XML reports and ignore failed tests with Mergify's CI"
+        " Insights Quarantine.\n\nFILES can be literal paths or quoted glob"
+        " patterns (e.g. 'reports/**/*.xml'). Patterns are expanded internally,"
+        " which avoids the shell's ARG_MAX limit on large test suites."
+    ),
+    short_help=(
+        "Upload JUnit XML reports and ignore failed tests with Mergify's CI"
+        " Insights Quarantine"
+    ),
 )
 @click.option(
     "--api-url",
@@ -204,7 +221,7 @@ async def junit_upload(
     "files",
     nargs=-1,
     required=True,
-    type=JUnitFile(),
+    callback=_expand_junit_patterns,
 )
 @utils.run_with_asyncio
 async def junit_process(

@@ -32,6 +32,8 @@ mergify ci junit-process \
   path/to/junit-results.xml
 ```
 
+`FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Patterns are expanded inside mergify rather than by the shell, which avoids the OS `ARG_MAX` limit on large, sharded test suites. Always quote patterns so the shell leaves them intact.
+
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
 - `--repository` / `-r` -- Repository full name (auto-detected in GitHub Actions)
@@ -163,7 +165,7 @@ jobs:
         run: pytest --junitxml=results.xml
       - name: Upload and evaluate
         if: always()
-        run: mergify ci junit-process results.xml
+        run: mergify ci junit-process 'reports/**/*.xml'
         env:
           MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
 ```

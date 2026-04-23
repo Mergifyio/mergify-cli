@@ -314,6 +314,143 @@ def test_junit_file_not_found_error_message() -> None:
         )
 
 
+def test_expand_junit_patterns_literal_path() -> None:
+    result = ci_cli._expand_junit_patterns(
+        mock.Mock(),
+        mock.Mock(),
+        (str(REPORT_XML),),
+    )
+    assert result == (str(REPORT_XML),)
+
+
+def test_expand_junit_patterns_glob_matches_multiple(
+    tmp_path: pathlib.Path,
+) -> None:
+    first = tmp_path / "report_a.xml"
+    second = tmp_path / "report_b.xml"
+    first.write_text("")
+    second.write_text("")
+
+    result = ci_cli._expand_junit_patterns(
+        mock.Mock(),
+        mock.Mock(),
+        (str(tmp_path / "report_*.xml"),),
+    )
+
+    assert set(result) == {str(first), str(second)}
+
+
+def test_expand_junit_patterns_recursive_glob(tmp_path: pathlib.Path) -> None:
+    top = tmp_path / "top.xml"
+    nested = tmp_path / "nested" / "deep" / "inner.xml"
+    nested.parent.mkdir(parents=True)
+    top.write_text("")
+    nested.write_text("")
+
+    result = ci_cli._expand_junit_patterns(
+        mock.Mock(),
+        mock.Mock(),
+        (str(tmp_path / "**" / "*.xml"),),
+    )
+
+    assert set(result) == {str(top), str(nested)}
+
+
+def test_expand_junit_patterns_skips_directories(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "subdir").mkdir()
+    only_file = tmp_path / "only.xml"
+    only_file.write_text("")
+
+    result = ci_cli._expand_junit_patterns(
+        mock.Mock(),
+        mock.Mock(),
+        (str(tmp_path / "*"),),
+    )
+
+    assert result == (str(only_file),)
+
+
+def test_expand_junit_patterns_zero_match_error(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(click.BadParameter) as exc_info:
+        ci_cli._expand_junit_patterns(
+            mock.Mock(),
+            mock.Mock(),
+            (str(tmp_path / "nonexistent-*.xml"),),
+        )
+
+    assert "did not match any file" in exc_info.value.message
+    assert "nonexistent-*.xml" in exc_info.value.message
+
+
+def test_expand_junit_patterns_dedupes_literal_and_glob(
+    tmp_path: pathlib.Path,
+) -> None:
+    report = tmp_path / "report.xml"
+    report.write_text("")
+
+    result = ci_cli._expand_junit_patterns(
+        mock.Mock(),
+        mock.Mock(),
+        (str(report), str(tmp_path / "*.xml")),
+    )
+
+    assert result == (str(report),)
+
+
+def test_junit_process_glob_end_to_end(tmp_path: pathlib.Path) -> None:
+    """Confirm the callback is wired on junit-process and expansion reaches the runner."""
+    first = tmp_path / "report_one.xml"
+    second = tmp_path / "report_two.xml"
+    first.write_bytes(REPORT_XML.read_bytes())
+    second.write_bytes(REPORT_XML.read_bytes())
+
+    env = {
+        "MERGIFY_API_URL": "https://api.mergify.com",
+        "MERGIFY_TOKEN": "abc",
+        "GITHUB_REPOSITORY": "user/repo",
+        "GITHUB_BASE_REF": "main",
+    }
+
+    runner = testing.CliRunner()
+    mocked_process = mock.AsyncMock()
+    with mock.patch.object(
+        junit_processing_cli,
+        "process_junit_files",
+        mocked_process,
+    ):
+        result = runner.invoke(
+            ci_cli.junit_process,
+            [str(tmp_path / "report_*.xml")],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mocked_process.await_count == 1
+    await_args = mocked_process.await_args
+    assert await_args is not None
+    assert set(await_args.kwargs["files"]) == {str(first), str(second)}
+
+
+def test_junit_process_glob_no_match_error(tmp_path: pathlib.Path) -> None:
+    env = {
+        "MERGIFY_API_URL": "https://api.mergify.com",
+        "MERGIFY_TOKEN": "abc",
+        "GITHUB_REPOSITORY": "user/repo",
+        "GITHUB_BASE_REF": "main",
+    }
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        ci_cli.junit_process,
+        [str(tmp_path / "missing-*.xml")],
+        env=env,
+    )
+
+    assert result.exit_code == 2
+    assert "did not match any file" in result.output
+    assert "missing-*.xml" in result.output
+
+
 @pytest.mark.respx(base_url="https://api.github.com/")
 def test_scopes_send(
     respx_mock: respx.MockRouter,
