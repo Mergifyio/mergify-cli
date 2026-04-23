@@ -49,7 +49,7 @@ status = "shimmed"
 
 [[command]]
 path = ["ci", "scopes-send"]
-status = "shimmed"
+status = "native"
 
 [[command]]
 path = ["config", "simulate"]
