@@ -19,6 +19,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use clap::Subcommand;
+use mergify_ci::scopes_send::ScopesSendOptions;
 use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
@@ -45,6 +46,7 @@ fn main() -> ExitCode {
 enum NativeCommand {
     ConfigValidate { config_file: Option<PathBuf> },
     ConfigSimulate(ConfigSimulateOpts),
+    CiScopesSend(CiScopesSendOpts),
 }
 
 struct ConfigSimulateOpts {
@@ -52,6 +54,17 @@ struct ConfigSimulateOpts {
     pull_request: PullRequestRef,
     token: Option<String>,
     api_url: Option<String>,
+}
+
+struct CiScopesSendOpts {
+    repository: Option<String>,
+    pull_request: Option<u64>,
+    token: Option<String>,
+    api_url: Option<String>,
+    scopes: Vec<String>,
+    scopes_json: Option<PathBuf>,
+    scopes_file: Option<PathBuf>,
+    file_deprecated: Option<PathBuf>,
 }
 
 /// Try to recognize the invocation as a native command.
@@ -65,12 +78,27 @@ struct ConfigSimulateOpts {
 /// prints clap's formatted error to stderr and exits the process
 /// with clap's exit code (2), matching the Python CLI's behavior
 /// for argument errors.
+/// Heuristic: does argv look like the user intended a native
+/// subcommand (`config validate`, `config simulate`, `ci
+/// scopes-send`)?
+///
+/// Used as a fallback when clap rejects the input — if the user
+/// clearly meant a native command, surface clap's error rather than
+/// silently dispatching to the Python shim. We look for two
+/// *consecutive* tokens forming a `(group, subcommand)` pair so a
+/// flag value like `--repository config` doesn't accidentally
+/// classify the invocation as native.
+fn looks_native(argv: &[String]) -> bool {
+    argv.windows(2).any(|pair| {
+        matches!(
+            (pair[0].as_str(), pair[1].as_str()),
+            ("config", "validate" | "simulate") | ("ci", "scopes-send"),
+        )
+    })
+}
+
 fn detect_native(argv: &[String]) -> Option<NativeCommand> {
-    let looks_native = {
-        let has_config = argv.iter().any(|a| a == "config");
-        let has_native_sub = argv.iter().any(|a| a == "validate" || a == "simulate");
-        has_config && has_native_sub
-    };
+    let looks_native = looks_native(argv);
 
     let parsed = match CliRoot::try_parse_from(
         std::iter::once("mergify".to_string()).chain(argv.iter().cloned()),
@@ -103,6 +131,28 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             pull_request,
             token,
             api_url,
+        })),
+        Subcommands::Ci(CiArgs {
+            command:
+                CiSubcommand::ScopesSend(ScopesSendCliArgs {
+                    repository,
+                    pull_request,
+                    token,
+                    api_url,
+                    scope,
+                    scopes_json,
+                    scopes_file,
+                    file_deprecated,
+                }),
+        }) => Some(NativeCommand::CiScopesSend(CiScopesSendOpts {
+            repository,
+            pull_request,
+            token,
+            api_url,
+            scopes: scope,
+            scopes_json,
+            scopes_file,
+            file_deprecated,
         })),
     }
 }
@@ -138,6 +188,22 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 )
                 .await
             }
+            NativeCommand::CiScopesSend(opts) => {
+                mergify_ci::scopes_send::run(
+                    ScopesSendOptions {
+                        repository: opts.repository.as_deref(),
+                        pull_request: opts.pull_request,
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        scopes: &opts.scopes,
+                        scopes_json: opts.scopes_json.as_deref(),
+                        scopes_file: opts.scopes_file.as_deref(),
+                        deprecated_file: opts.file_deprecated.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
         }
     });
 
@@ -163,6 +229,8 @@ struct CliRoot {
 enum Subcommands {
     /// Manage Mergify configuration.
     Config(ConfigArgs),
+    /// Mergify CI-related commands.
+    Ci(CiArgs),
 }
 
 #[derive(clap::Args)]
@@ -203,4 +271,58 @@ struct SimulateCliArgs {
     /// then to the default.
     #[arg(long = "api-url", short = 'u')]
     api_url: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct CiArgs {
+    #[command(subcommand)]
+    command: CiSubcommand,
+}
+
+#[derive(Subcommand)]
+enum CiSubcommand {
+    /// Send scopes tied to a pull request to Mergify.
+    #[command(name = "scopes-send")]
+    ScopesSend(ScopesSendCliArgs),
+}
+
+#[derive(clap::Args)]
+struct ScopesSendCliArgs {
+    /// Repository full name (owner/repo). Falls back to
+    /// ``GITHUB_REPOSITORY`` env var.
+    #[arg(long, short = 'r')]
+    repository: Option<String>,
+
+    /// Pull request number. Falls back to ``GITHUB_EVENT_PATH``
+    /// (reads ``.pull_request.number``). When neither is available
+    /// the command prints a skip message and exits 0.
+    #[arg(long = "pull-request", short = 'p')]
+    pull_request: Option<u64>,
+
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+
+    /// Scope to upload (repeatable).
+    #[arg(long = "scope", short = 's')]
+    scope: Vec<String>,
+
+    /// JSON file containing scopes to upload (output of
+    /// ``mergify ci scopes --write``).
+    #[arg(long = "scopes-json")]
+    scopes_json: Option<PathBuf>,
+
+    /// Plain-text file with one scope per line.
+    #[arg(long = "scopes-file")]
+    scopes_file: Option<PathBuf>,
+
+    /// Deprecated alias for ``--scopes-json``.
+    #[arg(long = "file", short = 'f', hide = true)]
+    file_deprecated: Option<PathBuf>,
 }
