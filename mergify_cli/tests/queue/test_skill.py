@@ -62,18 +62,10 @@ def test_skill_has_required_sections() -> None:
         assert section in content, f"Skill is missing required section: {section}"
 
 
-def test_skill_references_valid_commands() -> None:
-    """Check that commands referenced in the skill exist in the CLI."""
-    from mergify_cli.queue.cli import queue
-
-    content = _get_skill_content()
-    # Extract `mergify queue <subcommand>` references
-    referenced = set(re.findall(r"mergify queue ([\w-]+)", content))
-
-    available = set(queue.commands.keys())
-
-    for cmd in referenced:
-        assert cmd in available, (
-            f"Skill references 'mergify queue {cmd}' but it's not a registered command. "
-            f"Available: {sorted(available)}"
-        )
+# NOTE: we used to also validate that every `mergify queue <cmd>`
+# reference in the skill resolved to a registered click command.
+# That assumption broke once commands started getting ported to Rust
+# (their Python copy is deleted in the same change), since native
+# commands have no Python representation to inspect. Re-introduce
+# this check in Phase 6 against the Rust binary's `--help` output
+# (or whatever single source of truth we land on then).
