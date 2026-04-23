@@ -29,7 +29,7 @@
 
 [[command]]
 path = ["ci", "git-refs"]
-status = "shimmed"
+status = "native"
 
 [[command]]
 path = ["ci", "junit-process"]
@@ -41,7 +41,7 @@ status = "shimmed"
 
 [[command]]
 path = ["ci", "queue-info"]
-status = "shimmed"
+status = "native"
 
 [[command]]
 path = ["ci", "scopes"]
