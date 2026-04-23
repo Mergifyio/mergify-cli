@@ -970,6 +970,7 @@ dependencies = [
  "mergify-config",
  "mergify-core",
  "mergify-py-shim",
+ "mergify-queue",
  "tokio",
 ]
 
@@ -1011,6 +1012,19 @@ dependencies = [
  "include_dir",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "mergify-queue"
+version = "0.0.0"
+dependencies = [
+ "mergify-core",
+ "serde",
+ "serde_json",
+ "temp-env",
+ "tokio",
+ "url",
+ "wiremock",
 ]
 
 [[package]]
