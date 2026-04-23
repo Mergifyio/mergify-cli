@@ -38,6 +38,61 @@ PULL_REQUEST = 1
 JUNIT_FAIL = pathlib.Path(__file__).parent / "fixtures" / "junit_fail.xml"
 
 
+def test_queue_pause_unpause_roundtrip(
+    live_token: str,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`PUT` + `DELETE /v1/repos/{owner}/{repo}/merge-queue/pause`.
+
+    Runs the pause and unpause commands as a single round-trip so
+    the test repo's queue is left in the same state we found it
+    in, even when an assertion fails (the unpause runs from
+    ``finally``). This means the test is also tolerant of a leaked
+    paused state from a previous interrupted run — the second pause
+    just refreshes the reason.
+    """
+    pause = cli(
+        "queue",
+        "pause",
+        "--api-url",
+        API_URL,
+        "--token",
+        live_token,
+        "--repository",
+        REPOSITORY,
+        "--reason",
+        "func-tests-live-smoke",
+        "--yes-i-am-sure",
+    )
+    try:
+        assert pause.returncode == 0, (
+            f"queue pause failed\nstdout:\n{pause.stdout}\nstderr:\n{pause.stderr}"
+        )
+        assert "Queue paused" in pause.stdout, (
+            f"queue pause did not print confirmation\n"
+            f"stdout:\n{pause.stdout}\nstderr:\n{pause.stderr}"
+        )
+    finally:
+        unpause = cli(
+            "queue",
+            "unpause",
+            "--api-url",
+            API_URL,
+            "--token",
+            live_token,
+            "--repository",
+            REPOSITORY,
+        )
+
+    assert unpause.returncode == 0, (
+        f"queue unpause failed\nstdout:\n{unpause.stdout}\nstderr:\n{unpause.stderr}"
+    )
+    assert "Queue resumed" in unpause.stdout, (
+        f"queue unpause did not print confirmation\n"
+        f"stdout:\n{unpause.stdout}\nstderr:\n{unpause.stderr}"
+    )
+
+
 def test_scopes_send(
     live_token: str,
     cli: typing.Callable[..., typing.Any],
