@@ -40,6 +40,15 @@ pub enum ApiFlavor {
     Mergify,
 }
 
+/// Outcome of [`Client::delete_if_exists`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DeleteOutcome {
+    /// 2xx: the resource was deleted.
+    Deleted,
+    /// 404: the resource didn't exist (or was already gone).
+    NotFound,
+}
+
 /// Retry policy for transient failures. Only 5xx responses and
 /// connect/timeout errors are retried; 4xx responses are never
 /// retried — those are caller errors and retrying would hide bugs.
@@ -128,6 +137,29 @@ impl Client {
         self.execute(self.inner.post(url).json(body)).await
     }
 
+    /// PUT `body` as JSON to `path` and deserialize the JSON
+    /// response as `T`.
+    pub async fn put<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, CliError> {
+        let url = self.join(path)?;
+        self.execute(self.inner.put(url).json(body)).await
+    }
+
+    /// DELETE `path`, returning whether the resource existed.
+    ///
+    /// Returns `Ok(DeleteOutcome::Deleted)` on 2xx responses and
+    /// `Ok(DeleteOutcome::NotFound)` on 404 — useful for idempotent
+    /// "turn this thing off if it's on" operations where 404 means
+    /// "nothing to do". 4xx-other and 5xx map to the normal API
+    /// errors.
+    pub async fn delete_if_exists(&self, path: &str) -> Result<DeleteOutcome, CliError> {
+        let url = self.join(path)?;
+        self.execute_status(self.inner.delete(url)).await
+    }
+
     fn join(&self, path: &str) -> Result<Url, CliError> {
         // `Url::join` accepts absolute URLs and protocol-relative
         // paths (`//host/...`), which would let a caller-supplied
@@ -141,6 +173,58 @@ impl Client {
         self.base_url
             .join(path)
             .map_err(|e| self.api_error(format!("invalid path {path:?}: {e}")))
+    }
+
+    /// Execute a request that cares only about the HTTP status.
+    ///
+    /// Used by [`Self::delete_if_exists`] — the response body (if
+    /// any) is discarded.
+    async fn execute_status(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<DeleteOutcome, CliError> {
+        let mut backoff = self.retry.initial_backoff;
+        let mut last_message = String::from("HTTP request failed without response");
+
+        for attempt in 0..self.retry.max_attempts {
+            let Some(cloned) = builder.try_clone() else {
+                return Err(self.api_error(
+                    "request body is not cloneable (streaming?) — cannot retry".into(),
+                ));
+            };
+            let req = match &self.token {
+                Some(token) => cloned.bearer_auth(token),
+                None => cloned,
+            };
+
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        return Ok(DeleteOutcome::Deleted);
+                    }
+                    if status == StatusCode::NOT_FOUND {
+                        return Ok(DeleteOutcome::NotFound);
+                    }
+                    last_message = error_message(status, resp).await;
+                    if status.is_server_error() && attempt + 1 < self.retry.max_attempts {
+                        tokio::time::sleep(backoff).await;
+                        backoff *= 2;
+                        continue;
+                    }
+                    return Err(self.api_error(last_message));
+                }
+                Err(e) if is_transient(&e) && attempt + 1 < self.retry.max_attempts => {
+                    last_message = format!("network error: {e}");
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                }
+                Err(e) => {
+                    return Err(self.api_error(format!("request failed: {e}")));
+                }
+            }
+        }
+        Err(self.api_error(last_message))
     }
 
     async fn execute<T: DeserializeOwned>(

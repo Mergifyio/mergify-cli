@@ -19,6 +19,7 @@ mergify-ci = { path = "../mergify-ci" }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
 mergify-py-shim = { path = "../mergify-py-shim" }
+mergify-queue = { path = "../mergify-queue" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
 
 [lints]
