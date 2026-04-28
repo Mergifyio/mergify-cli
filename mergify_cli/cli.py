@@ -24,6 +24,7 @@ import httpx
 
 from mergify_cli import VERSION
 from mergify_cli import console
+from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.config import cli as config_cli_mod
@@ -85,6 +86,18 @@ def main() -> None:
         # Error details already printed by check_for_status.
         # Distinguish Mergify API from GitHub API using the request base URL.
         if str(e.request.url).startswith(utils.get_mergify_api_url()):
+            raise SystemExit(ExitCode.MERGIFY_API_ERROR) from None
+        raise SystemExit(ExitCode.GITHUB_API_ERROR) from None
+    except httpx.RequestError as e:
+        url = str(e.request.url)
+        if isinstance(e, httpx.TimeoutException):
+            console_error(
+                f"timed out contacting {url}. "
+                "Check your network connection or try again later.",
+            )
+        else:
+            console_error(f"network error contacting {url}: {e}")
+        if url.startswith(utils.get_mergify_api_url()):
             raise SystemExit(ExitCode.MERGIFY_API_ERROR) from None
         raise SystemExit(ExitCode.GITHUB_API_ERROR) from None
     except utils.CommandError as e:
