@@ -9,16 +9,20 @@
 //! - [`output::Output`] — trait for emitting command results in
 //!   either JSON or human mode with stdout/stderr discipline baked
 //!   in.
+//! - [`http::Client`] — wraps `reqwest` with bearer auth, retry,
+//!   and typed error mapping for the Mergify and GitHub APIs.
 //!
-//! HTTP client, git operations, interactive prompts, and config
-//! loading arrive in subsequent sub-phases.
+//! Git operations, interactive prompts, and config loading arrive
+//! in subsequent sub-phases.
 
 pub mod error;
 pub mod exit_code;
+pub mod http;
 pub mod output;
 
 pub use error::CliError;
 pub use exit_code::ExitCode;
+pub use http::{ApiFlavor, Client as HttpClient, RetryPolicy};
 pub use output::{Output, OutputMode, StdioOutput};
 
 /// Compile-time version string taken from the crate package metadata
