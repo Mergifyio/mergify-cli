@@ -19,6 +19,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use clap::Subcommand;
+use mergify_ci::git_refs::Format as GitRefsFormat;
+use mergify_ci::git_refs::GitRefsOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
 use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
@@ -49,6 +51,8 @@ enum NativeCommand {
     ConfigValidate { config_file: Option<PathBuf> },
     ConfigSimulate(ConfigSimulateOpts),
     CiScopesSend(CiScopesSendOpts),
+    CiGitRefs { format: GitRefsFormat },
+    CiQueueInfo,
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
 }
@@ -101,7 +105,9 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
         let has_config = argv.iter().any(|a| a == "config");
         let has_config_sub = argv.iter().any(|a| a == "validate" || a == "simulate");
         let has_ci = argv.iter().any(|a| a == "ci");
-        let has_ci_sub = argv.iter().any(|a| a == "scopes-send");
+        let has_ci_sub = argv
+            .iter()
+            .any(|a| a == "scopes-send" || a == "git-refs" || a == "queue-info");
         let has_queue = argv.iter().any(|a| a == "queue");
         let has_queue_sub = argv.iter().any(|a| a == "pause" || a == "unpause");
         (has_config && has_config_sub) || (has_ci && has_ci_sub) || (has_queue && has_queue_sub)
@@ -161,6 +167,12 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             scopes_file,
             file_deprecated,
         })),
+        Subcommands::Ci(CiArgs {
+            command: CiSubcommand::GitRefs(GitRefsCliArgs { format }),
+        }) => Some(NativeCommand::CiGitRefs { format }),
+        Subcommands::Ci(CiArgs {
+            command: CiSubcommand::QueueInfo,
+        }) => Some(NativeCommand::CiQueueInfo),
         Subcommands::Queue(QueueArgs {
             repository,
             token,
@@ -237,6 +249,10 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 )
                 .await
             }
+            NativeCommand::CiGitRefs { format } => {
+                mergify_ci::git_refs::run(&GitRefsOptions { format }, &mut output)
+            }
+            NativeCommand::CiQueueInfo => mergify_ci::queue_info::run(&mut output),
             NativeCommand::QueuePause(opts) => {
                 mergify_queue::pause::run(
                     PauseOptions {
@@ -343,6 +359,25 @@ enum CiSubcommand {
     /// Send scopes tied to a pull request to Mergify.
     #[command(name = "scopes-send")]
     ScopesSend(ScopesSendCliArgs),
+    /// Print the base/head git references for the current build.
+    #[command(name = "git-refs")]
+    GitRefs(GitRefsCliArgs),
+    /// Print the merge queue batch metadata for the current draft PR.
+    #[command(name = "queue-info")]
+    QueueInfo,
+}
+
+#[derive(clap::Args)]
+struct GitRefsCliArgs {
+    /// Output format: `text` (default), `shell` for eval-friendly
+    /// `MERGIFY_GIT_REFS_*` lines, or `json` for a single JSON
+    /// object.
+    #[arg(
+        long = "format",
+        default_value = "text",
+        value_parser = mergify_ci::git_refs::Format::parse,
+    )]
+    format: GitRefsFormat,
 }
 
 #[derive(clap::Args)]
