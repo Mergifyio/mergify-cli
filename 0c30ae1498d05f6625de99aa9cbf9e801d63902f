@@ -1,0 +1,1 @@
+Address copilot review: fix 'Revision history' capitalization, standardize <SHA-or-Change-Id-prefix> placeholder, clarify that amends create new SHAs so notes must be reattached and --append only works on existing notes.
