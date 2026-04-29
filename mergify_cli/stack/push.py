@@ -24,6 +24,8 @@ import re
 import sys
 import typing
 
+import rich.markup
+
 from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import utils
@@ -582,8 +584,16 @@ async def stack_push(
             with console.status("Fetching old PR heads for comparison..."):
                 try:
                     await fetch_old_pr_heads(remote, updated_pr_numbers)
-                except utils.CommandError:
-                    pass  # Non-fatal: change type will be "unknown"
+                except utils.CommandError as exc:
+                    # Non-fatal: change type will be "unknown" — but surface
+                    # the underlying error so the user can fix it. Escape the
+                    # exception text since it can contain `[`/`]` that Rich
+                    # would otherwise interpret as markup tags.
+                    console.log(
+                        f"[orange]Could not fetch old PR heads; revision-history "
+                        f"change types will fall back to 'unknown': "
+                        f"{rich.markup.escape(str(exc))}[/]",
+                    )
 
             # Detect change types before force-push overwrites refs
             change_types: dict[str, str] = {}
