@@ -88,3 +88,55 @@ async def test_compute_merged_tree_rev_parse_error_returns_none() -> None:
             new_sha="new_sha",
         )
     assert result is None
+
+
+async def test_compute_tree_delta_parses_modifications_and_deletions() -> None:
+    """diff-tree --raw output is converted into Git Data API tree entries."""
+    raw_output = (
+        ":100644 100644 aaa1111 bbb2222 M\tsrc/a.py\n"
+        ":100755 000000 ccc3333 0000000 D\tscripts/exec.sh\n"
+        ":000000 100755 0000000 ddd4444 A\tscripts/run.sh\n"
+        ":100644 100755 eee5555 fff6666 T\tsrc/c.py\n"
+    )
+
+    async def fake_git(*args: str) -> str:
+        assert args == (
+            "diff-tree",
+            "-r",
+            "--raw",
+            "--no-renames",
+            "base_tree_sha",
+            "merged_tree_sha",
+        )
+        return raw_output
+
+    with mock.patch.object(utils, "git", side_effect=fake_git):
+        entries = await replay.compute_tree_delta(
+            base_tree_sha="base_tree_sha",
+            merged_tree_sha="merged_tree_sha",
+        )
+    assert entries == [
+        {"path": "src/a.py", "mode": "100644", "type": "blob", "sha": "bbb2222"},
+        {"path": "scripts/exec.sh", "mode": "100755", "type": "blob", "sha": None},
+        {
+            "path": "scripts/run.sh",
+            "mode": "100755",
+            "type": "blob",
+            "sha": "ddd4444",
+        },
+        {"path": "src/c.py", "mode": "100755", "type": "blob", "sha": "fff6666"},
+    ]
+
+
+async def test_compute_tree_delta_empty_when_no_diff() -> None:
+    """Empty diff-tree output produces an empty entry list."""
+
+    async def fake_git(*_args: str) -> str:
+        return ""
+
+    with mock.patch.object(utils, "git", side_effect=fake_git):
+        entries = await replay.compute_tree_delta(
+            base_tree_sha="x",
+            merged_tree_sha="y",
+        )
+    assert entries == []

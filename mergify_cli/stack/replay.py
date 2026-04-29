@@ -60,3 +60,66 @@ async def compute_merged_tree(
         return None
 
     return MergedTree(tree_sha=lines[0], parent_new_sha=parent_new_sha)
+
+
+def _mode_to_type(mode: str) -> str:
+    """Map a git tree-entry mode to the GitHub Git Data API type field."""
+    if mode == "160000":
+        return "commit"
+    if mode == "040000":
+        return "tree"
+    return "blob"
+
+
+async def compute_tree_delta(
+    *,
+    base_tree_sha: str,
+    merged_tree_sha: str,
+) -> list[dict[str, str | None]]:
+    """Return Git Data API tree entries for everything that differs.
+
+    Output format matches `POST /repos/{owner}/{repo}/git/trees` entry
+    schema: each item has path, mode, type, and sha. For deletions, sha
+    is None to instruct GitHub to remove the path from base_tree.
+    """
+    output = await utils.git(
+        "diff-tree",
+        "-r",
+        "--raw",
+        "--no-renames",
+        base_tree_sha,
+        merged_tree_sha,
+    )
+    entries: list[dict[str, str | None]] = []
+    for line in output.splitlines():
+        if not line.startswith(":"):
+            continue
+        # Format: ":mode_old mode_new sha_old sha_new STATUS\tpath"
+        # STATUS is one of M (modified), A (added), D (deleted), T (type-changed).
+        meta, _, path = line.partition("\t")
+        if not path:
+            continue
+        parts = meta.lstrip(":").split()
+        if len(parts) < 5:
+            continue
+        mode_old, mode_new, _sha_old, sha_new, status = parts[:5]
+        if status == "D":
+            # Deletion: GitHub API expects sha=null with the path.
+            entries.append(
+                {
+                    "path": path,
+                    "mode": mode_old,
+                    "type": _mode_to_type(mode_old),
+                    "sha": None,
+                },
+            )
+        else:
+            entries.append(
+                {
+                    "path": path,
+                    "mode": mode_new,
+                    "type": _mode_to_type(mode_new),
+                    "sha": sha_new,
+                },
+            )
+    return entries
