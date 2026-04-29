@@ -92,7 +92,13 @@ class CommandError(Exception):
     stdout: bytes
 
     def __str__(self) -> str:
-        return f"failed to run `{' '.join(self.command_args)}`: {self.stdout.decode()}"
+        # ``errors="replace"`` so str(CommandError) never raises on
+        # non-UTF-8 process output — callers in error paths (warnings,
+        # CLI top-level handler) rely on this being safe.
+        return (
+            f"failed to run `{' '.join(self.command_args)}`: "
+            f"{self.stdout.decode(errors='replace')}"
+        )
 
 
 class MergifyError(click.ClickException):
