@@ -16,6 +16,9 @@
 from __future__ import annotations
 
 import dataclasses
+import typing
+
+import httpx
 
 from mergify_cli import utils
 
@@ -123,3 +126,54 @@ async def compute_tree_delta(
                 },
             )
     return entries
+
+
+async def upload_replay_commit(
+    *,
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    base_tree_sha: str,
+    parent_new_sha: str,
+    old_sha: str,
+    entries: list[dict[str, str | None]],
+) -> str | None:
+    """Materialise a synthetic commit on the GitHub server, no ref attached.
+
+    Posts the tree delta with `base_tree=parent_new_tree_sha`, then a commit
+    with `parents=[parent_new_sha]`. Returns the commit SHA on success or
+    None on any API error. The unreferenced object will be GC'd by GitHub
+    eventually; the compare URL works in the meantime.
+    """
+    tree_payload: dict[str, typing.Any] = {
+        "base_tree": base_tree_sha,
+        "tree": entries,
+    }
+    try:
+        tree_resp = await client.post(
+            f"/repos/{user}/{repo}/git/trees",
+            json=tree_payload,
+        )
+        tree_resp.raise_for_status()
+        new_tree_sha = tree_resp.json().get("sha")
+        if not isinstance(new_tree_sha, str):
+            return None
+
+        commit_resp = await client.post(
+            f"/repos/{user}/{repo}/git/commits",
+            json={
+                "message": (
+                    f"mergify-cli: replay {old_sha[:7]} on {parent_new_sha[:7]}"
+                ),
+                "tree": new_tree_sha,
+                "parents": [parent_new_sha],
+            },
+        )
+        commit_resp.raise_for_status()
+        commit_sha = commit_resp.json().get("sha")
+    except (httpx.HTTPError, ValueError):
+        return None
+
+    if not isinstance(commit_sha, str):
+        return None
+    return commit_sha

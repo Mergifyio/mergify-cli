@@ -15,7 +15,11 @@
 
 from __future__ import annotations
 
+import json
 from unittest import mock
+
+import httpx
+import respx
 
 from mergify_cli import utils
 from mergify_cli.stack import replay
@@ -140,3 +144,83 @@ async def test_compute_tree_delta_empty_when_no_diff() -> None:
             merged_tree_sha="y",
         )
     assert entries == []
+
+
+@respx.mock
+async def test_upload_replay_commit_posts_tree_then_commit() -> None:
+    """upload_replay_commit chains tree+commit POSTs and returns the commit SHA."""
+    base_url = "https://api.github.com"
+    tree_route = respx.post(f"{base_url}/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "new_tree_server_sha"}),
+    )
+    commit_route = respx.post(f"{base_url}/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "new_commit_server_sha"}),
+    )
+    entries: list[dict[str, str | None]] = [
+        {"path": "src/a.py", "mode": "100644", "type": "blob", "sha": "bbb2222"},
+    ]
+
+    async with httpx.AsyncClient(base_url=base_url) as client:
+        sha = await replay.upload_replay_commit(
+            client=client,
+            user="owner",
+            repo="repo",
+            base_tree_sha="parent_new_tree_sha",
+            parent_new_sha="parent_new_sha",
+            old_sha="abc1234",
+            entries=entries,
+        )
+    assert sha == "new_commit_server_sha"
+    assert tree_route.called
+    tree_body = json.loads(tree_route.calls.last.request.read())
+    assert tree_body["base_tree"] == "parent_new_tree_sha"
+    assert tree_body["tree"] == [
+        {"path": "src/a.py", "mode": "100644", "type": "blob", "sha": "bbb2222"},
+    ]
+    assert commit_route.called
+    commit_body = json.loads(commit_route.calls.last.request.read())
+    assert commit_body["tree"] == "new_tree_server_sha"
+    assert commit_body["parents"] == ["parent_new_sha"]
+
+
+@respx.mock
+async def test_upload_replay_commit_returns_none_on_api_error() -> None:
+    """API error during tree POST returns None, no commit POST attempted."""
+    base_url = "https://api.github.com"
+    respx.post(f"{base_url}/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(422, json={"message": "tree invalid"}),
+    )
+    async with httpx.AsyncClient(base_url=base_url) as client:
+        sha = await replay.upload_replay_commit(
+            client=client,
+            user="owner",
+            repo="repo",
+            base_tree_sha="parent_new_tree_sha",
+            parent_new_sha="parent_new_sha",
+            old_sha="abc1234",
+            entries=[],
+        )
+    assert sha is None
+
+
+@respx.mock
+async def test_upload_replay_commit_returns_none_on_commit_post_failure() -> None:
+    """API error during commit POST returns None (after tree POST succeeded)."""
+    base_url = "https://api.github.com"
+    respx.post(f"{base_url}/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "new_tree_server_sha"}),
+    )
+    respx.post(f"{base_url}/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(422, json={"message": "commit invalid"}),
+    )
+    async with httpx.AsyncClient(base_url=base_url) as client:
+        sha = await replay.upload_replay_commit(
+            client=client,
+            user="owner",
+            repo="repo",
+            base_tree_sha="parent_new_tree_sha",
+            parent_new_sha="parent_new_sha",
+            old_sha="abc1234",
+            entries=[],
+        )
+    assert sha is None
