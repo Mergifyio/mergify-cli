@@ -31,6 +31,13 @@ if TYPE_CHECKING:
     import pathlib
 
 
+def test_command_error_str_handles_non_utf8_stdout() -> None:
+    # Some git invocations (e.g. legacy locales) can emit non-UTF-8 bytes;
+    # str(CommandError) must not raise — error paths depend on it.
+    error = utils.CommandError(("git", "show", "abc"), 1, b"\xff\xfe broken")
+    assert "failed to run `git show abc`" in str(error)
+
+
 @pytest.mark.usefixtures("_git_repo")
 async def test_get_branch_name() -> None:
     assert await utils.git_get_branch_name() == "main"
