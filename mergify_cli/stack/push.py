@@ -791,6 +791,7 @@ class _RevisionEntry:
         return self.timestamp.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     reason: str = ""
+    replay_sha: str | None = None
 
 
 @dataclasses.dataclass
@@ -829,10 +830,19 @@ class RevisionHistoryComment:
         change_type: str,
         timestamp: datetime.datetime,
         reason: str = "",
+        replay_sha: str | None = None,
     ) -> RevisionHistoryComment:
         entries = [
             _RevisionEntry(1, "initial", None, old_sha, timestamp),
-            _RevisionEntry(2, change_type, old_sha, new_sha, timestamp, reason=reason),
+            _RevisionEntry(
+                2,
+                change_type,
+                old_sha,
+                new_sha,
+                timestamp,
+                reason=reason,
+                replay_sha=replay_sha,
+            ),
         ]
         return cls(
             github_server=github_server,
@@ -849,6 +859,7 @@ class RevisionHistoryComment:
         change_type: str,
         timestamp: datetime.datetime,
         reason: str = "",
+        replay_sha: str | None = None,
     ) -> None:
         next_number = len(self.entries) + 1
         self.entries.append(
@@ -859,6 +870,7 @@ class RevisionHistoryComment:
                 new_sha,
                 timestamp,
                 reason=reason,
+                replay_sha=replay_sha,
             ),
         )
 
@@ -886,6 +898,7 @@ class RevisionHistoryComment:
                     "new_sha": e.new_sha,
                     "timestamp_iso": e.timestamp_iso,
                     "reason": e.reason,
+                    "replay_sha": e.replay_sha,
                     "compare_url": (
                         None
                         if e.old_sha is None
@@ -1020,6 +1033,9 @@ class RevisionHistoryComment:
                 reason = data.get("reason")
                 if isinstance(reason, str):
                     entry.reason = reason
+                replay_sha = data.get("replay_sha")
+                if isinstance(replay_sha, str) or replay_sha is None:
+                    entry.replay_sha = replay_sha
 
         return cls(
             github_server=github_server,

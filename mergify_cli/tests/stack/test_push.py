@@ -1162,6 +1162,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "new_sha": "abc1234567890abcdef1234567890abcdef123456",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
                 "reason": "",
+                "replay_sha": None,
                 "compare_url": None,
             },
             {
@@ -1171,6 +1172,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "new_sha": "def5678901234567890abcdef1234567890abcdef",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
                 "reason": "",
+                "replay_sha": None,
                 "compare_url": (
                     "https://github.com/owner/repo/compare/"
                     "abc1234567890abcdef1234567890abcdef123456..."
@@ -1199,6 +1201,31 @@ def test_revision_history_body_json_marker_is_single_line_compact() -> None:
     # Compact form: no spaces after separators.
     assert '", ' not in marker_line
     assert '": ' not in marker_line
+
+
+def test_revision_history_comment_replay_sha_round_trip() -> None:
+    """replay_sha is preserved across body() and parse()."""
+    original = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        replay_sha="111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1",
+    )
+    body = original.body(pull_number=1)
+    parsed = push.RevisionHistoryComment.parse(
+        body,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    # entry 1 is "initial" (no replay), entry 2 has replay_sha
+    assert parsed.entries[1].replay_sha == "111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1"
+    assert parsed.entries[0].replay_sha is None
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
