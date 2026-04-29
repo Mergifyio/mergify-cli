@@ -218,12 +218,19 @@ async def detect_change_type(old_sha: str, new_sha: str) -> str:
     return "rebase" if old_patch_id == new_patch_id else "content"
 
 
+OLD_PR_HEADS_REF_PREFIX = "refs/mergify/stack/old-pr-heads"
+
+
 async def fetch_old_pr_heads(remote: str, pr_numbers: list[int]) -> None:
-    """Fetch current PR head refs so old SHAs are available locally for patch-id comparison."""
+    """Fetch current PR head refs into local refs so the old SHAs stay
+    anchored (and survive any background ``gc``) for the patch-id
+    comparison performed after the force-push."""
     if not pr_numbers:
         return
-    refspecs = [f"refs/pull/{n}/head" for n in pr_numbers]
-    await utils.git("fetch", remote, *refspecs)
+    refspecs = [
+        f"+refs/pull/{n}/head:{OLD_PR_HEADS_REF_PREFIX}/{n}" for n in pr_numbers
+    ]
+    await utils.git("fetch", remote, "--no-write-fetch-head", *refspecs)
 
 
 @dataclasses.dataclass

@@ -424,7 +424,13 @@ async def test_stack_update_no_rebase(
         "/repos/user/repo/issues/comments/456",
     ).respond(200)
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
-    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
+        output="",
+    )
 
     with mock.patch.object(push, "detect_change_type", return_value="content"):
         await push.stack_push(
@@ -529,7 +535,13 @@ async def test_stack_update(
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
-    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
+        output="",
+    )
 
     with mock.patch.object(push, "detect_change_type", return_value="content"):
         await push.stack_push(
@@ -626,7 +638,13 @@ async def test_stack_update_keep_title_and_body(
     )
     respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
-    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
+        output="",
+    )
 
     with mock.patch.object(push, "detect_change_type", return_value="content"):
         await push.stack_push(
@@ -964,8 +982,9 @@ async def test_fetch_old_pr_heads(
     git_mock.mock(
         "fetch",
         "origin",
-        "refs/pull/1/head",
-        "refs/pull/2/head",
+        "--no-write-fetch-head",
+        "+refs/pull/1/head:refs/mergify/stack/old-pr-heads/1",
+        "+refs/pull/2/head:refs/mergify/stack/old-pr-heads/2",
         output="",
     )
     await push.fetch_old_pr_heads("origin", [1, 2])
@@ -1222,7 +1241,8 @@ async def test_create_revision_comment_on_update(
     git_mock.mock(
         "fetch",
         "origin",
-        "refs/pull/123/head",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
         output="",
     )
 
@@ -1429,7 +1449,12 @@ async def test_no_revision_history_flag_skips_revision_comments(
     )
 
     # No fetch of PR heads
-    assert not git_mock.has_been_called_with("fetch", "origin", "refs/pull/123/head")
+    assert not git_mock.has_been_called_with(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
+    )
     # No revision comment posted
     for call in respx_mock.calls:
         if call.request.method == "POST" and "/comments" in str(call.request.url):
@@ -1455,7 +1480,13 @@ async def test_revision_comment_updated_on_second_push(
     git_mock.finalize(
         remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "second_sha"},
     )
-    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
+        output="",
+    )
 
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(
@@ -2071,7 +2102,13 @@ async def test_revision_comment_includes_reason_from_local_change(
         "third_sha",
         output="fixed typo in sql",
     )
-    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/123/head:refs/mergify/stack/old-pr-heads/123",
+        output="",
+    )
 
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(
@@ -2488,7 +2525,13 @@ async def test_stack_push_auto_skips_rebase_when_approved(
             "I29617d37762fd69809c255d7e7073cb11f8fbf50": "old_head_sha",
         },
     )
-    git_mock.mock("fetch", "origin", "refs/pull/1/head", output="")
+    git_mock.mock(
+        "fetch",
+        "origin",
+        "--no-write-fetch-head",
+        "+refs/pull/1/head:refs/mergify/stack/old-pr-heads/1",
+        output="",
+    )
 
     respx_mock.get("/user").respond(200, json={"login": "author"})
     respx_mock.get("/search/issues").respond(
