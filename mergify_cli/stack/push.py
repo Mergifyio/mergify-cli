@@ -877,6 +877,11 @@ class RevisionHistoryComment:
     def _render_entry(self, entry: _RevisionEntry) -> str:
         if entry.old_sha is None:
             changes_cell = f"`{entry.new_sha[:7]}`"
+        elif entry.change_type == "rebase":
+            # Pure rebase: patch-id matched, no semantic change.
+            changes_cell = (
+                f"`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}` _(rebase only)_"
+            )
         else:
             url = self._compare_url(entry.old_sha, entry.new_sha)
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"

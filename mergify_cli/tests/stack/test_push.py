@@ -1017,12 +1017,11 @@ def test_revision_history_comment_append() -> None:
         timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
     )
     body = comment.body(pull_number=1)
-    assert "| 3 | rebase |" in body
-    assert (
-        "def5678901234567890abcdef1234567890abcdef...789abcdef01234567890abcdef01234567890abcd"
-        in body
-    )
-    assert "2026-04-15 09:10 UTC" in body
+    rebase_line = next(line for line in body.splitlines() if "| 3 | rebase |" in line)
+    assert "rebase only" in rebase_line
+    assert "/compare/" not in rebase_line
+    assert "`def5678 → 789abcd`" in rebase_line
+    assert "2026-04-15 09:10 UTC" in rebase_line
 
 
 def test_revision_history_comment_parse_existing() -> None:
@@ -1061,6 +1060,11 @@ def test_revision_history_comment_parse_existing() -> None:
     )
     assert "| 1 | initial |" in new_body
     assert "| 2 | content |" in new_body
+    rebase_line = next(
+        line for line in new_body.splitlines() if "| 3 | rebase |" in line
+    )
+    assert "rebase only" in rebase_line
+    assert "/compare/" not in rebase_line
 
 
 def test_revision_history_comment_parse_returns_none_for_non_matching() -> None:
@@ -2682,3 +2686,22 @@ def test_push_cli_rejects_skip_and_force_rebase_together(
     )
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output.lower()
+
+
+def test_revision_history_renders_badge_for_pure_rebase() -> None:
+    """change_type='rebase' renders a badge instead of a compare link."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = comment.body(pull_number=1)
+    # The rebase row must NOT contain a compare URL
+    rebase_line = next(line for line in body.splitlines() if "| 2 | rebase |" in line)
+    assert "/compare/" not in rebase_line
+    assert "rebase only" in rebase_line
+    assert "`abc1234 → def5678`" in rebase_line
