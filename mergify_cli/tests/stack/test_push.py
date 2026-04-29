@@ -26,6 +26,7 @@ from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
 from mergify_cli.stack import push
+from mergify_cli.stack import replay
 from mergify_cli.tests import utils as test_utils
 
 
@@ -426,7 +427,10 @@ async def test_stack_update_no_rebase(
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -531,7 +535,10 @@ async def test_stack_update(
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -628,7 +635,10 @@ async def test_stack_update_keep_title_and_body(
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -1307,7 +1317,10 @@ async def test_create_revision_comment_on_update(
         "/repos/user/repo/issues/123/comments",
     ).respond(200)
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -2143,7 +2156,10 @@ async def test_revision_comment_includes_reason_from_local_change(
         "/repos/user/repo/issues/123/comments",
     ).respond(200, json={})
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -2568,6 +2584,7 @@ async def test_stack_push_auto_skips_rebase_when_approved(
 
     with (
         mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
         mock.patch.object(stack_sync_mod, "smart_rebase") as smart_rebase_mock,
     ):
         await push.stack_push(
@@ -2747,3 +2764,39 @@ def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
         "/compare/aaa1234567890abcdef1234567890abcdef123456"
         "...bbb5678901234567890abcdef1234567890abcdef" in body
     )
+
+
+@pytest.mark.respx(base_url="https://api.github.com")
+async def test_create_or_update_revision_comments_passes_replay_sha(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """The replay_sha from change_types tuple lands in the rendered comment."""
+    import httpx
+
+    pull = {"number": 42, "merged_at": None, "head": {"sha": "newsha"}, "url": "u"}
+    change = mock.MagicMock(spec=changes.LocalChange)
+    change.pull = pull
+    change.pull_head_sha = "oldshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    change.commit_sha = "newshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    change.reason = ""
+
+    # No existing comments
+    respx_mock.get("/repos/owner/repo/issues/42/comments").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    create_route = respx_mock.post(
+        "/repos/owner/repo/issues/42/comments",
+    ).mock(return_value=httpx.Response(201, json={}))
+
+    async with httpx.AsyncClient(base_url="https://api.github.com") as client:
+        await push.create_or_update_revision_comments(
+            client,
+            "owner",
+            "repo",
+            "https://api.github.com",
+            [(change, "content", "replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")],
+        )
+
+    assert create_route.called
+    body = create_route.calls.last.request.read()
+    assert b"replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX...newshaaaaaaaa" in body

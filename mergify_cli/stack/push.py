@@ -32,6 +32,7 @@ from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import approvals as approvals_mod
 from mergify_cli.stack import changes
+from mergify_cli.stack import replay
 from mergify_cli.stack.note import NOTES_REF
 
 
@@ -595,7 +596,8 @@ async def stack_push(
                         f"{rich.markup.escape(str(exc))}[/]",
                     )
 
-            # Detect change types before force-push overwrites refs
+            # Detect change types before force-push overwrites refs.
+            # detect_change_type is local-only and fast; keep it sequential.
             change_types: dict[str, str] = {}
             for change in planned_changes.locals:
                 if change.action == "update" and change.pull is not None:
@@ -603,6 +605,34 @@ async def stack_push(
                         change.pull_head_sha,
                         change.commit_sha,
                     )
+
+            # Compute replay SHAs concurrently — each PR's replay is independent
+            # and involves 2 GitHub API calls + git subprocess work.
+            replay_sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+
+            async def _maybe_replay(
+                change: changes.LocalChange,
+            ) -> tuple[str, str | None]:
+                if change_types.get(change.id) != "content":
+                    return change.id, None
+                async with replay_sem:
+                    sha = await replay.replay_for_revision(
+                        client=client,
+                        user=user,
+                        repo=repo,
+                        old_sha=change.pull_head_sha,
+                        new_sha=change.commit_sha,
+                    )
+                return change.id, sha
+
+            replay_results = await asyncio.gather(
+                *(
+                    _maybe_replay(change)
+                    for change in planned_changes.locals
+                    if change.action == "update" and change.pull is not None
+                ),
+            )
+            replay_shas: dict[str, str | None] = dict(replay_results)
 
         with console.status("Pushing stacked branches..."):
             await push_branches(
@@ -659,7 +689,11 @@ async def stack_push(
 
         if revision_history:
             updated_changes = [
-                (task.change, change_types.get(task.change.id, "unknown"))
+                (
+                    task.change,
+                    change_types.get(task.change.id, "unknown"),
+                    replay_shas.get(task.change.id),
+                )
                 for task in tasks
                 if task.change.action == "update" and task.change.pull is not None
             ]
@@ -1136,6 +1170,8 @@ async def _update_revision_for_pull(
     github_server: str,
     change: changes.LocalChange,
     change_type: str,
+    *,
+    replay_sha: str | None,
     timestamp: datetime.datetime,
     sem: asyncio.Semaphore,
 ) -> None:
@@ -1167,6 +1203,7 @@ async def _update_revision_for_pull(
                         change_type=change_type,
                         timestamp=timestamp,
                         reason=change.reason,
+                        replay_sha=replay_sha,
                     )
                     new_body = parsed.body(pull_number)
                     if comment["body"] != new_body:
@@ -1185,6 +1222,7 @@ async def _update_revision_for_pull(
                     change_type=change_type,
                     timestamp=timestamp,
                     reason=change.reason,
+                    replay_sha=replay_sha,
                 )
                 await client.patch(
                     comment["url"],
@@ -1202,6 +1240,7 @@ async def _update_revision_for_pull(
             change_type=change_type,
             timestamp=timestamp,
             reason=change.reason,
+            replay_sha=replay_sha,
         )
         await client.post(
             f"/repos/{user}/{repo}/issues/{pull_number}/comments",
@@ -1214,7 +1253,7 @@ async def create_or_update_revision_comments(
     user: str,
     repo: str,
     github_server: str,
-    updated_changes: list[tuple[changes.LocalChange, str]],
+    updated_changes: list[tuple[changes.LocalChange, str, str | None]],
 ) -> None:
     if not updated_changes:
         return
@@ -1231,10 +1270,11 @@ async def create_or_update_revision_comments(
                 github_server,
                 change,
                 change_type,
-                now,
-                sem,
+                replay_sha=replay_sha,
+                timestamp=now,
+                sem=sem,
             )
-            for change, change_type in updated_changes
+            for change, change_type, replay_sha in updated_changes
         ),
     )
 
