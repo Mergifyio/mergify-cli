@@ -18,7 +18,6 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
 
 use mergify_core::ApiFlavor;
 use mergify_core::CliError;
@@ -26,11 +25,10 @@ use mergify_core::HttpClient;
 use mergify_core::Output;
 use url::Url;
 
+use crate::paths::resolve_config_path;
+
 const SCHEMA_HOST: &str = "https://docs.mergify.com";
 const SCHEMA_PATH: &str = "/mergify-configuration-schema.json";
-
-const DEFAULT_CONFIG_PATHS: [&str; 3] =
-    [".mergify.yml", ".mergify/config.yml", ".github/mergify.yml"];
 
 /// Run the `config validate` command.
 ///
@@ -53,30 +51,6 @@ pub async fn run(explicit_path: Option<&Path>, output: &mut dyn Output) -> Resul
         Err(CliError::Configuration(
             "configuration validation failed".to_string(),
         ))
-    }
-}
-
-fn resolve_config_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
-    if let Some(path) = explicit {
-        if path.is_file() {
-            Ok(path.to_path_buf())
-        } else {
-            Err(CliError::Configuration(format!(
-                "Configuration file not found: {}",
-                path.display(),
-            )))
-        }
-    } else {
-        for candidate in DEFAULT_CONFIG_PATHS {
-            let path = Path::new(candidate);
-            if path.is_file() {
-                return Ok(path.to_path_buf());
-            }
-        }
-        Err(CliError::Configuration(format!(
-            "Mergify configuration file not found. Looked in: {}",
-            DEFAULT_CONFIG_PATHS.join(", "),
-        )))
     }
 }
 
@@ -209,38 +183,6 @@ mod tests {
                 },
             },
         })
-    }
-
-    #[test]
-    fn resolve_config_path_finds_dotmergify_yml() {
-        let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join(".mergify.yml"), "").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
-
-        let got = resolve_config_path(None).unwrap();
-        assert_eq!(got, Path::new(".mergify.yml"));
-
-        std::env::set_current_dir(prev).unwrap();
-    }
-
-    #[test]
-    fn resolve_config_path_errors_when_no_file_and_no_explicit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
-
-        let err = resolve_config_path(None).unwrap_err();
-        assert!(matches!(err, CliError::Configuration(_)));
-        assert!(err.to_string().contains("not found"));
-
-        std::env::set_current_dir(prev).unwrap();
-    }
-
-    #[test]
-    fn resolve_config_path_errors_on_explicit_missing_file() {
-        let err = resolve_config_path(Some(Path::new("/nonexistent/path.yml"))).unwrap_err();
-        assert!(matches!(err, CliError::Configuration(_)));
     }
 
     #[test]
