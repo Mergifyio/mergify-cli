@@ -790,6 +790,15 @@ class _RevisionEntry:
             return None
         return self.timestamp.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    @property
+    def effective_old_sha(self) -> str | None:
+        """SHA to use as the 'from' anchor in compare URLs.
+
+        Prefers replay_sha when present (rebase-aware diff anchored at
+        the synthetic replay commit); falls back to old_sha otherwise.
+        """
+        return self.replay_sha or self.old_sha
+
     reason: str = ""
     replay_sha: str | None = None
 
@@ -883,7 +892,10 @@ class RevisionHistoryComment:
                 f"`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}` _(rebase only)_"
             )
         else:
-            url = self._compare_url(entry.old_sha, entry.new_sha)
+            url = self._compare_url(
+                typing.cast("str", entry.effective_old_sha),
+                entry.new_sha,
+            )
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
         reason_cell = _escape_reason(entry.reason)
         return (
@@ -907,7 +919,10 @@ class RevisionHistoryComment:
                     "compare_url": (
                         None
                         if e.old_sha is None
-                        else self._compare_url(e.old_sha, e.new_sha)
+                        else self._compare_url(
+                            typing.cast("str", e.effective_old_sha),
+                            e.new_sha,
+                        )
                     ),
                 }
                 for e in self.entries

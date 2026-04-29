@@ -2705,3 +2705,45 @@ def test_revision_history_renders_badge_for_pure_rebase() -> None:
     assert "/compare/" not in rebase_line
     assert "rebase only" in rebase_line
     assert "`abc1234 → def5678`" in rebase_line
+
+
+def test_revision_history_uses_replay_sha_for_url_when_present() -> None:
+    """When replay_sha is set, compare URL anchors at it instead of old_sha."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="aaa1234567890abcdef1234567890abcdef123456",
+        new_sha="bbb5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        replay_sha="ccc9999999999999999999999999999999999999",
+    )
+    body = comment.body(pull_number=1)
+    # URL anchor must be replay_sha, not old_sha
+    assert (
+        "/compare/ccc9999999999999999999999999999999999999"
+        "...bbb5678901234567890abcdef1234567890abcdef" in body
+    )
+    assert "/compare/aaa1234567890abcdef1234567890abcdef123456" not in body
+    # Visible label keeps the human-readable old_sha → new_sha shorthand
+    assert "`aaa1234 → bbb5678`" in body
+
+
+def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
+    """When replay_sha is absent, compare URL anchors at old_sha."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="aaa1234567890abcdef1234567890abcdef123456",
+        new_sha="bbb5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        # replay_sha omitted
+    )
+    body = comment.body(pull_number=1)
+    assert (
+        "/compare/aaa1234567890abcdef1234567890abcdef123456"
+        "...bbb5678901234567890abcdef1234567890abcdef" in body
+    )
