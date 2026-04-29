@@ -224,3 +224,137 @@ async def test_upload_replay_commit_returns_none_on_commit_post_failure() -> Non
             entries=[],
         )
     assert sha is None
+
+
+@respx.mock
+async def test_replay_for_revision_happy_path() -> None:
+    """End-to-end: merge-tree → diff → upload → returns server commit SHA."""
+    base_url = "https://api.github.com"
+    respx.post(f"{base_url}/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "server_tree_sha"}),
+    )
+    respx.post(f"{base_url}/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "server_commit_sha"}),
+    )
+
+    async def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "old_sha^"):
+            return "parent_old_sha"
+        if args == ("rev-parse", "new_sha^"):
+            return "parent_new_sha"
+        if args == (
+            "merge-tree",
+            "--write-tree",
+            "--merge-base=parent_old_sha",
+            "parent_new_sha",
+            "old_sha",
+        ):
+            return "merged_tree_sha"
+        if args == ("rev-parse", "parent_new_sha^{tree}"):
+            return "parent_new_tree_sha"
+        if args == (
+            "diff-tree",
+            "-r",
+            "--raw",
+            "--no-renames",
+            "parent_new_tree_sha",
+            "merged_tree_sha",
+        ):
+            return ":100644 100644 aaa bbb M\tsrc/x.py\n"
+        msg = f"unexpected git call: {args}"
+        raise AssertionError(msg)
+
+    with mock.patch.object(utils, "git", side_effect=fake_git):
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            sha = await replay.replay_for_revision(
+                client=client,
+                user="owner",
+                repo="repo",
+                old_sha="old_sha",
+                new_sha="new_sha",
+            )
+    assert sha == "server_commit_sha"
+
+
+@respx.mock
+async def test_replay_for_revision_conflict_returns_none() -> None:
+    """A merge-tree conflict short-circuits to None (no API calls)."""
+
+    async def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "old_sha^"):
+            return "parent_old_sha"
+        if args == ("rev-parse", "new_sha^"):
+            return "parent_new_sha"
+        if args[0] == "merge-tree":
+            raise utils.CommandError(("git", "merge-tree"), 1, b"CONFLICT")
+        msg = f"unexpected git call: {args}"
+        raise AssertionError(msg)
+
+    async with httpx.AsyncClient(base_url="https://api.github.com") as client:
+        with mock.patch.object(utils, "git", side_effect=fake_git):
+            sha = await replay.replay_for_revision(
+                client=client,
+                user="owner",
+                repo="repo",
+                old_sha="old_sha",
+                new_sha="new_sha",
+            )
+    assert sha is None
+
+
+@respx.mock
+async def test_replay_for_revision_no_diff_returns_none() -> None:
+    """If merged tree equals parent_new's tree, there's nothing to upload."""
+
+    async def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "old_sha^"):
+            return "parent_old_sha"
+        if args == ("rev-parse", "new_sha^"):
+            return "parent_new_sha"
+        if args[0] == "merge-tree":
+            return "merged_tree_sha"
+        if args == ("rev-parse", "parent_new_sha^{tree}"):
+            return "parent_new_tree_sha"
+        if args[0] == "diff-tree":
+            return ""  # empty delta
+        msg = f"unexpected git call: {args}"
+        raise AssertionError(msg)
+
+    async with httpx.AsyncClient(base_url="https://api.github.com") as client:
+        with mock.patch.object(utils, "git", side_effect=fake_git):
+            sha = await replay.replay_for_revision(
+                client=client,
+                user="owner",
+                repo="repo",
+                old_sha="old_sha",
+                new_sha="new_sha",
+            )
+    assert sha is None
+
+
+@respx.mock
+async def test_replay_for_revision_rev_parse_tree_error_returns_none() -> None:
+    """If rev-parse <commit>^{tree} fails, replay_for_revision returns None."""
+
+    async def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "old_sha^"):
+            return "parent_old_sha"
+        if args == ("rev-parse", "new_sha^"):
+            return "parent_new_sha"
+        if args[0] == "merge-tree":
+            return "merged_tree_sha"
+        if args == ("rev-parse", "parent_new_sha^{tree}"):
+            raise utils.CommandError(("git", "rev-parse"), 128, b"unknown revision")
+        msg = f"unexpected git call: {args}"
+        raise AssertionError(msg)
+
+    async with httpx.AsyncClient(base_url="https://api.github.com") as client:
+        with mock.patch.object(utils, "git", side_effect=fake_git):
+            sha = await replay.replay_for_revision(
+                client=client,
+                user="owner",
+                repo="repo",
+                old_sha="old_sha",
+                new_sha="new_sha",
+            )
+    assert sha is None

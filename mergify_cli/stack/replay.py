@@ -177,3 +177,50 @@ async def upload_replay_commit(
     if not isinstance(commit_sha, str):
         return None
     return commit_sha
+
+
+async def replay_for_revision(
+    *,
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    old_sha: str,
+    new_sha: str,
+) -> str | None:
+    """Top-level entry point. Returns server-side commit SHA or None.
+
+    Returns None whenever the rebase-aware compare URL can't be produced
+    (conflict, no diff, git error, API error). Callers must fall back to
+    the existing three-dot URL anchored at old_sha.
+    """
+    merged = await compute_merged_tree(old_sha=old_sha, new_sha=new_sha)
+    if merged is None:
+        return None
+
+    try:
+        # ^{tree} dereferences a commit SHA to its root tree SHA (git plumbing syntax).
+        parent_new_tree_sha = await utils.git(
+            "rev-parse",
+            f"{merged.parent_new_sha}^{{tree}}",
+        )
+    except utils.CommandError:
+        return None
+
+    entries = await compute_tree_delta(
+        base_tree_sha=parent_new_tree_sha,
+        merged_tree_sha=merged.tree_sha,
+    )
+    if not entries:
+        # Nothing to compare — the user's change is fully absorbed by the
+        # rebase or the merge produced an identical tree.
+        return None
+
+    return await upload_replay_commit(
+        client=client,
+        user=user,
+        repo=repo,
+        base_tree_sha=parent_new_tree_sha,
+        parent_new_sha=merged.parent_new_sha,
+        old_sha=old_sha,
+        entries=entries,
+    )
