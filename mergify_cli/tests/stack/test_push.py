@@ -26,6 +26,7 @@ from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import changes
 from mergify_cli.stack import push
+from mergify_cli.stack import replay
 from mergify_cli.tests import utils as test_utils
 
 
@@ -426,7 +427,10 @@ async def test_stack_update_no_rebase(
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -531,7 +535,10 @@ async def test_stack_update(
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -628,7 +635,10 @@ async def test_stack_update_keep_title_and_body(
     respx_mock.post("/repos/user/repo/issues/123/comments").respond(200)
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -1017,12 +1027,11 @@ def test_revision_history_comment_append() -> None:
         timestamp=datetime.datetime(2026, 4, 15, 9, 10, tzinfo=datetime.UTC),
     )
     body = comment.body(pull_number=1)
-    assert "| 3 | rebase |" in body
-    assert (
-        "def5678901234567890abcdef1234567890abcdef...789abcdef01234567890abcdef01234567890abcd"
-        in body
-    )
-    assert "2026-04-15 09:10 UTC" in body
+    rebase_line = next(line for line in body.splitlines() if "| 3 | rebase |" in line)
+    assert "rebase only" in rebase_line
+    assert "/compare/" not in rebase_line
+    assert "`def5678 → 789abcd`" in rebase_line
+    assert "2026-04-15 09:10 UTC" in rebase_line
 
 
 def test_revision_history_comment_parse_existing() -> None:
@@ -1061,6 +1070,11 @@ def test_revision_history_comment_parse_existing() -> None:
     )
     assert "| 1 | initial |" in new_body
     assert "| 2 | content |" in new_body
+    rebase_line = next(
+        line for line in new_body.splitlines() if "| 3 | rebase |" in line
+    )
+    assert "rebase only" in rebase_line
+    assert "/compare/" not in rebase_line
 
 
 def test_revision_history_comment_parse_returns_none_for_non_matching() -> None:
@@ -1162,6 +1176,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "new_sha": "abc1234567890abcdef1234567890abcdef123456",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
                 "reason": "",
+                "replay_sha": None,
                 "compare_url": None,
             },
             {
@@ -1171,6 +1186,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "new_sha": "def5678901234567890abcdef1234567890abcdef",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
                 "reason": "",
+                "replay_sha": None,
                 "compare_url": (
                     "https://github.com/owner/repo/compare/"
                     "abc1234567890abcdef1234567890abcdef123456..."
@@ -1199,6 +1215,31 @@ def test_revision_history_body_json_marker_is_single_line_compact() -> None:
     # Compact form: no spaces after separators.
     assert '", ' not in marker_line
     assert '": ' not in marker_line
+
+
+def test_revision_history_comment_replay_sha_round_trip() -> None:
+    """replay_sha is preserved across body() and parse()."""
+    original = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        replay_sha="111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1",
+    )
+    body = original.body(pull_number=1)
+    parsed = push.RevisionHistoryComment.parse(
+        body,
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+    )
+    assert parsed is not None
+    # entry 1 is "initial" (no replay), entry 2 has replay_sha
+    assert parsed.entries[1].replay_sha == "111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1"
+    assert parsed.entries[0].replay_sha is None
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
@@ -1276,7 +1317,10 @@ async def test_create_revision_comment_on_update(
         "/repos/user/repo/issues/123/comments",
     ).respond(200)
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -1302,6 +1346,217 @@ async def test_create_revision_comment_on_update(
     assert "content" in posted_body
     assert "old_com" in posted_body  # old_commit_sha[:7]
     assert "new_com" in posted_body  # new_commit_sha[:7]
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_create_revision_comment_with_replay_sha_renders_dual_link(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """When replay_for_revision returns a SHA, the rendered comment uses it as
+    the primary URL anchor and appends a (raw) fallback link to old_sha."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new_commit_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "old_commit_sha"},
+    )
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/123",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "old_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "mergeable": True,
+            "mergeable_state": "clean",
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123/reviews").respond(200, json=[])
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    post_revision_mock = respx_mock.post(
+        "/repos/user/repo/issues/123/comments",
+    ).respond(200)
+
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(
+            replay,
+            "replay_for_revision",
+            return_value="replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        ),
+    ):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+    revision_calls = [
+        call
+        for call in post_revision_mock.calls
+        if json.loads(call.request.content)
+        .get("body", "")
+        .startswith("### Revision history")
+    ]
+    assert len(revision_calls) == 1
+    posted_body = json.loads(revision_calls[0].request.content)["body"]
+    # Primary link is anchored at the replay SHA
+    assert (
+        "/compare/replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX...new_commit_sha"
+        in posted_body
+    )
+    # Raw fallback link is anchored at the original old SHA
+    assert (
+        "([raw](https://github.com/user/repo/compare/old_commit_sha..." in posted_body
+    )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_push_survives_replay_for_revision_raising(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """If replay_for_revision unexpectedly raises, the push completes with a
+    standard (non-rebase-aware) revision comment instead of aborting."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new_commit_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "old_commit_sha"},
+    )
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/123",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "old_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "mergeable": True,
+            "mergeable_state": "clean",
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123/reviews").respond(200, json=[])
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    post_revision_mock = respx_mock.post(
+        "/repos/user/repo/issues/123/comments",
+    ).respond(200)
+
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(
+            replay,
+            "replay_for_revision",
+            side_effect=RuntimeError("simulated replay crash"),
+        ),
+    ):
+        # Must NOT raise — the wrapper in stack_push catches and falls back.
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+    # The revision comment was still posted, falling back to the standard URL
+    # anchored at old_commit_sha (no replay_sha present).
+    revision_calls = [
+        call
+        for call in post_revision_mock.calls
+        if json.loads(call.request.content)
+        .get("body", "")
+        .startswith("### Revision history")
+    ]
+    assert len(revision_calls) == 1
+    posted_body = json.loads(revision_calls[0].request.content)["body"]
+    assert "/compare/old_commit_sha...new_commit_sha" in posted_body
+    # No raw fallback link since no replay_sha was produced.
+    assert "[raw]" not in posted_body
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
@@ -2112,7 +2367,10 @@ async def test_revision_comment_includes_reason_from_local_change(
         "/repos/user/repo/issues/123/comments",
     ).respond(200, json={})
 
-    with mock.patch.object(push, "detect_change_type", return_value="content"):
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
+    ):
         await push.stack_push(
             github_server="https://api.github.com/",
             token="",
@@ -2537,6 +2795,7 @@ async def test_stack_push_auto_skips_rebase_when_approved(
 
     with (
         mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(replay, "replay_for_revision", return_value=None),
         mock.patch.object(stack_sync_mod, "smart_rebase") as smart_rebase_mock,
     ):
         await push.stack_push(
@@ -2655,3 +2914,111 @@ def test_push_cli_rejects_skip_and_force_rebase_together(
     )
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output.lower()
+
+
+def test_revision_history_renders_badge_for_pure_rebase() -> None:
+    """change_type='rebase' renders a badge instead of a compare link."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="abc1234567890abcdef1234567890abcdef123456",
+        new_sha="def5678901234567890abcdef1234567890abcdef",
+        change_type="rebase",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+    )
+    body = comment.body(pull_number=1)
+    # The rebase row must NOT contain a compare URL
+    rebase_line = next(line for line in body.splitlines() if "| 2 | rebase |" in line)
+    assert "/compare/" not in rebase_line
+    assert "rebase only" in rebase_line
+    assert "`abc1234 → def5678`" in rebase_line
+
+
+def test_revision_history_uses_replay_sha_for_url_when_present() -> None:
+    """When replay_sha is set, primary URL anchors at it; raw link uses old_sha."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="aaa1234567890abcdef1234567890abcdef123456",
+        new_sha="bbb5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        replay_sha="ccc9999999999999999999999999999999999999",
+    )
+    body = comment.body(pull_number=1)
+    row = next(line for line in body.splitlines() if "| 2 | content |" in line)
+    rebase_aware_url = (
+        "https://github.com/owner/repo/compare/"
+        "ccc9999999999999999999999999999999999999"
+        "...bbb5678901234567890abcdef1234567890abcdef"
+    )
+    raw_url = (
+        "https://github.com/owner/repo/compare/"
+        "aaa1234567890abcdef1234567890abcdef123456"
+        "...bbb5678901234567890abcdef1234567890abcdef"
+    )
+    # Primary clickable label uses the human-readable SHAs and points at the
+    # rebase-aware URL (the synthetic replay commit).
+    assert f"[`aaa1234 → bbb5678`]({rebase_aware_url})" in row
+    # Raw link is appended for durability after GitHub GCs the synthetic commit.
+    assert f"([raw]({raw_url}))" in row
+
+
+def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
+    """When replay_sha is absent, single link anchors at old_sha; no raw link."""
+    comment = push.RevisionHistoryComment.create_initial(
+        github_server="https://api.github.com",
+        user="owner",
+        repo="repo",
+        old_sha="aaa1234567890abcdef1234567890abcdef123456",
+        new_sha="bbb5678901234567890abcdef1234567890abcdef",
+        change_type="content",
+        timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
+        # replay_sha omitted
+    )
+    body = comment.body(pull_number=1)
+    row = next(line for line in body.splitlines() if "| 2 | content |" in line)
+    assert (
+        "/compare/aaa1234567890abcdef1234567890abcdef123456"
+        "...bbb5678901234567890abcdef1234567890abcdef" in row
+    )
+    # No replay → no raw fallback link
+    assert "[raw]" not in row
+
+
+@pytest.mark.respx(base_url="https://api.github.com")
+async def test_create_or_update_revision_comments_passes_replay_sha(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """The replay_sha from change_types tuple lands in the rendered comment."""
+    import httpx
+
+    pull = {"number": 42, "merged_at": None, "head": {"sha": "newsha"}, "url": "u"}
+    change = mock.MagicMock(spec=changes.LocalChange)
+    change.pull = pull
+    change.pull_head_sha = "oldshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    change.commit_sha = "newshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    change.reason = ""
+
+    # No existing comments
+    respx_mock.get("/repos/owner/repo/issues/42/comments").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    create_route = respx_mock.post(
+        "/repos/owner/repo/issues/42/comments",
+    ).mock(return_value=httpx.Response(201, json={}))
+
+    async with httpx.AsyncClient(base_url="https://api.github.com") as client:
+        await push.create_or_update_revision_comments(
+            client,
+            "owner",
+            "repo",
+            "https://api.github.com",
+            [(change, "content", "replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")],
+        )
+
+    assert create_route.called
+    body = create_route.calls.last.request.read()
+    assert b"replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX...newshaaaaaaaa" in body
