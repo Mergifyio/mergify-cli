@@ -17,6 +17,14 @@ jobs:
         with:
           python-version: 3.14
 
+      # The maturin build-backend invokes cargo at sync time, so
+      # every Python-using job needs the Rust toolchain on PATH.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+
       - uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
@@ -34,6 +42,12 @@ jobs:
       - uses: actions/setup-python@v6.2.0
         with:
           python-version: 3.14
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
 
       - uses: astral-sh/setup-uv@v8.1.0
         with:
@@ -71,7 +85,7 @@ jobs:
         run: cargo build --release
 
   test:
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-15]
@@ -82,6 +96,17 @@ jobs:
       - uses: actions/setup-python@v6.2.0
         with:
           python-version: ${{ matrix.python }}
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The matrix runs the same target six times. Keying the
+          # cache on (os, python) avoids cross-pollution while still
+          # letting cargo reuse fetched crates within each shard.
+          key: ${{ matrix.os }}-py${{ matrix.python }}
 
       - uses: astral-sh/setup-uv@v8.1.0
         with:

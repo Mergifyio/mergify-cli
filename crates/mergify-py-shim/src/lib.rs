@@ -1,246 +1,164 @@
 //! Python shim for the mergify CLI Rust port.
 //!
-//! The current Python source is embedded at compile time via
-//! [`include_dir`]. On first invocation the shim extracts the
-//! embedded tree to a per-user cache directory (atomic, file-locked)
-//! and invokes `python3 -m mergify_cli` with that directory on
-//! `PYTHONPATH`. Args, stdin, stdout, stderr, and the exit code are
-//! passed through transparently.
+//! The Rust binary (`mergify`) is shipped inside a maturin-built
+//! Python wheel. When the wheel is installed (`pipx install
+//! mergify-cli`) the binary lands at `<venv>/bin/mergify` and the
+//! Python source at `<venv>/lib/pythonX.Y/site-packages/mergify_cli/`.
+//! For un-ported subcommands the shim locates the venv's `python3`
+//! (sibling of the binary) and invokes `python3 -m mergify_cli` with
+//! the original argv.
 //!
-//! When a command is ported to native Rust in Phase 1.3+, the caller
-//! dispatches to the native implementation first and falls back to
-//! [`run`] only for un-ported commands. Phase 6 removes this crate
-//! entirely once the port is complete.
+//! Args, stdin, stdout, stderr, and the exit code pass through
+//! transparently.
 //!
-//! The cache is keyed on `CARGO_PKG_VERSION`. During dev (`0.0.0`),
-//! that means the cache is shared across builds — if you change the
-//! embedded Python source while developing, clear
-//! `~/.cache/mergify/py/` to force a re-extract. The release
-//! pipeline in Phase 1.5 stamps a real version + git SHA, after
-//! which every build invalidates cleanly.
+//! Discovery: by default we resolve `<current_exe>/../python3` (or
+//! `python.exe` on Windows). When the binary is run from a
+//! `cargo build` checkout (no sibling Python), the
+//! `MERGIFY_PYTHON_EXE` env var overrides — point it at any
+//! interpreter that has the package available on `sys.path`.
+//!
+//! When a command ships native in Rust the caller dispatches to the
+//! native impl first and only falls back to [`run`] for un-ported
+//! commands. The plan is for each port PR to delete its Python
+//! implementation in the same change, so the shim's reach shrinks
+//! one command at a time. Phase 6 deletes this crate entirely.
 
 use std::env;
-use std::fs;
 use std::io;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use fs2::FileExt;
-use include_dir::Dir;
-use include_dir::DirEntry;
-use include_dir::include_dir;
+#[cfg(windows)]
+const PYTHON_FILENAME: &str = "python.exe";
+#[cfg(not(windows))]
+const PYTHON_FILENAME: &str = "python3";
 
-static PY_SOURCE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../mergify_cli");
-
-/// Cache key under `~/.cache/mergify/py/`. Tied to the binary's
-/// build version so a new binary auto-invalidates any older extract.
-const CACHE_KEY: &str = env!("CARGO_PKG_VERSION");
+/// Env override for the Python interpreter. Useful in `cargo build`
+/// checkouts where the binary has no sibling Python in the same
+/// `bin/` directory (developer convenience).
+const PYTHON_EXE_ENV: &str = "MERGIFY_PYTHON_EXE";
 
 #[derive(thiserror::Error, Debug)]
 pub enum ShimError {
     #[error(
-        "python3 not found on PATH. mergify requires Python 3.13+ during the port; install it and try again"
+        "could not locate a Python interpreter. Expected `{expected}` (sibling of the mergify \
+         binary) or `${env_var}` to be set to a python3.13+ executable"
     )]
-    PythonNotFound,
+    PythonNotFound {
+        expected: String,
+        env_var: &'static str,
+    },
 
-    #[error("could not locate user cache directory on this platform")]
-    CacheDirNotFound,
+    #[error("could not determine the path of the running mergify binary: {0}")]
+    SelfPathUnknown(#[source] io::Error),
 
-    #[error("could not prepare embedded Python source at {path}: {source}")]
-    Extraction {
+    #[error("could not invoke python interpreter at {path}: {source}")]
+    Invocation {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-
-    #[error("could not invoke python3: {0}")]
-    Invocation(#[source] io::Error),
 }
 
-/// Run the embedded Python CLI with the given argv tail.
+/// Run the bundled Python CLI with the given argv tail.
 ///
 /// Returns the exit code to propagate to the OS.
 pub fn run(args: &[String]) -> Result<i32, ShimError> {
-    let cache_base = cache_base()?;
-    let source_root = ensure_extracted(&cache_base)?;
-    invoke_python(&source_root, args)
+    let python = locate_python()?;
+    invoke(&python, args)
 }
 
-fn cache_base() -> Result<PathBuf, ShimError> {
-    Ok(dirs::cache_dir()
-        .ok_or(ShimError::CacheDirNotFound)?
-        .join("mergify")
-        .join("py"))
-}
-
-/// Ensure the embedded Python source is present on disk under
-/// `<cache_base>/<CACHE_KEY>/` and return that directory (which
-/// contains a `mergify_cli/` subdirectory, ready for `PYTHONPATH`).
-fn ensure_extracted(cache_base: &Path) -> Result<PathBuf, ShimError> {
-    let target_dir = cache_base.join(CACHE_KEY);
-    let sentinel = target_dir.join(".complete");
-
-    // Fast path: already extracted.
-    if sentinel.exists() {
-        return Ok(target_dir);
-    }
-
-    fs::create_dir_all(cache_base).map_err(|source| ShimError::Extraction {
-        path: cache_base.to_path_buf(),
-        source,
-    })?;
-
-    // Lock a sibling file (not the target dir itself, which is about
-    // to be renamed). Blocks until we have exclusive access so two
-    // concurrent first-runs serialize on the extraction.
-    let lock_path = cache_base.join(format!("{CACHE_KEY}.lock"));
-    let lock_file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|source| ShimError::Extraction {
-            path: lock_path.clone(),
-            source,
-        })?;
-    FileExt::lock_exclusive(&lock_file).map_err(|source| ShimError::Extraction {
-        path: lock_path.clone(),
-        source,
-    })?;
-
-    // Double-check under lock: another process may have extracted
-    // while we were waiting.
-    if sentinel.exists() {
-        return Ok(target_dir);
-    }
-
-    // Clean up any `*.extracting-*` dirs left behind by a crashed
-    // previous attempt. We hold the lock, so no other process is
-    // currently extracting for this cache key.
-    let extracting_prefix = format!("{CACHE_KEY}.extracting-");
-    if let Ok(entries) = fs::read_dir(cache_base) {
-        for entry in entries.flatten() {
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with(&extracting_prefix))
-            {
-                let _ = fs::remove_dir_all(entry.path());
+fn locate_python() -> Result<PathBuf, ShimError> {
+    if let Ok(explicit) = env::var(PYTHON_EXE_ENV) {
+        if !explicit.is_empty() {
+            let path = PathBuf::from(&explicit);
+            // Validate eagerly: if `MERGIFY_PYTHON_EXE` is set but
+            // points at a missing/non-file path, surface that here
+            // with the exact value the user provided, rather than
+            // letting `Command::new(...).status()` later fail with
+            // an opaque `No such file or directory` error.
+            if !path.is_file() {
+                return Err(ShimError::PythonNotFound {
+                    expected: explicit,
+                    env_var: PYTHON_EXE_ENV,
+                });
             }
+            return Ok(path);
         }
     }
 
-    // Extract to a sibling temp dir, then atomic rename. Name
-    // includes PID + a nanosecond timestamp so concurrent writers
-    // (if any) don't collide even under an unlikely PID collision.
-    let unique_suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let temp_dir = cache_base.join(format!(
-        "{CACHE_KEY}.extracting-{}-{unique_suffix}",
-        std::process::id(),
-    ));
-    fs::create_dir_all(&temp_dir).map_err(|source| ShimError::Extraction {
-        path: temp_dir.clone(),
-        source,
-    })?;
-
-    extract_into(&PY_SOURCE, &temp_dir.join("mergify_cli")).map_err(|source| {
-        ShimError::Extraction {
-            path: temp_dir.clone(),
-            source,
-        }
-    })?;
-
-    // Rename is atomic on the same filesystem. If a previous
-    // interrupted run left a partial target, clear it first.
-    if target_dir.exists() {
-        fs::remove_dir_all(&target_dir).map_err(|source| ShimError::Extraction {
-            path: target_dir.clone(),
-            source,
-        })?;
-    }
-    fs::rename(&temp_dir, &target_dir).map_err(|source| ShimError::Extraction {
-        path: target_dir.clone(),
-        source,
-    })?;
-
-    // Sentinel last — its presence means "extraction complete".
-    fs::write(&sentinel, b"").map_err(|source| ShimError::Extraction {
-        path: sentinel.clone(),
-        source,
-    })?;
-
-    Ok(target_dir)
-}
-
-/// Write every file in `dir` under `target` (creating directories as
-/// needed). `include_dir` stores each file's path relative to the
-/// root Dir, so `target.join(file.path())` gives the full output
-/// path even for deeply nested files.
-fn extract_into(dir: &Dir<'_>, target: &Path) -> io::Result<()> {
-    fs::create_dir_all(target)?;
-    let mut stack: Vec<&Dir<'_>> = vec![dir];
-    while let Some(current) = stack.pop() {
-        for entry in current.entries() {
-            match entry {
-                DirEntry::Dir(subdir) => {
-                    // subdir.path() is relative to the root Dir; strip
-                    // the mergify_cli/ prefix the same way the file
-                    // branch below does.
-                    let relative = subdir
-                        .path()
-                        .strip_prefix(dir.path())
-                        .unwrap_or(subdir.path());
-                    fs::create_dir_all(target.join(relative))?;
-                    stack.push(subdir);
-                }
-                DirEntry::File(file) => {
-                    let relative = file.path().strip_prefix(dir.path()).unwrap_or(file.path());
-                    let dest = target.join(relative);
-                    if let Some(parent) = dest.parent() {
-                        fs::create_dir_all(parent)?;
-                    }
-                    fs::write(dest, file.contents())?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn invoke_python(source_root: &Path, args: &[String]) -> Result<i32, ShimError> {
-    // Prepend the extracted dir to PYTHONPATH so `python3 -m
-    // mergify_cli` resolves regardless of the user's environment.
-    let mut paths = vec![source_root.to_path_buf()];
-    if let Ok(existing) = env::var("PYTHONPATH") {
-        paths.extend(env::split_paths(&existing));
-    }
-    let new_pythonpath = env::join_paths(paths).map_err(|e| {
-        ShimError::Invocation(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("could not construct PYTHONPATH: {e}"),
+    let exe = env::current_exe().map_err(ShimError::SelfPathUnknown)?;
+    let parent = exe.parent().ok_or_else(|| {
+        ShimError::SelfPathUnknown(io::Error::new(
+            io::ErrorKind::NotFound,
+            "current_exe has no parent directory",
         ))
     })?;
 
-    let status = Command::new("python3")
-        .arg("-m")
+    // Layouts to probe, in order:
+    // 1. `<exe-dir>/python(.exe)` — Linux/macOS pip & pipx, Windows
+    //    venv (everything ends up under `Scripts/`).
+    // 2. `<exe-dir>/../python.exe` — Windows system-Python pip
+    //    install: the binary lands in `<prefix>/Scripts/` while the
+    //    interpreter sits at `<prefix>/python.exe`.
+    let candidates = python_candidate_paths(parent);
+
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Ok(candidate.clone());
+        }
+    }
+
+    Err(ShimError::PythonNotFound {
+        expected: candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        env_var: PYTHON_EXE_ENV,
+    })
+}
+
+#[cfg(not(windows))]
+fn python_candidate_paths(parent: &std::path::Path) -> Vec<PathBuf> {
+    vec![parent.join(PYTHON_FILENAME)]
+}
+
+#[cfg(windows)]
+fn python_candidate_paths(parent: &std::path::Path) -> Vec<PathBuf> {
+    let mut candidates = vec![parent.join(PYTHON_FILENAME)];
+    if let Some(grandparent) = parent.parent() {
+        candidates.push(grandparent.join(PYTHON_FILENAME));
+    }
+    candidates
+}
+
+fn invoke(python: &std::path::Path, args: &[String]) -> Result<i32, ShimError> {
+    let mut cmd = Command::new(python);
+    cmd.arg("-m")
         .arg("mergify_cli")
         .args(args)
-        .env("PYTHONPATH", new_pythonpath)
         // PYTHONSAFEPATH=1 stops Python from prepending the current
         // working directory to sys.path. Without it, a user running
         // from a directory that happens to contain a `mergify_cli/`
-        // folder would import that instead of our extracted copy.
-        // This repo's Python CLI requires Python 3.13+, which
-        // supports PYTHONSAFEPATH (introduced in 3.11).
-        .env("PYTHONSAFEPATH", "1")
-        .status()
-        .map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => ShimError::PythonNotFound,
-            _ => ShimError::Invocation(e),
-        })?;
+        // folder would import that instead of the wheel's copy.
+        // Safe since the project requires Python 3.13+ and
+        // PYTHONSAFEPATH was introduced in 3.11.
+        .env("PYTHONSAFEPATH", "1");
+    // On Windows, force `PYTHONUTF8=1`. The Python `main()` has a
+    // legacy re-exec block (`subprocess.Popen(sys.argv, ...)`) that
+    // re-launches itself with utf8 mode when not already on. That
+    // re-exec assumes `sys.argv[0]` is a launcher binary; under
+    // `python -m mergify_cli` it's a `.py` file path, which Windows
+    // can't directly exec — `OSError [WinError 193] %1 is not a
+    // valid Win32 application`. Booting Python in utf8 mode skips
+    // the re-exec entirely.
+    #[cfg(windows)]
+    cmd.env("PYTHONUTF8", "1");
+    let status = cmd.status().map_err(|source| ShimError::Invocation {
+        path: python.to_path_buf(),
+        source,
+    })?;
 
     Ok(status.code().unwrap_or(1))
 }
@@ -250,49 +168,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_into_writes_embedded_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let target = tmp.path().join("mergify_cli");
-        extract_into(&PY_SOURCE, &target).unwrap();
-
-        // Spot-check a handful of files we know exist in the Python
-        // source tree. Using files close to the root keeps the test
-        // robust to refactors of subdirectories.
-        assert!(target.join("__init__.py").is_file());
-        assert!(target.join("cli.py").is_file());
-        assert!(target.join("exit_codes.py").is_file());
+    fn locate_python_honors_env_override_when_file_exists() {
+        // Use the test binary itself as a stand-in for python — it
+        // exists and is a regular file, which is all `locate_python`
+        // checks (executability is enforced by `Command::new`).
+        let test_binary = env::current_exe().unwrap();
+        let path_str = test_binary.to_str().unwrap();
+        temp_env::with_var(PYTHON_EXE_ENV, Some(path_str), || {
+            let got = locate_python().unwrap();
+            assert_eq!(got, test_binary);
+        });
     }
 
     #[test]
-    fn extract_into_preserves_nested_structure() {
-        let tmp = tempfile::tempdir().unwrap();
-        let target = tmp.path().join("mergify_cli");
-        extract_into(&PY_SOURCE, &target).unwrap();
-
-        // Nested files get their full path reconstructed.
-        assert!(target.join("ci").is_dir());
-        assert!(target.join("stack").join("list.py").is_file());
+    fn locate_python_rejects_env_override_pointing_at_missing_file() {
+        temp_env::with_var(PYTHON_EXE_ENV, Some("/nonexistent/python"), || {
+            let err = locate_python().unwrap_err();
+            let msg = err.to_string();
+            assert!(matches!(err, ShimError::PythonNotFound { .. }));
+            // The user-supplied path must appear in the error so
+            // they can spot a typo without having to dig.
+            assert!(msg.contains("/nonexistent/python"), "got: {msg}");
+        });
     }
 
     #[test]
-    fn ensure_extracted_is_idempotent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("cache");
-
-        let first = ensure_extracted(&base).unwrap();
-        let mtime_before = fs::metadata(first.join(".complete"))
-            .unwrap()
-            .modified()
-            .unwrap();
-
-        let second = ensure_extracted(&base).unwrap();
-        let mtime_after = fs::metadata(second.join(".complete"))
-            .unwrap()
-            .modified()
-            .unwrap();
-
-        assert_eq!(first, second);
-        // Sentinel is not rewritten on the fast path.
-        assert_eq!(mtime_before, mtime_after);
+    fn locate_python_errors_when_no_sibling_and_no_env() {
+        // The test binary lives under `target/debug/deps/<name>`;
+        // there's no python3 next to it. So the lookup must fail
+        // with a clear `PythonNotFound` describing where we looked.
+        temp_env::with_var_unset(PYTHON_EXE_ENV, || {
+            let err = locate_python().unwrap_err();
+            assert!(matches!(err, ShimError::PythonNotFound { .. }));
+        });
     }
 }
