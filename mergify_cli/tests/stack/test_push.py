@@ -1349,6 +1349,113 @@ async def test_create_revision_comment_on_update(
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
+async def test_create_revision_comment_with_replay_sha_renders_dual_link(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """When replay_for_revision returns a SHA, the rendered comment uses it as
+    the primary URL anchor and appends a (raw) fallback link to old_sha."""
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new_commit_sha",
+            title="Title",
+            message="Message",
+            change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+        ),
+    )
+    git_mock.finalize(
+        remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "old_commit_sha"},
+    )
+    git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/123",
+                    },
+                },
+            ],
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/123",
+            "number": "123",
+            "title": "Title",
+            "head": {
+                "sha": "old_commit_sha",
+                "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            },
+            "body": "body",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+            "mergeable": True,
+            "mergeable_state": "clean",
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/123/reviews").respond(200, json=[])
+    respx_mock.patch("/repos/user/repo/pulls/123").respond(200, json={})
+    respx_mock.get("/repos/user/repo/issues/123/comments").respond(
+        200,
+        json=[
+            {
+                "body": "This pull request is part of a stack:\n...",
+                "url": "https://api.github.com/repos/user/repo/issues/comments/456",
+            },
+        ],
+    )
+    respx_mock.patch("/repos/user/repo/issues/comments/456").respond(200)
+    post_revision_mock = respx_mock.post(
+        "/repos/user/repo/issues/123/comments",
+    ).respond(200)
+
+    with (
+        mock.patch.object(push, "detect_change_type", return_value="content"),
+        mock.patch.object(
+            replay,
+            "replay_for_revision",
+            return_value="replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        ),
+    ):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=False,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+        )
+
+    revision_calls = [
+        call
+        for call in post_revision_mock.calls
+        if json.loads(call.request.content)
+        .get("body", "")
+        .startswith("### Revision history")
+    ]
+    assert len(revision_calls) == 1
+    posted_body = json.loads(revision_calls[0].request.content)["body"]
+    # Primary link is anchored at the replay SHA
+    assert (
+        "/compare/replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX...new_commit_sha"
+        in posted_body
+    )
+    # Raw fallback link is anchored at the original old SHA
+    assert (
+        "([raw](https://github.com/user/repo/compare/old_commit_sha..." in posted_body
+    )
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
 async def test_no_revision_comment_on_create(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,

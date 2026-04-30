@@ -811,6 +811,8 @@ class _RevisionEntry:
     old_sha: str | None  # None for "initial"
     new_sha: str
     timestamp: datetime.datetime | None
+    reason: str = ""
+    replay_sha: str | None = None
 
     @property
     def timestamp_human(self) -> str:
@@ -832,9 +834,6 @@ class _RevisionEntry:
         the synthetic replay commit); falls back to old_sha otherwise.
         """
         return self.replay_sha or self.old_sha
-
-    reason: str = ""
-    replay_sha: str | None = None
 
 
 @dataclasses.dataclass
