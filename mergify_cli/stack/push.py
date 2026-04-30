@@ -931,6 +931,11 @@ class RevisionHistoryComment:
                 entry.new_sha,
             )
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
+            if entry.replay_sha is not None:
+                # Synthetic replay commits get GC'd by GitHub eventually; keep
+                # a durable raw-diff link for the long tail.
+                raw_url = self._compare_url(entry.old_sha, entry.new_sha)
+                changes_cell = f"{changes_cell} ([raw]({raw_url}))"
         reason_cell = _escape_reason(entry.reason)
         return (
             f"| {entry.number} | {entry.change_type} | {changes_cell} | "

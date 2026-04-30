@@ -2725,7 +2725,7 @@ def test_revision_history_renders_badge_for_pure_rebase() -> None:
 
 
 def test_revision_history_uses_replay_sha_for_url_when_present() -> None:
-    """When replay_sha is set, compare URL anchors at it instead of old_sha."""
+    """When replay_sha is set, primary URL anchors at it; raw link uses old_sha."""
     comment = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
         user="owner",
@@ -2737,18 +2737,26 @@ def test_revision_history_uses_replay_sha_for_url_when_present() -> None:
         replay_sha="ccc9999999999999999999999999999999999999",
     )
     body = comment.body(pull_number=1)
-    # URL anchor must be replay_sha, not old_sha
-    assert (
-        "/compare/ccc9999999999999999999999999999999999999"
-        "...bbb5678901234567890abcdef1234567890abcdef" in body
+    row = next(line for line in body.splitlines() if "| 2 | content |" in line)
+    rebase_aware_url = (
+        "https://github.com/owner/repo/compare/"
+        "ccc9999999999999999999999999999999999999"
+        "...bbb5678901234567890abcdef1234567890abcdef"
     )
-    assert "/compare/aaa1234567890abcdef1234567890abcdef123456" not in body
-    # Visible label keeps the human-readable old_sha → new_sha shorthand
-    assert "`aaa1234 → bbb5678`" in body
+    raw_url = (
+        "https://github.com/owner/repo/compare/"
+        "aaa1234567890abcdef1234567890abcdef123456"
+        "...bbb5678901234567890abcdef1234567890abcdef"
+    )
+    # Primary clickable label uses the human-readable SHAs and points at the
+    # rebase-aware URL (the synthetic replay commit).
+    assert f"[`aaa1234 → bbb5678`]({rebase_aware_url})" in row
+    # Raw link is appended for durability after GitHub GCs the synthetic commit.
+    assert f"([raw]({raw_url}))" in row
 
 
 def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
-    """When replay_sha is absent, compare URL anchors at old_sha."""
+    """When replay_sha is absent, single link anchors at old_sha; no raw link."""
     comment = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
         user="owner",
@@ -2760,10 +2768,13 @@ def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
         # replay_sha omitted
     )
     body = comment.body(pull_number=1)
+    row = next(line for line in body.splitlines() if "| 2 | content |" in line)
     assert (
         "/compare/aaa1234567890abcdef1234567890abcdef123456"
-        "...bbb5678901234567890abcdef1234567890abcdef" in body
+        "...bbb5678901234567890abcdef1234567890abcdef" in row
     )
+    # No replay → no raw fallback link
+    assert "[raw]" not in row
 
 
 @pytest.mark.respx(base_url="https://api.github.com")
