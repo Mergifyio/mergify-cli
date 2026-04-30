@@ -16,85 +16,75 @@
 from __future__ import annotations
 
 import json
-from unittest import mock
+import typing
 
 import httpx
 import respx
 
-from mergify_cli import utils
 from mergify_cli.stack import replay
 
 
-async def test_compute_merged_tree_clean() -> None:
+if typing.TYPE_CHECKING:
+    from mergify_cli.tests import utils as test_utils
+
+
+async def test_compute_merged_tree_clean(git_mock: test_utils.GitMock) -> None:
     """Clean merge returns the merged tree SHA."""
+    git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
+    git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
+    git_mock.mock(
+        "merge-tree",
+        "--write-tree",
+        "--merge-base=parent_old_sha",
+        "parent_new_sha",
+        "old_sha",
+        output="merged_tree_sha",
+    )
 
-    async def fake_git(*args: str) -> str:
-        if args[0] == "rev-parse" and args[1] == "old_sha^":
-            return "parent_old_sha"
-        if args[0] == "rev-parse" and args[1] == "new_sha^":
-            return "parent_new_sha"
-        if args == (
-            "merge-tree",
-            "--write-tree",
-            "--merge-base=parent_old_sha",
-            "parent_new_sha",
-            "old_sha",
-        ):
-            # On clean merge, git prints the tree SHA on the first line.
-            return "merged_tree_sha"
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    result = await replay.compute_merged_tree(old_sha="old_sha", new_sha="new_sha")
 
-    with mock.patch.object(utils, "git", side_effect=fake_git):
-        result = await replay.compute_merged_tree(
-            old_sha="old_sha",
-            new_sha="new_sha",
-        )
     assert result == replay.MergedTree(
         tree_sha="merged_tree_sha",
         parent_new_sha="parent_new_sha",
     )
 
 
-async def test_compute_merged_tree_conflict_returns_none() -> None:
+async def test_compute_merged_tree_conflict_returns_none(
+    git_mock: test_utils.GitMock,
+) -> None:
     """Conflicting merge returns None."""
+    git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
+    git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
+    git_mock.mock_error(
+        "merge-tree",
+        "--write-tree",
+        "--merge-base=parent_old_sha",
+        "parent_new_sha",
+        "old_sha",
+    )
 
-    async def fake_git(*args: str) -> str:
-        if args[0] == "rev-parse" and args[1] == "old_sha^":
-            return "parent_old_sha"
-        if args[0] == "rev-parse" and args[1] == "new_sha^":
-            return "parent_new_sha"
-        if args[0] == "merge-tree":
-            raise utils.CommandError(("git", "merge-tree"), 1, b"CONFLICT (content)")
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    result = await replay.compute_merged_tree(old_sha="old_sha", new_sha="new_sha")
 
-    with mock.patch.object(utils, "git", side_effect=fake_git):
-        result = await replay.compute_merged_tree(
-            old_sha="old_sha",
-            new_sha="new_sha",
-        )
     assert result is None
 
 
-async def test_compute_merged_tree_rev_parse_error_returns_none() -> None:
+async def test_compute_merged_tree_rev_parse_error_returns_none(
+    git_mock: test_utils.GitMock,
+) -> None:
     """If `git rev-parse` fails (e.g., parent not fetched), return None."""
+    git_mock.mock_error("rev-parse", "old_sha^")
+    # parent_new_sha rev-parse may also be attempted (concurrent with old_sha^);
+    # register it so the gather doesn't hit "not mocked".
+    git_mock.mock_error("rev-parse", "new_sha^")
 
-    async def fake_git(*args: str) -> str:
-        if args[0] == "rev-parse":
-            raise utils.CommandError(("git", "rev-parse"), 128, b"unknown revision")
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    result = await replay.compute_merged_tree(old_sha="old_sha", new_sha="new_sha")
 
-    with mock.patch.object(utils, "git", side_effect=fake_git):
-        result = await replay.compute_merged_tree(
-            old_sha="old_sha",
-            new_sha="new_sha",
-        )
     assert result is None
 
 
-async def test_compute_tree_delta_parses_modifications_and_deletions() -> None:
+async def test_compute_tree_delta_parses_modifications_and_deletions(
+    git_mock: test_utils.GitMock,
+) -> None:
     """diff-tree --raw output is converted into Git Data API tree entries."""
     raw_output = (
         ":100644 100644 aaa1111 bbb2222 M\tsrc/a.py\n"
@@ -102,23 +92,21 @@ async def test_compute_tree_delta_parses_modifications_and_deletions() -> None:
         ":000000 100755 0000000 ddd4444 A\tscripts/run.sh\n"
         ":100644 100755 eee5555 fff6666 T\tsrc/c.py\n"
     )
+    git_mock.mock(
+        "diff-tree",
+        "-r",
+        "--raw",
+        "--no-renames",
+        "base_tree_sha",
+        "merged_tree_sha",
+        output=raw_output,
+    )
 
-    async def fake_git(*args: str) -> str:
-        assert args == (
-            "diff-tree",
-            "-r",
-            "--raw",
-            "--no-renames",
-            "base_tree_sha",
-            "merged_tree_sha",
-        )
-        return raw_output
+    entries = await replay.compute_tree_delta(
+        base_tree_sha="base_tree_sha",
+        merged_tree_sha="merged_tree_sha",
+    )
 
-    with mock.patch.object(utils, "git", side_effect=fake_git):
-        entries = await replay.compute_tree_delta(
-            base_tree_sha="base_tree_sha",
-            merged_tree_sha="merged_tree_sha",
-        )
     assert entries == [
         {"path": "src/a.py", "mode": "100644", "type": "blob", "sha": "bbb2222"},
         {"path": "scripts/exec.sh", "mode": "100755", "type": "blob", "sha": None},
@@ -132,17 +120,14 @@ async def test_compute_tree_delta_parses_modifications_and_deletions() -> None:
     ]
 
 
-async def test_compute_tree_delta_empty_when_no_diff() -> None:
+async def test_compute_tree_delta_empty_when_no_diff(
+    git_mock: test_utils.GitMock,
+) -> None:
     """Empty diff-tree output produces an empty entry list."""
+    git_mock.mock("diff-tree", "-r", "--raw", "--no-renames", "x", "y", output="")
 
-    async def fake_git(*_args: str) -> str:
-        return ""
+    entries = await replay.compute_tree_delta(base_tree_sha="x", merged_tree_sha="y")
 
-    with mock.patch.object(utils, "git", side_effect=fake_git):
-        entries = await replay.compute_tree_delta(
-            base_tree_sha="x",
-            merged_tree_sha="y",
-        )
     assert entries == []
 
 
@@ -170,6 +155,7 @@ async def test_upload_replay_commit_posts_tree_then_commit() -> None:
             old_sha="abc1234",
             entries=entries,
         )
+
     assert sha == "new_commit_server_sha"
     assert tree_route.called
     tree_body = json.loads(tree_route.calls.last.request.read())
@@ -190,6 +176,7 @@ async def test_upload_replay_commit_returns_none_on_api_error() -> None:
     respx.post(f"{base_url}/repos/owner/repo/git/trees").mock(
         return_value=httpx.Response(422, json={"message": "tree invalid"}),
     )
+
     async with httpx.AsyncClient(base_url=base_url) as client:
         sha = await replay.upload_replay_commit(
             client=client,
@@ -200,6 +187,7 @@ async def test_upload_replay_commit_returns_none_on_api_error() -> None:
             old_sha="abc1234",
             entries=[],
         )
+
     assert sha is None
 
 
@@ -213,6 +201,7 @@ async def test_upload_replay_commit_returns_none_on_commit_post_failure() -> Non
     respx.post(f"{base_url}/repos/owner/repo/git/commits").mock(
         return_value=httpx.Response(422, json={"message": "commit invalid"}),
     )
+
     async with httpx.AsyncClient(base_url=base_url) as client:
         sha = await replay.upload_replay_commit(
             client=client,
@@ -223,11 +212,12 @@ async def test_upload_replay_commit_returns_none_on_commit_post_failure() -> Non
             old_sha="abc1234",
             entries=[],
         )
+
     assert sha is None
 
 
 @respx.mock
-async def test_replay_for_revision_happy_path() -> None:
+async def test_replay_for_revision_happy_path(git_mock: test_utils.GitMock) -> None:
     """End-to-end: merge-tree → diff → upload → returns server commit SHA."""
     base_url = "https://api.github.com"
     respx.post(f"{base_url}/repos/owner/repo/git/trees").mock(
@@ -236,125 +226,128 @@ async def test_replay_for_revision_happy_path() -> None:
     respx.post(f"{base_url}/repos/owner/repo/git/commits").mock(
         return_value=httpx.Response(201, json={"sha": "server_commit_sha"}),
     )
+    git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
+    git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
+    git_mock.mock(
+        "merge-tree",
+        "--write-tree",
+        "--merge-base=parent_old_sha",
+        "parent_new_sha",
+        "old_sha",
+        output="merged_tree_sha",
+    )
+    git_mock.mock("rev-parse", "parent_new_sha^{tree}", output="parent_new_tree_sha")
+    git_mock.mock(
+        "diff-tree",
+        "-r",
+        "--raw",
+        "--no-renames",
+        "parent_new_tree_sha",
+        "merged_tree_sha",
+        output=":100644 100644 aaa bbb M\tsrc/x.py\n",
+    )
 
-    async def fake_git(*args: str) -> str:
-        if args == ("rev-parse", "old_sha^"):
-            return "parent_old_sha"
-        if args == ("rev-parse", "new_sha^"):
-            return "parent_new_sha"
-        if args == (
-            "merge-tree",
-            "--write-tree",
-            "--merge-base=parent_old_sha",
-            "parent_new_sha",
-            "old_sha",
-        ):
-            return "merged_tree_sha"
-        if args == ("rev-parse", "parent_new_sha^{tree}"):
-            return "parent_new_tree_sha"
-        if args == (
-            "diff-tree",
-            "-r",
-            "--raw",
-            "--no-renames",
-            "parent_new_tree_sha",
-            "merged_tree_sha",
-        ):
-            return ":100644 100644 aaa bbb M\tsrc/x.py\n"
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    async with httpx.AsyncClient(base_url=base_url) as client:
+        sha = await replay.replay_for_revision(
+            client=client,
+            user="owner",
+            repo="repo",
+            old_sha="old_sha",
+            new_sha="new_sha",
+        )
 
-    with mock.patch.object(utils, "git", side_effect=fake_git):
-        async with httpx.AsyncClient(base_url=base_url) as client:
-            sha = await replay.replay_for_revision(
-                client=client,
-                user="owner",
-                repo="repo",
-                old_sha="old_sha",
-                new_sha="new_sha",
-            )
     assert sha == "server_commit_sha"
 
 
 @respx.mock
-async def test_replay_for_revision_conflict_returns_none() -> None:
+async def test_replay_for_revision_conflict_returns_none(
+    git_mock: test_utils.GitMock,
+) -> None:
     """A merge-tree conflict short-circuits to None (no API calls)."""
-
-    async def fake_git(*args: str) -> str:
-        if args == ("rev-parse", "old_sha^"):
-            return "parent_old_sha"
-        if args == ("rev-parse", "new_sha^"):
-            return "parent_new_sha"
-        if args[0] == "merge-tree":
-            raise utils.CommandError(("git", "merge-tree"), 1, b"CONFLICT")
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
+    git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
+    git_mock.mock_error(
+        "merge-tree",
+        "--write-tree",
+        "--merge-base=parent_old_sha",
+        "parent_new_sha",
+        "old_sha",
+    )
 
     async with httpx.AsyncClient(base_url="https://api.github.com") as client:
-        with mock.patch.object(utils, "git", side_effect=fake_git):
-            sha = await replay.replay_for_revision(
-                client=client,
-                user="owner",
-                repo="repo",
-                old_sha="old_sha",
-                new_sha="new_sha",
-            )
+        sha = await replay.replay_for_revision(
+            client=client,
+            user="owner",
+            repo="repo",
+            old_sha="old_sha",
+            new_sha="new_sha",
+        )
+
     assert sha is None
 
 
 @respx.mock
-async def test_replay_for_revision_no_diff_returns_none() -> None:
+async def test_replay_for_revision_no_diff_returns_none(
+    git_mock: test_utils.GitMock,
+) -> None:
     """If merged tree equals parent_new's tree, there's nothing to upload."""
-
-    async def fake_git(*args: str) -> str:
-        if args == ("rev-parse", "old_sha^"):
-            return "parent_old_sha"
-        if args == ("rev-parse", "new_sha^"):
-            return "parent_new_sha"
-        if args[0] == "merge-tree":
-            return "merged_tree_sha"
-        if args == ("rev-parse", "parent_new_sha^{tree}"):
-            return "parent_new_tree_sha"
-        if args[0] == "diff-tree":
-            return ""  # empty delta
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
+    git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
+    git_mock.mock(
+        "merge-tree",
+        "--write-tree",
+        "--merge-base=parent_old_sha",
+        "parent_new_sha",
+        "old_sha",
+        output="merged_tree_sha",
+    )
+    git_mock.mock("rev-parse", "parent_new_sha^{tree}", output="parent_new_tree_sha")
+    git_mock.mock(
+        "diff-tree",
+        "-r",
+        "--raw",
+        "--no-renames",
+        "parent_new_tree_sha",
+        "merged_tree_sha",
+        output="",
+    )
 
     async with httpx.AsyncClient(base_url="https://api.github.com") as client:
-        with mock.patch.object(utils, "git", side_effect=fake_git):
-            sha = await replay.replay_for_revision(
-                client=client,
-                user="owner",
-                repo="repo",
-                old_sha="old_sha",
-                new_sha="new_sha",
-            )
+        sha = await replay.replay_for_revision(
+            client=client,
+            user="owner",
+            repo="repo",
+            old_sha="old_sha",
+            new_sha="new_sha",
+        )
+
     assert sha is None
 
 
 @respx.mock
-async def test_replay_for_revision_rev_parse_tree_error_returns_none() -> None:
+async def test_replay_for_revision_rev_parse_tree_error_returns_none(
+    git_mock: test_utils.GitMock,
+) -> None:
     """If rev-parse <commit>^{tree} fails, replay_for_revision returns None."""
-
-    async def fake_git(*args: str) -> str:
-        if args == ("rev-parse", "old_sha^"):
-            return "parent_old_sha"
-        if args == ("rev-parse", "new_sha^"):
-            return "parent_new_sha"
-        if args[0] == "merge-tree":
-            return "merged_tree_sha"
-        if args == ("rev-parse", "parent_new_sha^{tree}"):
-            raise utils.CommandError(("git", "rev-parse"), 128, b"unknown revision")
-        msg = f"unexpected git call: {args}"
-        raise AssertionError(msg)
+    git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
+    git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
+    git_mock.mock(
+        "merge-tree",
+        "--write-tree",
+        "--merge-base=parent_old_sha",
+        "parent_new_sha",
+        "old_sha",
+        output="merged_tree_sha",
+    )
+    git_mock.mock_error("rev-parse", "parent_new_sha^{tree}")
 
     async with httpx.AsyncClient(base_url="https://api.github.com") as client:
-        with mock.patch.object(utils, "git", side_effect=fake_git):
-            sha = await replay.replay_for_revision(
-                client=client,
-                user="owner",
-                repo="repo",
-                old_sha="old_sha",
-                new_sha="new_sha",
-            )
+        sha = await replay.replay_for_revision(
+            client=client,
+            user="owner",
+            repo="repo",
+            old_sha="old_sha",
+            new_sha="new_sha",
+        )
+
     assert sha is None

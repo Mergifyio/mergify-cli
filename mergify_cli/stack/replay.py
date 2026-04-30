@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import typing
 
@@ -40,8 +41,10 @@ async def compute_merged_tree(
     Requires git >= 2.38 for `git merge-tree --write-tree`.
     """
     try:
-        parent_old_sha = await utils.git("rev-parse", f"{old_sha}^")
-        parent_new_sha = await utils.git("rev-parse", f"{new_sha}^")
+        parent_old_sha, parent_new_sha = await asyncio.gather(
+            utils.git("rev-parse", f"{old_sha}^"),
+            utils.git("rev-parse", f"{new_sha}^"),
+        )
     except utils.CommandError:
         return None
 

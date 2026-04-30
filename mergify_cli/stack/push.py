@@ -1192,6 +1192,20 @@ async def _update_revision_for_pull(
         )
         comments = typing.cast("list[github_types.Comment]", r.json())
 
+        # Used by the corrupted-body and no-comment branches below; cheap to
+        # construct unconditionally and avoids duplicating 7 kwargs twice.
+        fresh_revision = RevisionHistoryComment.create_initial(
+            github_server=github_server,
+            user=user,
+            repo=repo,
+            old_sha=old_sha,
+            new_sha=new_sha,
+            change_type=change_type,
+            timestamp=timestamp,
+            reason=change.reason,
+            replay_sha=replay_sha,
+        )
+
         for comment in comments:
             if RevisionHistoryComment.is_revision_comment(comment):
                 parsed = RevisionHistoryComment.parse(
@@ -1216,39 +1230,17 @@ async def _update_revision_for_pull(
                             json={"body": new_body},
                         )
                     return
-                # Comment header matched but body corrupted — overwrite it
-                revision = RevisionHistoryComment.create_initial(
-                    github_server=github_server,
-                    user=user,
-                    repo=repo,
-                    old_sha=old_sha,
-                    new_sha=new_sha,
-                    change_type=change_type,
-                    timestamp=timestamp,
-                    reason=change.reason,
-                    replay_sha=replay_sha,
-                )
+                # Comment header matched but body corrupted — overwrite it.
                 await client.patch(
                     comment["url"],
-                    json={"body": revision.body(pull_number)},
+                    json={"body": fresh_revision.body(pull_number)},
                 )
                 return
 
         # No existing revision comment — create one
-        revision = RevisionHistoryComment.create_initial(
-            github_server=github_server,
-            user=user,
-            repo=repo,
-            old_sha=old_sha,
-            new_sha=new_sha,
-            change_type=change_type,
-            timestamp=timestamp,
-            reason=change.reason,
-            replay_sha=replay_sha,
-        )
         await client.post(
             f"/repos/{user}/{repo}/issues/{pull_number}/comments",
-            json={"body": revision.body(pull_number)},
+            json={"body": fresh_revision.body(pull_number)},
         )
 
 
