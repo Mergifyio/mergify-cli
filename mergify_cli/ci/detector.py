@@ -175,7 +175,7 @@ def get_cicd_pipeline_run_attempt() -> int | None:
     if get_ci_provider() == "circleci" and "CIRCLE_BUILD_NUM" in os.environ:
         return int(os.environ["CIRCLE_BUILD_NUM"])
     if get_ci_provider() == "buildkite" and "BUILDKITE_RETRY_COUNT" in os.environ:
-        return int(os.environ["BUILDKITE_RETRY_COUNT"])
+        return int(os.environ["BUILDKITE_RETRY_COUNT"]) + 1
 
     return None
 
@@ -234,6 +234,34 @@ def get_github_repository() -> str | None:
             return _get_github_repository_from_env("GIT_URL")
         case "buildkite":
             return _get_github_repository_from_env("BUILDKITE_REPO")
+        case _:
+            return None
+
+
+def get_cicd_pipeline_run_url() -> str | None:
+    match get_ci_provider():
+        case "buildkite":
+            return os.getenv("BUILDKITE_BUILD_URL")
+        case _:
+            return None
+
+
+def get_base_ref_name() -> str | None:
+    match get_ci_provider():
+        case "buildkite":
+            return os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
+        case _:
+            return None
+
+
+def get_repository_url() -> str | None:
+    match get_ci_provider():
+        case "buildkite":
+            return os.getenv("BUILDKITE_REPO")
+        case "circleci":
+            return os.getenv("CIRCLE_REPOSITORY_URL")
+        case "jenkins":
+            return os.getenv("GIT_URL")
         case _:
             return None
 
