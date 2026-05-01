@@ -37,7 +37,7 @@ mergify ci junit-process \
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
 - `--repository` / `-r` -- Repository full name (auto-detected in GitHub Actions)
-- `--tests-target-branch` / `-ttb` -- Branch used for quarantine evaluation (auto-detected from `GITHUB_BASE_REF`, `GITHUB_HEAD_REF`, `GITHUB_REF_NAME`, `GITHUB_REF`)
+- `--tests-target-branch` / `-ttb` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME` → `GITHUB_REF`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`).
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 - `--test-framework` -- Test framework name (optional metadata)
 - `--test-language` -- Test language (optional metadata)
