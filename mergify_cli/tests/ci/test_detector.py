@@ -381,3 +381,76 @@ def test_get_github_pull_request_number_buildkite_not_pr(
 ) -> None:
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
     assert detector.get_github_pull_request_number() is None
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_tests_target_branch_buildkite_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature-branch")
+    assert detector.get_tests_target_branch() == "main"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_tests_target_branch_buildkite_push(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", raising=False)
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature-branch")
+    assert detector.get_tests_target_branch() == "feature-branch"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_tests_target_branch_buildkite_unset() -> None:
+    assert detector.get_tests_target_branch() is None
+
+
+@pytest.fixture
+def _clear_ci_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear all CI-provider toggle env vars so the test picks the one it sets."""
+    for env in ("GITHUB_ACTIONS", "CIRCLECI", "JENKINS_URL", "BUILDKITE"):
+        monkeypatch.delenv(env, raising=False)
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_tests_target_branch_github_actions_base_ref_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_BASE_REF", "main")
+    monkeypatch.setenv("GITHUB_HEAD_REF", "feature-branch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/feature-branch")
+    assert detector.get_tests_target_branch() == "main"
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_tests_target_branch_circleci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CIRCLECI", "true")
+    monkeypatch.setenv("CIRCLE_BRANCH", "feature-branch")
+    assert detector.get_tests_target_branch() == "feature-branch"
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_tests_target_branch_jenkins_change_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JENKINS_URL", "http://jenkins.example.com")
+    monkeypatch.setenv("CHANGE_TARGET", "main")
+    monkeypatch.setenv("GIT_BRANCH", "origin/feature-branch")
+    assert detector.get_tests_target_branch() == "main"
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_tests_target_branch_jenkins_git_branch_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JENKINS_URL", "http://jenkins.example.com")
+    monkeypatch.delenv("CHANGE_TARGET", raising=False)
+    monkeypatch.setenv("GIT_BRANCH", "origin/feature-branch")
+    assert detector.get_tests_target_branch() == "feature-branch"
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_tests_target_branch_no_provider() -> None:
+    assert detector.get_tests_target_branch() is None

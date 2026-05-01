@@ -226,6 +226,76 @@ def test_tests_target_branch_environment_variable_processing(
     assert call_kwargs["tests_target_branch"] == expected_branch
 
 
+@pytest.mark.parametrize(
+    ("env", "expected_branch"),
+    [
+        pytest.param(
+            {
+                "BUILDKITE": "true",
+                "MERGIFY_API_URL": "https://api.mergify.com",
+                "MERGIFY_TOKEN": "abc",
+                "BUILDKITE_REPO": "git@github.com:user/repo.git",
+                "BUILDKITE_PULL_REQUEST_BASE_BRANCH": "main",
+                "BUILDKITE_BRANCH": "feature-branch",
+            },
+            "main",
+            id="BUILDKITE_PULL_REQUEST_BASE_BRANCH takes precedence",
+        ),
+        pytest.param(
+            {
+                "BUILDKITE": "true",
+                "MERGIFY_API_URL": "https://api.mergify.com",
+                "MERGIFY_TOKEN": "abc",
+                "BUILDKITE_REPO": "git@github.com:user/repo.git",
+                "BUILDKITE_BRANCH": "feature-branch",
+            },
+            "feature-branch",
+            id="BUILDKITE_BRANCH fallback when no PR base branch",
+        ),
+    ],
+)
+def test_tests_target_branch_buildkite_environment_variable_processing(
+    env: dict[str, str],
+    expected_branch: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that --tests-target-branch is auto-detected from Buildkite env vars."""
+    for key in [
+        "GITHUB_ACTIONS",
+        "GITHUB_REF",
+        "GITHUB_REF_NAME",
+        "GITHUB_HEAD_REF",
+        "GITHUB_BASE_REF",
+        "JENKINS_URL",
+        "CIRCLECI",
+        "BUILDKITE",
+        "BUILDKITE_PULL_REQUEST_BASE_BRANCH",
+        "BUILDKITE_BRANCH",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    runner = testing.CliRunner()
+
+    with mock.patch.object(
+        junit_processing_cli,
+        "process_junit_files",
+        mock.AsyncMock(),
+    ) as mocked_process_junit_files:
+        result = runner.invoke(
+            ci_cli.junit_process,
+            [str(REPORT_XML)],
+        )
+
+    assert result.exit_code == 0, result.stdout
+
+    assert mocked_process_junit_files.call_count == 1
+    call_kwargs = mocked_process_junit_files.call_args.kwargs
+    assert call_kwargs["tests_target_branch"] == expected_branch
+
+
 def test_process_tests_target_branch_callback() -> None:
     """Test the _process_tests_target_branch callback function directly."""
     context_mock = mock.MagicMock(spec=click.Context)

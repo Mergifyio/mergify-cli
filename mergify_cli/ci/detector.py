@@ -238,6 +238,27 @@ def get_github_repository() -> str | None:
             return None
 
 
+def get_tests_target_branch() -> str | None:
+    match get_ci_provider():
+        case "github_actions":
+            return (
+                os.getenv("GITHUB_BASE_REF")
+                or os.getenv("GITHUB_HEAD_REF")
+                or os.getenv("GITHUB_REF_NAME")
+                or os.getenv("GITHUB_REF")
+            )
+        case "buildkite":
+            return os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH") or os.getenv(
+                "BUILDKITE_BRANCH",
+            )
+        case "circleci":
+            return os.getenv("CIRCLE_BRANCH")
+        case "jenkins":
+            return os.getenv("CHANGE_TARGET") or get_jenkins_head_ref_name()
+        case _:
+            return None
+
+
 MERGIFY_CONFIG_PATHS = (
     ".mergify.yml",
     ".mergify/config.yml",
