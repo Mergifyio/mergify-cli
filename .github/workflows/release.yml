@@ -68,7 +68,7 @@ jobs:
           manylinux: auto
           sccache: true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.target }}
           path: target/wheels/*.whl
@@ -95,7 +95,7 @@ jobs:
           command: sdist
           args: --out target/wheels
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-sdist
           path: target/wheels/*.tar.gz
@@ -111,7 +111,7 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           merge-multiple: true
