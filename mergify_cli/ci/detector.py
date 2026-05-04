@@ -248,6 +248,10 @@ def get_cicd_pipeline_run_url() -> str | None:
 
 def get_base_ref_name() -> str | None:
     match get_ci_provider():
+        case "github_actions":
+            return os.getenv("GITHUB_BASE_REF")
+        case "jenkins":
+            return os.getenv("CHANGE_TARGET")
         case "buildkite":
             return os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
         case _:
@@ -267,24 +271,7 @@ def get_repository_url() -> str | None:
 
 
 def get_tests_target_branch() -> str | None:
-    match get_ci_provider():
-        case "github_actions":
-            return (
-                os.getenv("GITHUB_BASE_REF")
-                or os.getenv("GITHUB_HEAD_REF")
-                or os.getenv("GITHUB_REF_NAME")
-                or os.getenv("GITHUB_REF")
-            )
-        case "buildkite":
-            return os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH") or os.getenv(
-                "BUILDKITE_BRANCH",
-            )
-        case "circleci":
-            return os.getenv("CIRCLE_BRANCH")
-        case "jenkins":
-            return os.getenv("CHANGE_TARGET") or get_jenkins_head_ref_name()
-        case _:
-            return None
+    return get_base_ref_name() or get_head_ref_name()
 
 
 MERGIFY_CONFIG_PATHS = (
