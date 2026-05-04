@@ -32,6 +32,7 @@ from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import approvals as approvals_mod
 from mergify_cli.stack import changes
+from mergify_cli.stack import replay
 from mergify_cli.stack.note import NOTES_REF
 
 
@@ -45,6 +46,24 @@ DEPENDS_ON_RE = re.compile(r"Depends-On: (#[0-9]*)")
 _SLUG_SUFFIX_RE = re.compile(r"--[0-9a-f]{8}$")
 
 MAX_CONCURRENT_API_CALLS = 5
+
+# Classification of a force-push as observed via patch-id comparison plus
+# the synthetic "initial" tag used for the first revision row.
+ChangeType = typing.Literal["initial", "rebase", "content", "unknown"]
+_VALID_CHANGE_TYPES: typing.Final[frozenset[str]] = frozenset(
+    typing.get_args(ChangeType),
+)
+
+
+def _coerce_change_type(value: str) -> ChangeType:
+    """Narrow an arbitrary string parsed from a comment to ChangeType.
+
+    Unknown values are coerced to "unknown" so a legacy or hand-edited
+    comment with a stray value can't crash the parser.
+    """
+    if value in _VALID_CHANGE_TYPES:
+        return typing.cast("ChangeType", value)
+    return "unknown"
 
 
 @dataclasses.dataclass
@@ -210,7 +229,7 @@ async def _git_patch_id(sha: str) -> str:
     return stdout.decode().strip().split()[0]
 
 
-async def detect_change_type(old_sha: str, new_sha: str) -> str:
+async def detect_change_type(old_sha: str, new_sha: str) -> ChangeType:
     """Compare patch-ids to determine if a force-push is rebase-only or content change."""
     try:
         old_patch_id = await _git_patch_id(old_sha)
@@ -595,8 +614,9 @@ async def stack_push(
                         f"{rich.markup.escape(str(exc))}[/]",
                     )
 
-            # Detect change types before force-push overwrites refs
-            change_types: dict[str, str] = {}
+            # Detect change types before force-push overwrites refs.
+            # detect_change_type is local-only and fast; keep it sequential.
+            change_types: dict[str, ChangeType] = {}
             for change in planned_changes.locals:
                 if change.action == "update" and change.pull is not None:
                     change_types[change.id] = await detect_change_type(
@@ -658,8 +678,59 @@ async def stack_push(
         console.log("[green]Comments updated.[/]")
 
         if revision_history:
+            # Compute replay SHAs after push_branches has made the new commits
+            # (and their parents) reachable on the GitHub server. Doing this
+            # before the push would cause the Git Data API uploads to fail for
+            # any PR whose parent is another PR in the same stack — those
+            # parents only exist server-side once we've pushed.
+            replay_sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+
+            async def _maybe_replay(
+                change: changes.LocalChange,
+            ) -> tuple[str, str | None]:
+                if change_types.get(change.id) != "content":
+                    return change.id, None
+                try:
+                    async with replay_sem:
+                        sha = await replay.replay_for_revision(
+                            client=client,
+                            user=user,
+                            repo=repo,
+                            old_sha=change.pull_head_sha,
+                            new_sha=change.commit_sha,
+                        )
+                except Exception as exc:
+                    # Defence-in-depth: replay_for_revision is supposed to
+                    # swallow all errors and return None, but if a refactor
+                    # ever lets one escape we don't want it to abort the
+                    # whole stack push.
+                    console.log(
+                        f"[orange]Rebase-aware compare unavailable for "
+                        f"{change.id}: {rich.markup.escape(str(exc))}[/]",
+                    )
+                    return change.id, None
+                if sha is None:
+                    console.log(
+                        f"[dim]Rebase-aware compare unavailable for "
+                        f"{change.id}; using standard compare URL[/]",
+                    )
+                return change.id, sha
+
+            replay_results = await asyncio.gather(
+                *(
+                    _maybe_replay(task.change)
+                    for task in tasks
+                    if task.change.action == "update" and task.change.pull is not None
+                ),
+            )
+            replay_shas: dict[str, str | None] = dict(replay_results)
+
             updated_changes = [
-                (task.change, change_types.get(task.change.id, "unknown"))
+                (
+                    task.change,
+                    change_types.get(task.change.id, "unknown"),
+                    replay_shas.get(task.change.id),
+                )
                 for task in tasks
                 if task.change.action == "update" and task.change.pull is not None
             ]
@@ -773,10 +844,12 @@ def _escape_reason(reason: str) -> str:
 @dataclasses.dataclass
 class _RevisionEntry:
     number: int
-    change_type: str
+    change_type: ChangeType
     old_sha: str | None  # None for "initial"
     new_sha: str
     timestamp: datetime.datetime | None
+    reason: str = ""
+    replay_sha: str | None = None
 
     @property
     def timestamp_human(self) -> str:
@@ -790,7 +863,23 @@ class _RevisionEntry:
             return None
         return self.timestamp.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    reason: str = ""
+    @property
+    def effective_old_sha(self) -> str:
+        """SHA to use as the 'from' anchor in compare URLs.
+
+        Prefers replay_sha when present (rebase-aware diff anchored at
+        the synthetic replay commit); falls back to old_sha otherwise.
+
+        Initial entries have old_sha=None and never get a compare URL,
+        so callers must guard with an old_sha-not-None check; this
+        property asserts the invariant rather than returning None and
+        forcing every caller to cast.
+        """
+        sha = self.replay_sha or self.old_sha
+        if sha is None:
+            msg = "effective_old_sha called on initial entry (old_sha=None)"
+            raise AssertionError(msg)
+        return sha
 
 
 @dataclasses.dataclass
@@ -826,13 +915,22 @@ class RevisionHistoryComment:
         repo: str,
         old_sha: str,
         new_sha: str,
-        change_type: str,
+        change_type: ChangeType,
         timestamp: datetime.datetime,
         reason: str = "",
+        replay_sha: str | None = None,
     ) -> RevisionHistoryComment:
         entries = [
             _RevisionEntry(1, "initial", None, old_sha, timestamp),
-            _RevisionEntry(2, change_type, old_sha, new_sha, timestamp, reason=reason),
+            _RevisionEntry(
+                2,
+                change_type,
+                old_sha,
+                new_sha,
+                timestamp,
+                reason=reason,
+                replay_sha=replay_sha,
+            ),
         ]
         return cls(
             github_server=github_server,
@@ -846,9 +944,10 @@ class RevisionHistoryComment:
         *,
         old_sha: str,
         new_sha: str,
-        change_type: str,
+        change_type: ChangeType,
         timestamp: datetime.datetime,
         reason: str = "",
+        replay_sha: str | None = None,
     ) -> None:
         next_number = len(self.entries) + 1
         self.entries.append(
@@ -859,15 +958,26 @@ class RevisionHistoryComment:
                 new_sha,
                 timestamp,
                 reason=reason,
+                replay_sha=replay_sha,
             ),
         )
 
     def _render_entry(self, entry: _RevisionEntry) -> str:
         if entry.old_sha is None:
             changes_cell = f"`{entry.new_sha[:7]}`"
+        elif entry.change_type == "rebase":
+            # Pure rebase: patch-id matched, no semantic change.
+            changes_cell = (
+                f"`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}` _(rebase only)_"
+            )
         else:
-            url = self._compare_url(entry.old_sha, entry.new_sha)
+            url = self._compare_url(entry.effective_old_sha, entry.new_sha)
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
+            if entry.replay_sha is not None:
+                # Synthetic replay commits get GC'd by GitHub eventually; keep
+                # a durable raw-diff link for the long tail.
+                raw_url = self._compare_url(entry.old_sha, entry.new_sha)
+                changes_cell = f"{changes_cell} ([raw]({raw_url}))"
         reason_cell = _escape_reason(entry.reason)
         return (
             f"| {entry.number} | {entry.change_type} | {changes_cell} | "
@@ -886,10 +996,14 @@ class RevisionHistoryComment:
                     "new_sha": e.new_sha,
                     "timestamp_iso": e.timestamp_iso,
                     "reason": e.reason,
+                    "replay_sha": e.replay_sha,
                     "compare_url": (
                         None
                         if e.old_sha is None
-                        else self._compare_url(e.old_sha, e.new_sha)
+                        else self._compare_url(
+                            e.effective_old_sha,
+                            e.new_sha,
+                        )
                     ),
                 }
                 for e in self.entries
@@ -945,7 +1059,7 @@ class RevisionHistoryComment:
             m5 = cls._ROW_RE_5.match(line)
             if m5:
                 number = int(m5.group(1))
-                change_type = m5.group(2)
+                change_type = _coerce_change_type(m5.group(2))
                 timestamp_str = m5.group(4).strip()
                 try:
                     parsed_timestamp: datetime.datetime | None = (
@@ -964,7 +1078,7 @@ class RevisionHistoryComment:
             m4 = cls._ROW_RE_4.match(line)
             if m4:
                 number = int(m4.group(1))
-                change_type = m4.group(2)
+                change_type = _coerce_change_type(m4.group(2))
                 timestamp_str = m4.group(3).strip()
                 try:
                     parsed_timestamp = datetime.datetime.strptime(
@@ -1020,6 +1134,9 @@ class RevisionHistoryComment:
                 reason = data.get("reason")
                 if isinstance(reason, str):
                     entry.reason = reason
+                replay_sha = data.get("replay_sha")
+                if isinstance(replay_sha, str) or replay_sha is None:
+                    entry.replay_sha = replay_sha
 
         return cls(
             github_server=github_server,
@@ -1099,7 +1216,9 @@ async def _update_revision_for_pull(
     repo: str,
     github_server: str,
     change: changes.LocalChange,
-    change_type: str,
+    change_type: ChangeType,
+    *,
+    replay_sha: str | None,
     timestamp: datetime.datetime,
     sem: asyncio.Semaphore,
 ) -> None:
@@ -1116,6 +1235,20 @@ async def _update_revision_for_pull(
         )
         comments = typing.cast("list[github_types.Comment]", r.json())
 
+        # Used by the corrupted-body and no-comment branches below; cheap to
+        # construct unconditionally and avoids duplicating 7 kwargs twice.
+        fresh_revision = RevisionHistoryComment.create_initial(
+            github_server=github_server,
+            user=user,
+            repo=repo,
+            old_sha=old_sha,
+            new_sha=new_sha,
+            change_type=change_type,
+            timestamp=timestamp,
+            reason=change.reason,
+            replay_sha=replay_sha,
+        )
+
         for comment in comments:
             if RevisionHistoryComment.is_revision_comment(comment):
                 parsed = RevisionHistoryComment.parse(
@@ -1131,6 +1264,7 @@ async def _update_revision_for_pull(
                         change_type=change_type,
                         timestamp=timestamp,
                         reason=change.reason,
+                        replay_sha=replay_sha,
                     )
                     new_body = parsed.body(pull_number)
                     if comment["body"] != new_body:
@@ -1139,37 +1273,17 @@ async def _update_revision_for_pull(
                             json={"body": new_body},
                         )
                     return
-                # Comment header matched but body corrupted — overwrite it
-                revision = RevisionHistoryComment.create_initial(
-                    github_server=github_server,
-                    user=user,
-                    repo=repo,
-                    old_sha=old_sha,
-                    new_sha=new_sha,
-                    change_type=change_type,
-                    timestamp=timestamp,
-                    reason=change.reason,
-                )
+                # Comment header matched but body corrupted — overwrite it.
                 await client.patch(
                     comment["url"],
-                    json={"body": revision.body(pull_number)},
+                    json={"body": fresh_revision.body(pull_number)},
                 )
                 return
 
         # No existing revision comment — create one
-        revision = RevisionHistoryComment.create_initial(
-            github_server=github_server,
-            user=user,
-            repo=repo,
-            old_sha=old_sha,
-            new_sha=new_sha,
-            change_type=change_type,
-            timestamp=timestamp,
-            reason=change.reason,
-        )
         await client.post(
             f"/repos/{user}/{repo}/issues/{pull_number}/comments",
-            json={"body": revision.body(pull_number)},
+            json={"body": fresh_revision.body(pull_number)},
         )
 
 
@@ -1178,7 +1292,7 @@ async def create_or_update_revision_comments(
     user: str,
     repo: str,
     github_server: str,
-    updated_changes: list[tuple[changes.LocalChange, str]],
+    updated_changes: list[tuple[changes.LocalChange, ChangeType, str | None]],
 ) -> None:
     if not updated_changes:
         return
@@ -1195,10 +1309,11 @@ async def create_or_update_revision_comments(
                 github_server,
                 change,
                 change_type,
-                now,
-                sem,
+                replay_sha=replay_sha,
+                timestamp=now,
+                sem=sem,
             )
-            for change, change_type in updated_changes
+            for change, change_type, replay_sha in updated_changes
         ),
     )
 
