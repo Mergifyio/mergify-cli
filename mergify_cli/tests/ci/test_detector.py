@@ -495,3 +495,52 @@ def test_get_repository_url_jenkins(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("_clear_ci_provider_env")
 def test_get_repository_url_no_provider() -> None:
     assert detector.get_repository_url() is None
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_base_ref_name_github_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_BASE_REF", "main")
+    assert detector.get_base_ref_name() == "main"
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_base_ref_name_github_actions_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    assert detector.get_base_ref_name() is None
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_base_ref_name_jenkins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JENKINS_URL", "http://jenkins.example.com")
+    monkeypatch.setenv("CHANGE_TARGET", "main")
+    assert detector.get_base_ref_name() == "main"
+
+
+@pytest.mark.usefixtures("_buildkite_env")
+def test_get_base_ref_name_buildkite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main")
+    assert detector.get_base_ref_name() == "main"
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_base_ref_name_circleci_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CIRCLECI", "true")
+    assert detector.get_base_ref_name() is None
+
+
+@pytest.mark.usefixtures("_clear_ci_provider_env")
+def test_get_tests_target_branch_github_actions_push(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a push run there is no GITHUB_BASE_REF, fall back to head ref."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+    assert detector.get_tests_target_branch() == "main"
