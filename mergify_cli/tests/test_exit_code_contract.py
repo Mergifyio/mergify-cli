@@ -27,28 +27,6 @@ if typing.TYPE_CHECKING:
     [
         pytest.param(
             lambda tmp_path, monkeypatch: monkeypatch.chdir(tmp_path),
-            ["config", "validate"],
-            ExitCode.CONFIGURATION_ERROR,
-            id="config-validate-missing-file",
-        ),
-        pytest.param(
-            lambda tmp_path, monkeypatch: _write_and_cd(
-                tmp_path,
-                monkeypatch,
-                "not: valid: [",
-            ),
-            ["config", "validate"],
-            ExitCode.CONFIGURATION_ERROR,
-            id="config-validate-invalid-yaml",
-        ),
-        pytest.param(
-            lambda tmp_path, monkeypatch: _prepare_simulate_env(tmp_path, monkeypatch),  # noqa: PLW0108
-            ["config", "simulate", "https://example.com/not-a-pr"],
-            2,
-            id="config-simulate-bad-url",
-        ),
-        pytest.param(
-            lambda tmp_path, monkeypatch: monkeypatch.chdir(tmp_path),
             ["ci", "scopes"],
             ExitCode.CONFIGURATION_ERROR,
             id="ci-scopes-missing-config",
@@ -75,24 +53,6 @@ def test_exit_code_contract(
     assert result.exit_code == expected_exit, (
         f"expected {expected_exit}, got {result.exit_code}\noutput: {result.output}"
     )
-
-
-def _write_and_cd(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-    yaml_content: str,
-) -> None:
-    (tmp_path / ".mergify.yml").write_text(yaml_content)
-    monkeypatch.chdir(tmp_path)
-
-
-def _prepare_simulate_env(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / ".mergify.yml").write_text("pull_request_rules: []\n")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MERGIFY_TOKEN", "fake")
 
 
 def _clear_mq_env(monkeypatch: pytest.MonkeyPatch) -> None:

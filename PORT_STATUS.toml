@@ -52,14 +52,6 @@ path = ["ci", "scopes-send"]
 status = "shimmed"
 
 [[command]]
-path = ["config", "simulate"]
-status = "native"
-
-[[command]]
-path = ["config", "validate"]
-status = "native"
-
-[[command]]
 path = ["freeze", "create"]
 status = "shimmed"
 
