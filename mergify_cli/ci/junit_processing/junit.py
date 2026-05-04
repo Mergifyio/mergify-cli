@@ -107,6 +107,9 @@ async def junit_to_spans(
     if (cicd_run_id := detector.get_cicd_pipeline_run_id()) is not None:
         resource_attributes[cicd_attributes.CICD_PIPELINE_RUN_ID] = cicd_run_id
 
+    if (run_url := detector.get_cicd_pipeline_run_url()) is not None:
+        resource_attributes["cicd.pipeline.run.url"] = run_url
+
     if (run_attempt := detector.get_cicd_pipeline_run_attempt()) is not None:
         resource_attributes["cicd.pipeline.run.attempt"] = run_attempt
 
@@ -115,6 +118,15 @@ async def junit_to_spans(
 
     if (head_ref_name := detector.get_head_ref_name()) is not None:
         resource_attributes[vcs_attributes.VCS_REF_HEAD_NAME] = head_ref_name
+
+    if (base_ref_name := detector.get_base_ref_name()) is not None:
+        resource_attributes[vcs_attributes.VCS_REF_BASE_NAME] = base_ref_name
+
+    if (repo_url := detector.get_repository_url()) is not None:
+        resource_attributes[vcs_attributes.VCS_REPOSITORY_URL_FULL] = repo_url
+
+    if (repo_name := detector.get_github_repository()) is not None:
+        resource_attributes["vcs.repository.name"] = repo_name
 
     if (
         cicd_pipeline_runner_name := detector.get_cicd_pipeline_runner_name()
