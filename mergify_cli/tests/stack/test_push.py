@@ -946,6 +946,45 @@ async def test_get_default_revision_history_not_set() -> None:
     assert result is True
 
 
+async def test_git_patch_id_forces_c_locale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `_git_patch_id` bypasses run_command (it needs stdin) so it must
+    # propagate the C locale env independently. Assert that it does.
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+    monkeypatch.setenv("LANG", "fr_FR.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "fr")
+
+    captured_env: dict[str, str] = {}
+
+    async def fake_exec(
+        *args: str,  # noqa: ARG001
+        **kwargs: typing.Any,
+    ) -> typing.Any:
+        captured_env.update(kwargs["env"])
+
+        class _Proc:
+            returncode = 0
+
+            async def communicate(
+                self,
+                input: bytes | None = None,  # noqa: A002, ARG002
+            ) -> tuple[bytes, bytes]:
+                return b"abc123 deadbeef", b""
+
+        return _Proc()
+
+    with (
+        mock.patch.object(utils, "git", return_value="dummy diff"),
+        mock.patch("asyncio.subprocess.create_subprocess_exec", fake_exec),
+    ):
+        await push._git_patch_id("deadbeef")
+
+    assert captured_env["LC_ALL"] == "C"
+    assert captured_env["LANG"] == "C"
+    assert captured_env["LANGUAGE"] == "C"
+
+
 async def test_detect_change_type_content() -> None:
     with mock.patch.object(push, "_git_patch_id", side_effect=["aaa", "bbb"]):
         result = await push.detect_change_type("old_sha", "new_sha")

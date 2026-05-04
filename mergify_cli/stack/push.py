@@ -217,6 +217,7 @@ async def _git_patch_id(sha: str) -> str:
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env=utils.subprocess_env(),
     )
     stdout, _ = await proc.communicate(input=diff.encode())
     if proc.returncode != 0:
