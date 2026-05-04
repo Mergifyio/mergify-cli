@@ -1,6 +1,14 @@
 [project]
 name = "mergify_cli"
-dynamic = ["version"]
+# `version` is a placeholder. The release workflow stamps it from
+# the git tag (`$GITHUB_REF`) right before maturin runs — keeps the
+# git tag as the source of truth for PyPI versioning, the same way
+# hatch-vcs did pre-port. Cargo.toml stays at "0.0.0" because Cargo
+# SemVer rejects the 4-component calver format the project uses
+# (`2026.4.23.1`); `mergify --version` from the Rust binary will
+# report the placeholder until Phase 6, when versioning becomes
+# Rust-native end-to-end.
+version = "0.0.0"
 description = "Mergify CLI is a tool that automates the creation and management of stacked pull requests on GitHub and handles CI results upload"
 authors = [{ name = "Mergify Team", email = "hello@mergify.com" }]
 requires-python = ">=3.13"
@@ -33,9 +41,6 @@ dependencies = [
     "tzlocal==5.3.1",
 ]
 
-[project.scripts]
-mergify = "mergify_cli.cli:main"
-
 [project.urls]
 Homepage = "https://mergify.com"
 Documentation = "https://docs.mergify.com"
@@ -61,12 +66,21 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
-[tool.hatch.version]
-source = "vcs"
-fallback-version = "0"
+[tool.maturin]
+# The wheel contains both the Rust binary `mergify` (built from
+# crates/mergify-cli) and the Python package `mergify_cli/`. The
+# Rust binary is the install-time `mergify` entry point; on
+# un-ported subcommands it shells out to the sibling `python3` in
+# the venv to run `python -m mergify_cli` against the bundled
+# package — keeping a single copy of every command at any moment.
+bindings = "bin"
+manifest-path = "crates/mergify-cli/Cargo.toml"
+python-source = "."
+module-name = "mergify_cli"
+strip = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
