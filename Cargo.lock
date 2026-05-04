@@ -889,10 +889,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "mergify-ci"
+version = "0.0.0"
+dependencies = [
+ "mergify-core",
+ "serde",
+ "serde_json",
+ "temp-env",
+ "tempfile",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "mergify-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "mergify-ci",
  "mergify-config",
  "mergify-core",
  "mergify-py-shim",
@@ -1585,6 +1600,7 @@ version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96374855068f47402c3121c6eed88d29cb1de8f3ab27090e273e420bdabcf050"
 dependencies = [
+ "futures",
  "parking_lot",
 ]
 

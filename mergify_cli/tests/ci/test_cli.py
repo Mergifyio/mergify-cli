@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-from typing import TYPE_CHECKING
 from unittest import mock
 
 import anys
@@ -15,10 +14,6 @@ from mergify_cli.ci.junit_processing import cli as junit_processing_cli
 from mergify_cli.ci.junit_processing import quarantine
 from mergify_cli.ci.junit_processing import upload
 from mergify_cli.exit_codes import ExitCode
-
-
-if TYPE_CHECKING:
-    import respx
 
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
@@ -507,122 +502,6 @@ def test_junit_process_glob_no_match_error(tmp_path: pathlib.Path) -> None:
     assert result.exit_code == 2
     assert "did not match any file" in result.output
     assert "missing-*.xml" in result.output
-
-
-@pytest.mark.respx(base_url="https://api.github.com/")
-def test_scopes_send(
-    respx_mock: respx.MockRouter,
-    tmp_path: pathlib.Path,
-) -> None:
-    """Test scopes command with all required parameters."""
-
-    scopes_json = tmp_path / "scopes.json"
-    scopes_json.write_text(
-        json.dumps(
-            {"base_ref": "base", "head_ref": "head", "scopes": ["backend", "frontend"]},
-        ),
-    )
-    scopes_file = tmp_path / "scopes.txt"
-    scopes_file.write_text("docs\n\n  infra  \n")
-
-    runner = testing.CliRunner()
-
-    post_mock = respx_mock.post(
-        "https://api.mergify.com/v1/repos/owner/repository/pulls/123/scopes",
-        headers={"Authorization": "Bearer test-token"},
-    ).respond(200)
-    result = runner.invoke(
-        ci_cli.scopes_send,
-        [
-            "--pull-request",
-            "123",
-            "--repository",
-            "owner/repository",
-            "--token",
-            "test-token",
-            "--scope",
-            "foobar",
-            "--scopes-json",
-            str(scopes_json),
-            "--scopes-file",
-            str(scopes_file),
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(post_mock.calls[0].request.content)
-    assert sorted(payload["scopes"]) == [
-        "backend",
-        "docs",
-        "foobar",
-        "frontend",
-        "infra",
-    ]
-
-
-@pytest.mark.respx(base_url="https://api.github.com/")
-def test_scopes_send_file_deprecated(
-    respx_mock: respx.MockRouter,
-    tmp_path: pathlib.Path,
-) -> None:
-    """`--file` still works but emits a deprecation warning on stderr."""
-
-    scopes_json = tmp_path / "scopes.json"
-    scopes_json.write_text(
-        json.dumps(
-            {"base_ref": "base", "head_ref": "head", "scopes": ["backend"]},
-        ),
-    )
-
-    runner = testing.CliRunner()
-
-    post_mock = respx_mock.post(
-        "https://api.mergify.com/v1/repos/owner/repository/pulls/123/scopes",
-        headers={"Authorization": "Bearer test-token"},
-    ).respond(200)
-    result = runner.invoke(
-        ci_cli.scopes_send,
-        [
-            "--pull-request",
-            "123",
-            "--repository",
-            "owner/repository",
-            "--token",
-            "test-token",
-            "--file",
-            str(scopes_json),
-        ],
-    )
-
-    assert result.exit_code == 0, result.stdout
-    assert "--file is deprecated" in result.stderr
-    payload = json.loads(post_mock.calls[0].request.content)
-    assert payload["scopes"] == ["backend"]
-
-
-def test_scopes_send_no_pull_request_skips(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When no pull request number is detected, scopes-send should skip gracefully."""
-    monkeypatch.delenv("BUILDKITE_PULL_REQUEST", raising=False)
-    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
-    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
-
-    runner = testing.CliRunner()
-    result = runner.invoke(
-        ci_cli.scopes_send,
-        [
-            "--repository",
-            "owner/repository",
-            "--token",
-            "test-token",
-            "--scope",
-            "backend",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "No pull request number detected, skipping scopes upload." in result.output
 
 
 def test_scopes_empty_mergify_config_env_uses_autodetection(

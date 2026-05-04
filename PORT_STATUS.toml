@@ -48,10 +48,6 @@ path = ["ci", "scopes"]
 status = "shimmed"
 
 [[command]]
-path = ["ci", "scopes-send"]
-status = "shimmed"
-
-[[command]]
 path = ["freeze", "create"]
 status = "shimmed"
 
