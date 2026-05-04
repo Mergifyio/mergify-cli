@@ -66,4 +66,4 @@ merge_queue:
 
 merge_protections_settings:
   reporting_method: deployments
-  auto_merge: true
+  auto_merge_conditions: true
