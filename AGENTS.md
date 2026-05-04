@@ -71,6 +71,24 @@ with `invoke_without_command=True` for consistent "did you mean?"
 suggestions. Add an explicit `click.echo(ctx.get_help())` in the group
 callback when `ctx.invoked_subcommand is None` for help display.
 
+## Rust Port Workflow
+
+The CLI is being ported from Python to Rust incrementally. Every command
+not yet ported is dispatched to Python via the `py-shim` binary; native
+Rust commands are dispatched directly. Drift between the two
+implementations is prevented structurally: when porting a command, the
+Python implementation MUST be deleted in the same PR that adds the Rust
+implementation. There is no period where both copies coexist.
+
+A single PR therefore contains:
+
+1. The Rust implementation (in the relevant `crates/*` crate) plus tests.
+2. Removal of the Python implementation file(s) and their tests.
+3. Any wiring updates (click registration, shim allow-list, etc.).
+
+Reviewers should reject PRs that port a command without removing the
+Python copy, or that remove a Python copy without a Rust replacement.
+
 ## Documentation
 
 When adding or changing a CLI feature, always update the documentation:
