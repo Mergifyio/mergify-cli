@@ -85,7 +85,12 @@ jobs:
         run: cargo build --release
 
   test:
-    timeout-minutes: 15
+    # Cold-cache cargo builds on Windows can push past 15 minutes
+    # (uv sync invokes the maturin build-backend, which compiles the
+    # whole Rust workspace). Warm runs land in ~10 min; 25 gives the
+    # cold path enough headroom to avoid spurious cancellations
+    # without masking a genuinely runaway build.
+    timeout-minutes: 25
     strategy:
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-15]
@@ -134,6 +139,17 @@ jobs:
           # to ensure the utf8 mode is enabled.
           python -c "import test_binary_build; test_binary_build.test_reexec_enables_utf8_and_prints_emoji();"
 
+  # Smoke build the full release wheel matrix on every PR so a
+  # cross-compile or platform-specific maturin failure is caught
+  # here, not on the next `release: published` event. Calls the
+  # same reusable workflow the release uses, with version stamping
+  # disabled (the placeholder "0.0.0" stays in pyproject.toml so
+  # the wheel name doesn't pretend to be a release version).
+  wheels:
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      stamp-version: false
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
@@ -141,6 +157,7 @@ jobs:
       - linters
       - compat-tests
       - rust
+      - wheels
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded
