@@ -71,6 +71,30 @@ with `invoke_without_command=True` for consistent "did you mean?"
 suggestions. Add an explicit `click.echo(ctx.get_help())` in the group
 callback when `ctx.invoked_subcommand is None` for help display.
 
+## Rust Port Workflow
+
+The CLI is being ported from Python to Rust incrementally. The shipped
+binary is `mergify` (built from `crates/mergify-cli`); commands not yet
+ported fall through to a Python shim implemented by the
+`crates/mergify-py-shim` crate, which invokes `python -m mergify_cli`
+on the bundled Python source. Native Rust commands are dispatched
+directly. Drift between the two implementations is prevented
+structurally: when porting a command, the Python implementation MUST
+be deleted in the same PR that adds the Rust implementation. There is
+no period where both copies coexist.
+
+A single PR therefore contains:
+
+1. The Rust implementation (in the relevant `crates/*` crate) plus tests.
+2. Removal of the Python implementation file(s) and their tests.
+3. Any wiring updates (click registration, shim allow-list, etc.).
+
+Reviewers should reject PRs that port a command without removing the
+Python copy. Removing the Python copy without a Rust replacement is
+fine when the command is being deprecated/dropped from the CLI — the
+rule is "no two live copies of the same command", not "every Python
+copy must be replaced".
+
 ## Documentation
 
 When adding or changing a CLI feature, always update the documentation:
