@@ -336,7 +336,10 @@ def get_http_client(
         headers=default_headers,
         event_hooks=default_event_hooks,
         follow_redirects=follow_redirects,
-        timeout=5.0,
+        # GitHub's PR create/update can briefly exceed 5s under load, but
+        # a slow CLI is worse than a fast retry — 10s absorbs transient
+        # hiccups while keeping the tool responsive when GitHub is down.
+        timeout=httpx.Timeout(5.0, read=10.0, write=10.0),
     )
 
 

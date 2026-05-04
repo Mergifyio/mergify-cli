@@ -84,8 +84,8 @@ def test_cli_connect_timeout_shows_clean_message(
 
     assert exc_info.value.code == ExitCode.GITHUB_API_ERROR
     out = capsys.readouterr().out
-    assert "timed out" in out
-    assert "https://api.github.com/user" in out
+    assert "GitHub did not respond in time" in out
+    assert "please retry" in out
     assert "Traceback" not in out
     assert "ConnectTimeout" not in out
 
@@ -103,7 +103,7 @@ def test_cli_connect_timeout_to_mergify_api(
         cli_mod.main()
 
     assert exc_info.value.code == ExitCode.MERGIFY_API_ERROR
-    assert "timed out" in capsys.readouterr().out
+    assert "Mergify did not respond in time" in capsys.readouterr().out
 
 
 def test_cli_connect_error_shows_clean_message(
@@ -120,7 +120,7 @@ def test_cli_connect_error_shows_clean_message(
 
     assert exc_info.value.code == ExitCode.GITHUB_API_ERROR
     out = capsys.readouterr().out
-    assert "network error" in out
+    assert "could not reach GitHub" in out
     assert "connection refused" in out
 
 
