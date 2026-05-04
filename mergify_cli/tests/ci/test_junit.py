@@ -36,6 +36,10 @@ if TYPE_CHECKING:
     "get_head_ref_name",
     return_value="refs/heads/main",
 )
+@mock.patch.object(detector, "get_cicd_pipeline_run_url", return_value=None)
+@mock.patch.object(detector, "get_base_ref_name", return_value=None)
+@mock.patch.object(detector, "get_repository_url", return_value=None)
+@mock.patch.object(detector, "get_github_repository", return_value=None)
 async def test_parse(
     _get_ci_provider: mock.Mock,
     _get_pipeline_name: mock.Mock,
@@ -45,6 +49,10 @@ async def test_parse(
     _get_cicd_pipeline_run_attempt: mock.Mock,
     _get_head_sha: mock.Mock,
     _get_head_ref_name: mock.Mock,
+    _get_cicd_pipeline_run_url: mock.Mock,
+    _get_base_ref_name: mock.Mock,
+    _get_repository_url: mock.Mock,
+    _get_github_repository: mock.Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MERGIFY_TEST_JOB_NAME", "foobar")
@@ -523,6 +531,10 @@ async def test_parse(
     "get_head_ref_name",
     return_value="refs/heads/main",
 )
+@mock.patch.object(detector, "get_cicd_pipeline_run_url", return_value=None)
+@mock.patch.object(detector, "get_base_ref_name", return_value=None)
+@mock.patch.object(detector, "get_repository_url", return_value=None)
+@mock.patch.object(detector, "get_github_repository", return_value=None)
 async def test_traceparent_injection(
     _get_ci_provider: mock.Mock,
     _get_pipeline_name: mock.Mock,
@@ -532,6 +544,10 @@ async def test_traceparent_injection(
     _get_cicd_pipeline_run_attempt: mock.Mock,
     _get_head_sha: mock.Mock,
     _get_head_ref_name: mock.Mock,
+    _get_cicd_pipeline_run_url: mock.Mock,
+    _get_base_ref_name: mock.Mock,
+    _get_repository_url: mock.Mock,
+    _get_github_repository: mock.Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(
@@ -575,6 +591,10 @@ async def test_traceparent_injection(
     "get_head_ref_name",
     return_value="refs/heads/main",
 )
+@mock.patch.object(detector, "get_cicd_pipeline_run_url", return_value=None)
+@mock.patch.object(detector, "get_base_ref_name", return_value=None)
+@mock.patch.object(detector, "get_repository_url", return_value=None)
+@mock.patch.object(detector, "get_github_repository", return_value=None)
 async def test_parse_single_suite(
     _get_ci_provider: mock.Mock,
     _get_pipeline_name: mock.Mock,
@@ -584,6 +604,10 @@ async def test_parse_single_suite(
     _get_cicd_pipeline_run_attempt: mock.Mock,
     _get_head_sha: mock.Mock,
     _get_head_ref_name: mock.Mock,
+    _get_cicd_pipeline_run_url: mock.Mock,
+    _get_base_ref_name: mock.Mock,
+    _get_repository_url: mock.Mock,
+    _get_github_repository: mock.Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MERGIFY_TEST_JOB_NAME", "foobar")
@@ -855,3 +879,67 @@ def test_junit_empty_file_exits_generic_error(
         ],
     )
     assert result.exit_code == ExitCode.GENERIC_ERROR, result.output
+
+
+@mock.patch.object(detector, "get_ci_provider", return_value="buildkite")
+@mock.patch.object(detector, "get_pipeline_name", return_value="my-pipeline")
+@mock.patch.object(detector, "get_job_name", return_value="Run tests")
+@mock.patch.object(detector, "get_cicd_pipeline_runner_name", return_value="agent-1")
+@mock.patch.object(detector, "get_cicd_pipeline_run_id", return_value="abc-123")
+@mock.patch.object(detector, "get_cicd_pipeline_run_attempt", return_value=1)
+@mock.patch.object(
+    detector,
+    "get_head_sha",
+    return_value="3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
+)
+@mock.patch.object(detector, "get_head_ref_name", return_value="feature-branch")
+@mock.patch.object(
+    detector,
+    "get_cicd_pipeline_run_url",
+    return_value="https://buildkite.com/org/pipeline/builds/42",
+)
+@mock.patch.object(detector, "get_base_ref_name", return_value="main")
+@mock.patch.object(
+    detector,
+    "get_repository_url",
+    return_value="git@github.com:owner/repo.git",
+)
+@mock.patch.object(detector, "get_github_repository", return_value="owner/repo")
+async def test_parse_buildkite_resource_attributes(
+    _get_ci_provider: mock.Mock,
+    _get_pipeline_name: mock.Mock,
+    _get_job_name: mock.Mock,
+    _get_cicd_pipeline_runner_name: mock.Mock,
+    _get_cicd_pipeline_run_id: mock.Mock,
+    _get_cicd_pipeline_run_attempt: mock.Mock,
+    _get_head_sha: mock.Mock,
+    _get_head_ref_name: mock.Mock,
+    _get_cicd_pipeline_run_url: mock.Mock,
+    _get_base_ref_name: mock.Mock,
+    _get_repository_url: mock.Mock,
+    _get_github_repository: mock.Mock,
+) -> None:
+    filename = pathlib.Path(__file__).parent / "fixtures" / "junit_example.xml"
+    run_id = (32312).to_bytes(8, "big").hex()
+    spans = await junit.junit_to_spans(
+        run_id,
+        filename.read_bytes(),
+        "python",
+        "unittest",
+    )
+
+    attrs = spans[0].resource.attributes
+    assert attrs["cicd.provider.name"] == "buildkite"
+    assert attrs["cicd.pipeline.name"] == "my-pipeline"
+    assert attrs["cicd.pipeline.task.name"] == "Run tests"
+    assert attrs["cicd.pipeline.run.id"] == "abc-123"
+    assert (
+        attrs["cicd.pipeline.run.url"] == "https://buildkite.com/org/pipeline/builds/42"
+    )
+    assert attrs["cicd.pipeline.run.attempt"] == 1
+    assert attrs["cicd.pipeline.runner.name"] == "agent-1"
+    assert attrs["vcs.ref.head.name"] == "feature-branch"
+    assert attrs["vcs.ref.base.name"] == "main"
+    assert attrs["vcs.ref.head.revision"] == "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199"
+    assert attrs["vcs.repository.url.full"] == "git@github.com:owner/repo.git"
+    assert attrs["vcs.repository.name"] == "owner/repo"
