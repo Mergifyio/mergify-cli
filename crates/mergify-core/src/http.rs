@@ -11,7 +11,9 @@
 //! - Per-request timeout (30s default).
 //!
 //! Command crates must never import [`reqwest`] directly — they go
-//! through [`Client::get`] and [`Client::post`].
+//! through [`Client::get`], [`Client::post`], or
+//! [`Client::post_no_response`] (for endpoints that return an empty
+//! body on success).
 
 use std::time::Duration;
 
@@ -114,7 +116,8 @@ impl Client {
     /// GET `path` and deserialize the JSON body as `T`.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, CliError> {
         let url = self.join(path)?;
-        self.execute(self.inner.get(url)).await
+        let resp = self.execute_request(self.inner.get(url)).await?;
+        self.decode_json(resp).await
     }
 
     /// POST `body` as JSON to `path` and deserialize the JSON
@@ -125,7 +128,25 @@ impl Client {
         body: &B,
     ) -> Result<T, CliError> {
         let url = self.join(path)?;
-        self.execute(self.inner.post(url).json(body)).await
+        let resp = self
+            .execute_request(self.inner.post(url).json(body))
+            .await?;
+        self.decode_json(resp).await
+    }
+
+    /// POST `body` as JSON to `path` and discard the response body.
+    /// Use when the endpoint returns an empty body (or any body the
+    /// caller does not care about) on success — `post::<Value>` would
+    /// fail to deserialize an empty response.
+    pub async fn post_no_response<B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), CliError> {
+        let url = self.join(path)?;
+        self.execute_request(self.inner.post(url).json(body))
+            .await
+            .map(drop)
     }
 
     fn join(&self, path: &str) -> Result<Url, CliError> {
@@ -143,10 +164,10 @@ impl Client {
             .map_err(|e| self.api_error(format!("invalid path {path:?}: {e}")))
     }
 
-    async fn execute<T: DeserializeOwned>(
+    async fn execute_request(
         &self,
         builder: reqwest::RequestBuilder,
-    ) -> Result<T, CliError> {
+    ) -> Result<reqwest::Response, CliError> {
         let mut backoff = self.retry.initial_backoff;
         let mut last_message = String::from("HTTP request failed without response");
 
@@ -165,10 +186,7 @@ impl Client {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {
-                        return resp
-                            .json::<T>()
-                            .await
-                            .map_err(|e| self.api_error(format!("parse response JSON: {e}")));
+                        return Ok(resp);
                     }
                     last_message = error_message(status, resp).await;
                     if status.is_server_error() && attempt + 1 < self.retry.max_attempts {
@@ -199,6 +217,15 @@ impl Client {
             }
         }
         Err(self.api_error(last_message))
+    }
+
+    async fn decode_json<T: DeserializeOwned>(
+        &self,
+        resp: reqwest::Response,
+    ) -> Result<T, CliError> {
+        resp.json::<T>()
+            .await
+            .map_err(|e| self.api_error(format!("parse response JSON: {e}")))
     }
 
     fn api_error(&self, message: String) -> CliError {
@@ -326,6 +353,45 @@ mod tests {
             !requests[0].headers.contains_key("authorization"),
             "expected no Authorization header for empty token"
         );
+    }
+
+    #[tokio::test]
+    async fn post_no_response_succeeds_on_empty_2xx_body() {
+        // Mergify endpoints like POST /scopes return an empty body
+        // on success — `post::<Value>` would fail to deserialize.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/empty"))
+            .and(body_json(Foo { bar: 1 }))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        client
+            .post_no_response("/empty", &Foo { bar: 1 })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn post_no_response_propagates_4xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/empty"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("nope"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let err = client
+            .post_no_response("/empty", &Foo { bar: 1 })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::MergifyApi(_)));
+        assert!(err.to_string().contains("404"));
     }
 
     #[tokio::test]
