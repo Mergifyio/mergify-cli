@@ -12,13 +12,10 @@
 //! 5. Prints the simulator's title + summary.
 //!
 //! Token / api-url / config-file all follow the same resolution
-//! order as the Python CLI: explicit flag, then env var, then
-//! default. Missing token falls back from ``MERGIFY_TOKEN`` to
-//! ``GITHUB_TOKEN``. The ``gh auth token`` subprocess fallback from
-//! Python isn't ported yet — if neither env var is set the command
-//! errors out.
+//! order as the Python CLI (`mergify_core::auth`): explicit flag,
+//! then env var, then `gh auth token` for the bearer, then the
+//! default API URL.
 
-use std::env;
 use std::io::Write;
 use std::path::Path;
 
@@ -26,13 +23,11 @@ use mergify_core::ApiFlavor;
 use mergify_core::CliError;
 use mergify_core::HttpClient;
 use mergify_core::Output;
+use mergify_core::auth;
 use serde::Deserialize;
 use serde::Serialize;
-use url::Url;
 
 use crate::paths::resolve_config_path;
-
-const DEFAULT_API_URL: &str = "https://api.mergify.com";
 
 /// Deserialized shape of the `(owner/repo, number)` pair parsed from
 /// a pull-request URL.
@@ -75,39 +70,6 @@ pub fn parse_pr_url(url: &str) -> Result<PullRequestRef, String> {
     })
 }
 
-/// Resolve the Mergify API bearer token.
-///
-/// Precedence: explicit `--token`, then `MERGIFY_TOKEN`, then
-/// `GITHUB_TOKEN`. Errors out when none of those are set.
-fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(token) = explicit.filter(|t| !t.is_empty()) {
-        return Ok(token.to_string());
-    }
-    for env_name in ["MERGIFY_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(value) = env::var(env_name) {
-            if !value.is_empty() {
-                return Ok(value);
-            }
-        }
-    }
-    Err(CliError::Configuration(
-        "please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, \
-         or pass --token explicitly"
-            .to_string(),
-    ))
-}
-
-/// Resolve the Mergify API base URL. Falls back to `MERGIFY_API_URL`
-/// env var, then to the default `https://api.mergify.com`.
-fn resolve_api_url(explicit: Option<&str>) -> Result<Url, CliError> {
-    let raw = explicit
-        .map(str::to_string)
-        .or_else(|| env::var("MERGIFY_API_URL").ok())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_API_URL.to_string());
-    Url::parse(&raw).map_err(|e| CliError::Configuration(format!("invalid --api-url {raw:?}: {e}")))
-}
-
 #[derive(Serialize)]
 struct SimulatorRequest<'a> {
     mergify_yml: &'a str,
@@ -133,8 +95,8 @@ pub async fn run(opts: SimulateOptions<'_>, output: &mut dyn Output) -> Result<(
         CliError::Configuration(format!("cannot read {}: {e}", config_path.display()))
     })?;
 
-    let token = resolve_token(opts.token)?;
-    let api_url = resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_token(opts.token)?;
+    let api_url = auth::resolve_api_url(opts.api_url)?;
 
     output.status(&format!("Simulating against {api_url}…"))?;
 
@@ -216,80 +178,6 @@ mod tests {
     #[test]
     fn parse_pr_url_rejects_empty_owner() {
         assert!(parse_pr_url("https://github.com//repo/pull/42").is_err());
-    }
-
-    #[test]
-    fn resolve_token_prefers_explicit_over_env() {
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", Some("from-env")),
-                ("GITHUB_TOKEN", Some("github-env")),
-            ],
-            || {
-                assert_eq!(resolve_token(Some("from-cli")).unwrap(), "from-cli");
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_token_falls_back_to_mergify_env() {
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", Some("mergify-env")),
-                ("GITHUB_TOKEN", Some("github-env")),
-            ],
-            || {
-                assert_eq!(resolve_token(None).unwrap(), "mergify-env");
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_token_falls_back_to_github_env() {
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", None::<&str>),
-                ("GITHUB_TOKEN", Some("github-env")),
-            ],
-            || {
-                assert_eq!(resolve_token(None).unwrap(), "github-env");
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_token_errors_when_no_source_available() {
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", None::<&str>),
-                ("GITHUB_TOKEN", None::<&str>),
-            ],
-            || {
-                let err = resolve_token(None).unwrap_err();
-                assert!(matches!(err, CliError::Configuration(_)));
-                assert!(err.to_string().contains("MERGIFY_TOKEN"));
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_api_url_uses_default_when_unset() {
-        temp_env::with_vars([("MERGIFY_API_URL", None::<&str>)], || {
-            assert_eq!(
-                resolve_api_url(None).unwrap().as_str(),
-                "https://api.mergify.com/",
-            );
-        });
-    }
-
-    #[test]
-    fn resolve_api_url_prefers_explicit() {
-        temp_env::with_vars([("MERGIFY_API_URL", Some("https://from.env"))], || {
-            assert_eq!(
-                resolve_api_url(Some("https://from.cli")).unwrap().as_str(),
-                "https://from.cli/",
-            );
-        });
     }
 
     #[tokio::test]

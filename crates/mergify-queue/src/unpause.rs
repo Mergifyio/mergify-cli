@@ -13,7 +13,7 @@ use mergify_core::DeleteOutcome;
 use mergify_core::HttpClient;
 use mergify_core::Output;
 
-use crate::auth;
+use mergify_core::auth;
 
 pub struct UnpauseOptions<'a> {
     pub repository: Option<&'a str>,

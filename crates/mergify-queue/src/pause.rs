@@ -23,7 +23,7 @@ use mergify_core::Output;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::auth;
+use mergify_core::auth;
 
 const MAX_REASON_LEN: usize = 255;
 

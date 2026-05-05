@@ -9,7 +9,6 @@
 //! `queue show` stays shimmed until its conditions/checks tree
 //! ports next.
 
-pub mod auth;
 pub mod pause;
 pub mod status;
 pub mod unpause;

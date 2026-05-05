@@ -36,10 +36,9 @@ use mergify_core::ApiFlavor;
 use mergify_core::CliError;
 use mergify_core::HttpClient;
 use mergify_core::Output;
+use mergify_core::auth;
 use serde::Deserialize;
 use url::form_urlencoded;
-
-use crate::auth;
 
 pub struct StatusOptions<'a> {
     pub repository: Option<&'a str>,
@@ -256,7 +255,7 @@ fn print_batch(w: &mut dyn Write, batch: &Batch, now: DateTime<Utc>) -> std::io:
     }
     writeln!(w, "{header}")?;
     for pr in &batch.pull_requests {
-        writeln!(w, "    #{} {} ({})", pr.number, pr.title, pr.author.login,)?;
+        writeln!(w, "    #{} {} ({})", pr.number, pr.title, pr.author.login)?;
     }
     Ok(())
 }

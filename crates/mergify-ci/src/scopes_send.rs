@@ -18,9 +18,11 @@
 //! returns success — matches Python's "no PR, nothing to send"
 //! behavior.
 //!
-//! Auth + API URL resolution follows the same fallback order as
-//! ``config simulate``: explicit flag → ``MERGIFY_TOKEN`` /
-//! ``MERGIFY_API_URL`` env var → default (or error).
+//! Auth + API URL resolution goes through `mergify_core::auth`,
+//! which adds a `gh auth token` fallback (matches Python's
+//! `utils.get_default_token`) and a `git config remote.origin.url`
+//! fallback for the repository slug (matches
+//! `utils.get_default_repository`).
 
 use std::env;
 use std::path::Path;
@@ -29,11 +31,9 @@ use mergify_core::ApiFlavor;
 use mergify_core::CliError;
 use mergify_core::HttpClient;
 use mergify_core::Output;
+use mergify_core::auth;
 use serde::Deserialize;
 use serde::Serialize;
-use url::Url;
-
-const DEFAULT_API_URL: &str = "https://api.mergify.com";
 
 pub struct ScopesSendOptions<'a> {
     pub repository: Option<&'a str>,
@@ -53,9 +53,9 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
         return Ok(());
     };
 
-    let repository = resolve_repository(opts.repository)?;
-    let token = resolve_token(opts.token)?;
-    let api_url = resolve_api_url(opts.api_url)?;
+    let repository = auth::resolve_repository(opts.repository)?;
+    let token = auth::resolve_token(opts.token)?;
+    let api_url = auth::resolve_api_url(opts.api_url)?;
 
     // Whenever the deprecated `--file` flag is supplied, surface
     // the deprecation warning — even when `--scopes-json` is also
@@ -90,20 +90,6 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
     Ok(())
 }
 
-fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(value) = explicit.filter(|s| !s.is_empty()) {
-        return Ok(value.to_string());
-    }
-    env::var("GITHUB_REPOSITORY")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            CliError::Configuration(
-                "--repository not provided and GITHUB_REPOSITORY env var is unset".to_string(),
-            )
-        })
-}
-
 fn resolve_pull_request(explicit: Option<u64>) -> Result<Option<u64>, CliError> {
     if let Some(n) = explicit {
         return Ok(Some(n));
@@ -133,33 +119,6 @@ fn resolve_pull_request(explicit: Option<u64>) -> Result<Option<u64>, CliError> 
     Ok(event
         .pointer("/pull_request/number")
         .and_then(serde_json::Value::as_u64))
-}
-
-fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(value) = explicit.filter(|s| !s.is_empty()) {
-        return Ok(value.to_string());
-    }
-    for env_name in ["MERGIFY_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(value) = env::var(env_name) {
-            if !value.is_empty() {
-                return Ok(value);
-            }
-        }
-    }
-    Err(CliError::Configuration(
-        "please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, \
-         or pass --token explicitly"
-            .to_string(),
-    ))
-}
-
-fn resolve_api_url(explicit: Option<&str>) -> Result<Url, CliError> {
-    let raw = explicit
-        .map(str::to_string)
-        .or_else(|| env::var("MERGIFY_API_URL").ok())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_API_URL.to_string());
-    Url::parse(&raw).map_err(|e| CliError::Configuration(format!("invalid --api-url {raw:?}: {e}")))
 }
 
 #[derive(Deserialize)]
@@ -232,27 +191,6 @@ mod tests {
             stdout,
             stderr,
         }
-    }
-
-    #[test]
-    fn resolve_repository_prefers_flag() {
-        temp_env::with_var("GITHUB_REPOSITORY", Some("env/env"), || {
-            assert_eq!(resolve_repository(Some("cli/cli")).unwrap(), "cli/cli");
-        });
-    }
-
-    #[test]
-    fn resolve_repository_falls_back_to_env() {
-        temp_env::with_var("GITHUB_REPOSITORY", Some("env/env"), || {
-            assert_eq!(resolve_repository(None).unwrap(), "env/env");
-        });
-    }
-
-    #[test]
-    fn resolve_repository_errors_when_unset() {
-        temp_env::with_var("GITHUB_REPOSITORY", None::<&str>, || {
-            assert!(resolve_repository(None).is_err());
-        });
     }
 
     #[test]
