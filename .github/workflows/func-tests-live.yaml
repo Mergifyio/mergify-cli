@@ -1,0 +1,41 @@
+name: Live functional tests
+
+# Hits the real Mergify API against
+# mergify-clients-testing/mergify-cli-repo PR #1. NOT wired into
+# the PR `ci-gate` job — an upstream blip must not block PRs.
+# See `func-tests/test_live_smoke.py`.
+
+permissions: read-all
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  live-tests:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    environment: func-tests-live
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: 3.14
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          version-file: requirements-uv.txt
+
+      - name: Live smoke tests
+        shell: bash
+        env:
+          LIVE_TEST_MERGIFY_TOKEN: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN }}
+        run: uv run --locked poe live-test

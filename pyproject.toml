@@ -63,6 +63,7 @@ dev = [
     "types-pyyaml==6.0.12.20260408",
     "anys==0.3.1",
     "responses==0.26.0",
+    "pytest-httpserver==1.1.3",
 ]
 
 [build-system]
@@ -91,6 +92,9 @@ include = ["LICENSE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "live: hits the real Mergify staging API. Skipped unless LIVE_TEST_MERGIFY_TOKEN is set; runs in the dedicated `func-tests-live` workflow only.",
+]
 
 [tool.poe]
 include = ["poe.toml"]
@@ -251,6 +255,14 @@ runtime-evaluated-decorators = [
     "S101",
     # subprocess call: check for execution of untrusted input
     "S603",
+]
+"func-tests/**/*.py" = [
+    # Use of assert detected — this is pytest
+    "S101",
+    # subprocess call: check for execution of untrusted input
+    "S603",
+    # hardcoded passwords / tokens — fixtures only, not real creds
+    "S105", "S106",
 ]
 
 [tool.ruff.lint.isort]
