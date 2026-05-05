@@ -80,10 +80,11 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
 
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
     let path = format!("/v1/repos/{repository}/pulls/{pull_request}/scopes");
-    // Server response shape isn't part of this command's contract —
-    // we just need a 2xx. Parse into Value to be permissive.
-    let _: serde_json::Value = client
-        .post(&path, &SendScopesRequest { scopes: &scopes })
+    // The endpoint returns an empty body on success — `post::<Value>`
+    // would surface that as "parse response JSON: error decoding
+    // response body". We only need to know the request was 2xx.
+    client
+        .post_no_response(&path, &SendScopesRequest { scopes: &scopes })
         .await?;
 
     Ok(())
@@ -394,6 +395,40 @@ mod tests {
                 scopes: &direct,
                 scopes_json: Some(&json_path),
                 scopes_file: Some(&txt_path),
+                deprecated_file: None,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_succeeds_when_server_returns_empty_body() {
+        // Regression: the Mergify scopes-send endpoint returns an
+        // empty body on success. Earlier the Rust port tried to
+        // deserialize it as `serde_json::Value` and surfaced
+        // "parse response JSON: error decoding response body".
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/repos/owner/repo/pulls/7/scopes"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut cap = make_output();
+        let api_url = server.uri();
+
+        run(
+            ScopesSendOptions {
+                repository: Some("owner/repo"),
+                pull_request: Some(7),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                scopes: &[],
+                scopes_json: None,
+                scopes_file: None,
                 deprecated_file: None,
             },
             &mut cap.output,
