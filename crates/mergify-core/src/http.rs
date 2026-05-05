@@ -184,7 +184,17 @@ impl Client {
                     backoff *= 2;
                 }
                 Err(e) => {
-                    return Err(self.api_error(format!("request failed: {e}")));
+                    let msg = if e.is_timeout() {
+                        format!(
+                            "{} did not respond in time. The request was aborted — please retry.",
+                            self.service_name()
+                        )
+                    } else if e.is_connect() {
+                        format!("could not reach {}: {e}", self.service_name())
+                    } else {
+                        format!("request failed: {e}")
+                    };
+                    return Err(self.api_error(msg));
                 }
             }
         }
@@ -195,6 +205,13 @@ impl Client {
         match self.flavor {
             ApiFlavor::GitHub => CliError::GitHubApi(message),
             ApiFlavor::Mergify => CliError::MergifyApi(message),
+        }
+    }
+
+    fn service_name(&self) -> &'static str {
+        match self.flavor {
+            ApiFlavor::GitHub => "GitHub",
+            ApiFlavor::Mergify => "Mergify",
         }
     }
 }
@@ -432,6 +449,75 @@ mod tests {
             panic!("expected Err for max_attempts=0");
         };
         assert!(err.to_string().contains("max_attempts"));
+    }
+
+    #[tokio::test]
+    async fn timeout_yields_did_not_respond_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(5)))
+            .mount(&server)
+            .await;
+
+        // Custom client with a tight request timeout so the test
+        // provokes a real reqwest timeout in milliseconds rather than
+        // the production-default 30s.
+        let inner = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let client = Client {
+            inner,
+            base_url: Url::parse(&server.uri()).unwrap(),
+            flavor: ApiFlavor::GitHub,
+            token: Some("test-token".to_string()),
+            retry: RetryPolicy {
+                max_attempts: 1,
+                initial_backoff: Duration::from_millis(0),
+            },
+        };
+
+        let err = client.get::<Foo>("/foo").await.unwrap_err();
+        assert!(matches!(err, CliError::GitHubApi(_)));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("GitHub did not respond in time. The request was aborted — please retry."),
+            "expected friendly timeout message, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_failure_yields_could_not_reach_message() {
+        let inner = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        // Bind, capture port, drop the listener — the port is then
+        // guaranteed-closed for the duration of the test, so connect
+        // fails fast with ECONNREFUSED. Avoids hard-coding a port like
+        // `1` that could happen to be bound on some CI images.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let client = Client {
+            inner,
+            base_url: Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(),
+            flavor: ApiFlavor::Mergify,
+            token: Some("t".to_string()),
+            retry: RetryPolicy {
+                max_attempts: 1,
+                initial_backoff: Duration::from_millis(0),
+            },
+        };
+
+        let err = client.get::<Foo>("/foo").await.unwrap_err();
+        assert!(matches!(err, CliError::MergifyApi(_)));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("could not reach Mergify"),
+            "expected connect message, got: {msg}"
+        );
     }
 
     #[tokio::test]
