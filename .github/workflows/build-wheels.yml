@@ -1,0 +1,131 @@
+name: build wheels
+
+# Reusable workflow that builds the per-target maturin wheel matrix
+# plus the sdist. Called from:
+#
+#   - `ci.yaml` on every PR — smoke build, no publish, version stays
+#     at the placeholder so PRs can iterate without colliding with
+#     PyPI versioning.
+#   - `release.yml` on `release: published` — same matrix, but the
+#     wheel version is stamped from `$GITHUB_REF` and the artifacts
+#     are uploaded for the publish job to push to PyPI.
+#
+# Targets: Linux x64 + arm64 (manylinux), macOS x64 + arm64,
+# Windows x64. Add new targets here when a new platform is on the
+# support matrix — both CI and release pick it up automatically.
+#
+# Linux arm64 uses a native `ubuntu-24.04-arm` runner instead of
+# cross-compiling: `ring`'s ARM-asm build script needs the C
+# compiler to define `__ARM_ARCH`, which the cross-gcc inside the
+# manylinux Docker image doesn't, and a native runner sidesteps the
+# problem entirely.
+
+on:
+  workflow_call:
+    inputs:
+      stamp-version:
+        description: |
+          When true, replace `version = "..."` in pyproject.toml
+          with the git tag value (`${GITHUB_REF#refs/tags/}`)
+          before maturin runs. Keep false for PR smoke builds so
+          CI exercises the full path with the placeholder version.
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-wheels:
+    name: build wheel (${{ matrix.target }})
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: 3.14
+
+      - name: Stamp wheel version from git tag
+        if: inputs.stamp-version
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF#refs/tags/}"
+          # `sed -i.bak`/rm form works on both BSD (macOS) and GNU
+          # (Linux) sed without divergent flag handling. On Windows
+          # the runner ships GNU sed via Git Bash, which honours the
+          # same syntax.
+          sed -i.bak -E "s/^version = \".*\"$/version = \"${VERSION}\"/" pyproject.toml
+          rm -f pyproject.toml.bak
+          echo "Stamped pyproject.toml:"
+          grep '^version = ' pyproject.toml
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          # `manylinux: auto` picks the most-compatible glibc the
+          # target supports; `--strip` shaves debug symbols off the
+          # bundled binary.
+          args: --release --strip --out target/wheels
+          manylinux: auto
+          sccache: true
+
+      # Only upload artifacts when the caller actually needs them
+      # (release.yml downloads them in its publish job). PR smoke
+      # builds just need the build to succeed — keeping the
+      # artifact upload off saves cache space and a few seconds per
+      # platform.
+      - uses: actions/upload-artifact@v4
+        if: inputs.stamp-version
+        with:
+          name: wheel-${{ matrix.target }}
+          path: target/wheels/*.whl
+
+  build-sdist:
+    name: build sdist
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    # The sdist is only useful for the release publish step. PR
+    # smoke runs would just throw it away — skip the whole job.
+    if: inputs.stamp-version
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Stamp wheel version from git tag
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF#refs/tags/}"
+          sed -i.bak -E "s/^version = \".*\"$/version = \"${VERSION}\"/" pyproject.toml
+          rm -f pyproject.toml.bak
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out target/wheels
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-sdist
+          path: target/wheels/*.tar.gz
