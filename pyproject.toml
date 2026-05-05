@@ -81,6 +81,13 @@ manifest-path = "crates/mergify-cli/Cargo.toml"
 python-source = "."
 module-name = "mergify_cli"
 strip = true
+# Bundle LICENSE in both the wheel and sdist. PEP 639 metadata
+# (auto-derived by maturin from `license = "Apache-2.0"`) emits a
+# `License-File: LICENSE` field, and PyPI's upload validator rejects
+# the artifact with `400 License-File LICENSE does not exist in
+# distribution file` if the file isn't actually bundled. Listing it
+# here keeps wheel + sdist in sync with the metadata.
+include = ["LICENSE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
