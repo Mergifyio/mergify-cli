@@ -937,6 +937,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "temp-env",
  "thiserror",
  "tokio",
  "url",
