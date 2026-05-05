@@ -88,7 +88,22 @@ fn locate_python() -> Result<PathBuf, ShimError> {
     }
 
     let exe = env::current_exe().map_err(ShimError::SelfPathUnknown)?;
-    let parent = exe.parent().ok_or_else(|| {
+    locate_python_for_exe(&exe)
+}
+
+fn locate_python_for_exe(exe: &std::path::Path) -> Result<PathBuf, ShimError> {
+    // `env::current_exe()` on macOS (and Windows) returns the path
+    // used to invoke the binary, *without* resolving symlinks.
+    // pipx installs the wheel's `mergify` binary at
+    // `<venv>/bin/mergify` and exposes it via a `~/.local/bin/mergify`
+    // symlink; if we don't follow that symlink, we end up looking for
+    // python next to the user-facing `~/.local/bin/`, where there
+    // typically is none, and surface "could not locate a Python
+    // interpreter" on every invocation. Canonicalize first; fall
+    // back to the original path if canonicalization fails (for
+    // example if the binary was deleted between exec and now).
+    let resolved = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    let parent = resolved.parent().ok_or_else(|| {
         ShimError::SelfPathUnknown(io::Error::new(
             io::ErrorKind::NotFound,
             "current_exe has no parent directory",
@@ -190,6 +205,33 @@ mod tests {
             // they can spot a typo without having to dig.
             assert!(msg.contains("/nonexistent/python"), "got: {msg}");
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locate_python_for_exe_follows_symlinks() {
+        // Regression for INC-1352 / MRGFY-7173: `env::current_exe()`
+        // on macOS returns the symlink path, not its target. pipx
+        // exposes the wheel binary as `~/.local/bin/mergify` ->
+        // `<venv>/bin/mergify`; the python interpreter lives next
+        // to the canonical target, not the symlink. The shim must
+        // canonicalize before probing for a sibling python.
+        let real_dir = tempfile::tempdir().unwrap();
+        let link_dir = tempfile::tempdir().unwrap();
+
+        let real_bin = real_dir.path().join("mergify");
+        let real_python = real_dir.path().join(PYTHON_FILENAME);
+        std::fs::write(&real_bin, b"").unwrap();
+        std::fs::write(&real_python, b"").unwrap();
+
+        let symlinked_bin = link_dir.path().join("mergify");
+        std::os::unix::fs::symlink(&real_bin, &symlinked_bin).unwrap();
+
+        let got = locate_python_for_exe(&symlinked_bin).unwrap();
+        assert_eq!(
+            got.canonicalize().unwrap(),
+            real_python.canonicalize().unwrap()
+        );
     }
 
     #[test]

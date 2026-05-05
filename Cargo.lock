@@ -948,6 +948,7 @@ name = "mergify-py-shim"
 version = "0.0.0"
 dependencies = [
  "temp-env",
+ "tempfile",
  "thiserror",
 ]
 
