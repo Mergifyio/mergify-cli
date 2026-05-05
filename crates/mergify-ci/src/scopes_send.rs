@@ -33,6 +33,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use url::Url;
 
+use crate::detector;
+
 const DEFAULT_API_URL: &str = "https://api.mergify.com";
 
 pub struct ScopesSendOptions<'a> {
@@ -94,45 +96,19 @@ fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(value.to_string());
     }
-    env::var("GITHUB_REPOSITORY")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            CliError::Configuration(
-                "--repository not provided and GITHUB_REPOSITORY env var is unset".to_string(),
-            )
-        })
+    detector::get_github_repository().ok_or_else(|| {
+        CliError::Configuration(
+            "--repository not provided and could not be detected from the CI environment"
+                .to_string(),
+        )
+    })
 }
 
 fn resolve_pull_request(explicit: Option<u64>) -> Result<Option<u64>, CliError> {
     if let Some(n) = explicit {
         return Ok(Some(n));
     }
-    let Ok(event_path) = env::var("GITHUB_EVENT_PATH") else {
-        return Ok(None);
-    };
-    if event_path.is_empty() {
-        return Ok(None);
-    }
-    // A missing event file means "this isn't a GitHub Actions
-    // pull-request event" — match the Python CLI and treat it as
-    // "no PR detected" (which the caller turns into a clean skip),
-    // not a Configuration error.
-    let content = match std::fs::read_to_string(&event_path) {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(CliError::Configuration(format!(
-                "cannot read GITHUB_EVENT_PATH ({event_path}): {e}"
-            )));
-        }
-    };
-    let event: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-        CliError::Configuration(format!("GITHUB_EVENT_PATH is not valid JSON: {e}"))
-    })?;
-    Ok(event
-        .pointer("/pull_request/number")
-        .and_then(serde_json::Value::as_u64))
+    detector::get_github_pull_request_number()
 }
 
 fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
@@ -234,81 +210,89 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resolve_repository_prefers_flag() {
-        temp_env::with_var("GITHUB_REPOSITORY", Some("env/env"), || {
-            assert_eq!(resolve_repository(Some("cli/cli")).unwrap(), "cli/cli");
-        });
+    /// Clear every CI-provider env var the resolver inspects, then
+    /// apply the test-specific overrides on top. Without this, a test
+    /// running on a real CI host (Buildkite, Actions, …) inherits
+    /// provider env vars and the new provider-aware resolver picks
+    /// the wrong branch.
+    fn with_ci_env<F: FnOnce() -> R, R>(extra: &[(&str, Option<&str>)], f: F) -> R {
+        let mut vars: Vec<(String, Option<String>)> = [
+            "JENKINS_URL",
+            "GITHUB_ACTIONS",
+            "GITHUB_REPOSITORY",
+            "GITHUB_EVENT_PATH",
+            "CIRCLECI",
+            "CIRCLE_REPOSITORY_URL",
+            "BUILDKITE",
+            "BUILDKITE_REPO",
+            "BUILDKITE_PULL_REQUEST",
+            "GIT_URL",
+        ]
+        .into_iter()
+        .map(|k| (k.to_string(), None))
+        .collect();
+        for (k, v) in extra {
+            vars.push((k.to_string(), v.map(ToString::to_string)));
+        }
+        temp_env::with_vars(vars, f)
+    }
+
+    async fn with_ci_env_async<F: std::future::Future<Output = R>, R>(
+        extra: &[(&str, Option<&str>)],
+        f: F,
+    ) -> R {
+        let mut vars: Vec<(String, Option<String>)> = [
+            "JENKINS_URL",
+            "GITHUB_ACTIONS",
+            "GITHUB_REPOSITORY",
+            "GITHUB_EVENT_PATH",
+            "CIRCLECI",
+            "CIRCLE_REPOSITORY_URL",
+            "BUILDKITE",
+            "BUILDKITE_REPO",
+            "BUILDKITE_PULL_REQUEST",
+            "GIT_URL",
+        ]
+        .into_iter()
+        .map(|k| (k.to_string(), None))
+        .collect();
+        for (k, v) in extra {
+            vars.push((k.to_string(), v.map(ToString::to_string)));
+        }
+        temp_env::async_with_vars(vars, f).await
     }
 
     #[test]
-    fn resolve_repository_falls_back_to_env() {
-        temp_env::with_var("GITHUB_REPOSITORY", Some("env/env"), || {
-            assert_eq!(resolve_repository(None).unwrap(), "env/env");
-        });
+    fn resolve_repository_prefers_flag_over_env() {
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_REPOSITORY", Some("env/env")),
+            ],
+            || {
+                assert_eq!(resolve_repository(Some("cli/cli")).unwrap(), "cli/cli");
+            },
+        );
     }
 
     #[test]
-    fn resolve_repository_errors_when_unset() {
-        temp_env::with_var("GITHUB_REPOSITORY", None::<&str>, || {
+    fn resolve_repository_errors_when_no_provider_and_no_flag() {
+        with_ci_env(&[], || {
             assert!(resolve_repository(None).is_err());
         });
     }
 
     #[test]
-    fn resolve_pull_request_reads_event_json() {
-        let tmp = tempfile::tempdir().unwrap();
-        let event_path = tmp.path().join("event.json");
-        fs::write(
-            &event_path,
-            serde_json::json!({ "pull_request": { "number": 123 } }).to_string(),
-        )
-        .unwrap();
-        temp_env::with_var(
-            "GITHUB_EVENT_PATH",
-            Some(event_path.to_str().unwrap()),
-            || {
-                assert_eq!(resolve_pull_request(None).unwrap(), Some(123));
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_pull_request_returns_none_when_event_missing_number() {
-        let tmp = tempfile::tempdir().unwrap();
-        let event_path = tmp.path().join("event.json");
-        fs::write(
-            &event_path,
-            serde_json::json!({ "ref": "refs/heads/main" }).to_string(),
-        )
-        .unwrap();
-        temp_env::with_var(
-            "GITHUB_EVENT_PATH",
-            Some(event_path.to_str().unwrap()),
-            || {
-                assert_eq!(resolve_pull_request(None).unwrap(), None);
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_pull_request_returns_none_when_env_unset() {
-        temp_env::with_var("GITHUB_EVENT_PATH", None::<&str>, || {
-            assert_eq!(resolve_pull_request(None).unwrap(), None);
+    fn resolve_pull_request_prefers_explicit() {
+        with_ci_env(&[], || {
+            assert_eq!(resolve_pull_request(Some(7)).unwrap(), Some(7));
         });
     }
 
-    #[test]
-    fn resolve_pull_request_returns_none_when_event_file_missing() {
-        // GITHUB_EVENT_PATH set but pointing at a path that doesn't
-        // exist (e.g. step ran outside an Actions PR event) — must
-        // skip cleanly, not surface as a Configuration error.
-        let tmp = tempfile::tempdir().unwrap();
-        let missing = tmp.path().join("never-created.json");
-        temp_env::with_var("GITHUB_EVENT_PATH", Some(missing.to_str().unwrap()), || {
-            assert_eq!(resolve_pull_request(None).unwrap(), None);
-        });
-    }
+    // Provider-aware detection (Buildkite/CircleCI/Jenkins/GHA) has
+    // unit coverage in `detector::tests`. This module keeps only the
+    // wrapper-level checks: explicit-flag precedence and error
+    // wrapping.
 
     #[test]
     fn load_scopes_json_parses_dump_format() {
@@ -331,19 +315,60 @@ mod tests {
     #[tokio::test]
     async fn run_skips_when_no_pull_request_detected() {
         let mut cap = make_output();
-        temp_env::async_with_vars(
-            [
-                ("GITHUB_EVENT_PATH", None::<&str>),
-                ("GITHUB_REPOSITORY", Some("owner/repo")),
+        with_ci_env_async(&[("GITHUB_REPOSITORY", Some("owner/repo"))], async {
+            run(
+                ScopesSendOptions {
+                    repository: None,
+                    pull_request: None,
+                    token: Some("test-token"),
+                    api_url: Some("https://api.mergify.com"),
+                    scopes: &[],
+                    scopes_json: None,
+                    scopes_file: None,
+                    deprecated_file: None,
+                },
+                &mut cap.output,
+            )
+            .await
+            .unwrap();
+        })
+        .await;
+        let stderr_str = String::from_utf8(cap.stderr.lock().unwrap().clone()).unwrap();
+        assert!(
+            stderr_str.contains("skipping"),
+            "expected skip message, got {stderr_str:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_resolves_buildkite_repo_and_pull_request_from_env() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/repos/owner/repo/pulls/99/scopes"))
+            .and(body_json(serde_json::json!({"scopes": ["a"]})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut cap = make_output();
+        let api_url = server.uri();
+        let direct = vec!["a".to_string()];
+
+        with_ci_env_async(
+            &[
+                ("BUILDKITE", Some("true")),
+                ("BUILDKITE_REPO", Some("git@github.com:owner/repo.git")),
+                ("BUILDKITE_PULL_REQUEST", Some("99")),
             ],
             async {
                 run(
                     ScopesSendOptions {
                         repository: None,
                         pull_request: None,
-                        token: Some("test-token"),
-                        api_url: Some("https://api.mergify.com"),
-                        scopes: &[],
+                        token: Some("t"),
+                        api_url: Some(&api_url),
+                        scopes: &direct,
                         scopes_json: None,
                         scopes_file: None,
                         deprecated_file: None,
@@ -355,11 +380,6 @@ mod tests {
             },
         )
         .await;
-        let stderr_str = String::from_utf8(cap.stderr.lock().unwrap().clone()).unwrap();
-        assert!(
-            stderr_str.contains("skipping"),
-            "expected skip message, got {stderr_str:?}"
-        );
     }
 
     #[tokio::test]

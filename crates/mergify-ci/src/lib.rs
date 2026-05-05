@@ -7,4 +7,5 @@
 //! (git-subprocess runner, GitHub event parser, `JUnit` XML reader)
 //! is built out.
 
+pub mod detector;
 pub mod scopes_send;
