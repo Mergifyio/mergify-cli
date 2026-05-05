@@ -8,12 +8,8 @@ cmd = "pytest -v --pyargs mergify_cli"
 help = "Run cross-implementation compat tests (see compat-tests/README.md)"
 cmd = "pytest -v compat-tests/"
 
-[tool.poe.tasks.func-test]
-help = "Run functional tests against a mock Mergify API (see func-tests/README.md)"
-cmd = "pytest -v func-tests/ -m \"not live\""
-
 [tool.poe.tasks.live-test]
-help = "Run live smoke tests against the real Mergify staging API (requires LIVE_TEST_MERGIFY_TOKEN)"
+help = "Run live smoke tests against the real Mergify API (requires LIVE_TEST_MERGIFY_TOKEN)"
 cmd = "pytest -v func-tests/ -m live"
 
 [tool.poe.tasks.linters]

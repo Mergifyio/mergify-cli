@@ -58,30 +58,6 @@ jobs:
         shell: bash
         run: uv run --locked poe compat-test
 
-  func-tests:
-    timeout-minutes: 10
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: 3.14
-
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          version-file: requirements-uv.txt
-
-      - name: Functional tests
-        shell: bash
-        run: uv run --locked poe func-test
-
   rust:
     timeout-minutes: 10
     runs-on: ubuntu-24.04
@@ -180,7 +156,6 @@ jobs:
       - test
       - linters
       - compat-tests
-      - func-tests
       - rust
       - wheels
     runs-on: ubuntu-latest

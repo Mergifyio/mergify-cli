@@ -12,13 +12,12 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-"""Shared fixtures for the functional-test harness.
+"""Shared fixtures for the live functional-test harness.
 
-Tests in this directory run the `mergify` CLI as a subprocess
-against a local mock HTTP server. The `cli` fixture builds the
-invocation with a clean environment (CI/GitHub/Buildkite vars
-scrubbed) so test runs are deterministic regardless of where they
-execute.
+Tests in this directory drive the real `mergify` binary against
+the real Mergify API. The `cli` fixture builds the invocation
+with a clean environment (CI/GitHub/Buildkite vars scrubbed) so
+runs are deterministic regardless of where they execute.
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import typing
 
 
@@ -38,8 +36,6 @@ if typing.TYPE_CHECKING:
 
 import pytest
 
-
-FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
 
 # Environment variables that the CLI auto-detects from the surrounding
 # CI runner. Scrub them so a developer running tests inside GitHub
@@ -87,13 +83,7 @@ def live_token() -> str:
 
 
 def _resolve_mergify_binary() -> pathlib.Path | None:
-    """Locate the `mergify` Rust binary in the active venv (or PATH).
-
-    The binary is installed as a console-script entry point when the
-    project is `uv sync`'d. Tests for Rust-only subcommands
-    (`config validate`, `config simulate`, `ci scopes-send`) need
-    this binary; tests for still-Python subcommands can use either.
-    """
+    """Locate the `mergify` binary in the active venv (or PATH)."""
     venv = os.environ.get("VIRTUAL_ENV")
     if venv:
         candidate = pathlib.Path(venv) / "bin" / "mergify"
@@ -123,12 +113,10 @@ def cli(
 ) -> typing.Callable[..., CliResult]:
     """Return a callable that runs `mergify <args>` in a subprocess.
 
-    Routes through the real Rust binary so both native subcommands
-    (`ci scopes-send`) and shim-dispatched ones (`ci junit-process`)
-    are exercised end-to-end. Runs from a fresh temp directory with
-    CI-detection env vars scrubbed. Stdin is closed so any accidental
-    interactive prompt fails fast instead of blocking. A 30s timeout
-    caps pathological hangs — functional cases are short by design.
+    Runs from a fresh temp directory with CI-detection env vars
+    scrubbed. Stdin is closed so any accidental interactive prompt
+    fails fast instead of blocking. A 30s timeout caps pathological
+    hangs.
     """
 
     def _run(
@@ -141,55 +129,20 @@ def cli(
             full_env.update(env)
 
         cmd: Sequence[str] = [str(mergify_binary), *args]
-        return _exec(cmd, env=full_env, cwd=cwd or tmp_path)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=dict(full_env),
+            cwd=str(cwd or tmp_path),
+            timeout=30,
+        )
+        return CliResult(
+            returncode=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
 
     return _run
-
-
-@pytest.fixture
-def cli_py(
-    tmp_path: pathlib.Path,
-) -> typing.Callable[..., CliResult]:
-    """Like `cli`, but invokes `python -m mergify_cli` directly.
-
-    Useful for tests targeting subcommands that only exist in the
-    Python implementation (none today, but kept for symmetry with
-    `compat-tests`).
-    """
-
-    def _run(
-        *args: str,
-        env: Mapping[str, str] | None = None,
-        cwd: pathlib.Path | None = None,
-    ) -> CliResult:
-        full_env = {k: v for k, v in os.environ.items() if k not in _CI_ENV_VARS}
-        if env:
-            full_env.update(env)
-
-        cmd: Sequence[str] = [sys.executable, "-m", "mergify_cli", *args]
-        return _exec(cmd, env=full_env, cwd=cwd or tmp_path)
-
-    return _run
-
-
-def _exec(
-    cmd: Sequence[str],
-    *,
-    env: Mapping[str, str],
-    cwd: pathlib.Path,
-) -> CliResult:
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-        stdin=subprocess.DEVNULL,
-        env=dict(env),
-        cwd=str(cwd),
-        timeout=30,
-    )
-    return CliResult(
-        returncode=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
-    )
