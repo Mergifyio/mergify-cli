@@ -27,6 +27,7 @@ use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
 use mergify_queue::pause::PauseOptions;
+use mergify_queue::status::StatusOptions;
 use mergify_queue::unpause::UnpauseOptions;
 
 fn main() -> ExitCode {
@@ -55,6 +56,7 @@ enum NativeCommand {
     CiQueueInfo,
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
+    QueueStatus(QueueStatusOpts),
 }
 
 struct ConfigSimulateOpts {
@@ -89,6 +91,14 @@ struct QueueUnpauseOpts {
     api_url: Option<String>,
 }
 
+struct QueueStatusOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    branch: Option<String>,
+    output_json: bool,
+}
+
 /// Heuristic: does argv look like the user intended a native
 /// subcommand?
 ///
@@ -104,7 +114,7 @@ fn looks_native(argv: &[String]) -> bool {
             (pair[0].as_str(), pair[1].as_str()),
             ("config", "validate" | "simulate")
                 | ("ci", "scopes-send" | "git-refs" | "queue-info")
-                | ("queue", "pause" | "unpause"),
+                | ("queue", "pause" | "unpause" | "status"),
         )
     })
 }
@@ -216,6 +226,18 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             token,
             api_url,
         })),
+        Subcommands::Queue(QueueArgs {
+            repository,
+            token,
+            api_url,
+            command: QueueSubcommand::Status(StatusCliArgs { branch, json }),
+        }) => Some(NativeCommand::QueueStatus(QueueStatusOpts {
+            repository,
+            token,
+            api_url,
+            branch,
+            output_json: json,
+        })),
     }
 }
 
@@ -289,6 +311,19 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         repository: opts.repository.as_deref(),
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::QueueStatus(opts) => {
+                mergify_queue::status::run(
+                    StatusOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        branch: opts.branch.as_deref(),
+                        output_json: opts.output_json,
                     },
                     &mut output,
                 )
@@ -465,6 +500,8 @@ enum QueueSubcommand {
     Pause(PauseCliArgs),
     /// Unpause the merge queue for the repository.
     Unpause,
+    /// Show merge queue status for the repository.
+    Status(StatusCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -477,4 +514,15 @@ struct PauseCliArgs {
     /// sessions.
     #[arg(long = "yes-i-am-sure", default_value_t = false)]
     yes_i_am_sure: bool,
+}
+
+#[derive(clap::Args)]
+struct StatusCliArgs {
+    /// Filter the queue by branch name.
+    #[arg(long, short = 'b')]
+    branch: Option<String>,
+
+    /// Emit the raw API response as a single JSON document.
+    #[arg(long, default_value_t = false)]
+    json: bool,
 }

@@ -65,7 +65,7 @@ def test_skill_has_required_sections() -> None:
 # Rust-native queue commands. Each port PR appends to this list when
 # it deletes the Python copy, so the validation below stays accurate
 # without needing to spawn the Rust binary at test time.
-NATIVE_QUEUE_COMMANDS: frozenset[str] = frozenset({"pause", "unpause"})
+NATIVE_QUEUE_COMMANDS: frozenset[str] = frozenset({"pause", "unpause", "status"})
 
 
 def test_skill_references_valid_commands() -> None:
