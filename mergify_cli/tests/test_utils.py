@@ -257,6 +257,18 @@ def test_get_mergify_http_client() -> None:
     assert client.base_url == "https://api.mergify.com"
 
 
+def test_get_http_client_read_write_timeout_has_headroom() -> None:
+    # A flat 5s timeout previously aborted `stack push` whenever GitHub took
+    # longer than 5s to send PR create/update response headers; lock in the
+    # structured timeout so connect/pool stay short while read/write get
+    # enough headroom to absorb transient slowdowns.
+    client = utils.get_http_client("https://example.com")
+    assert client.timeout.connect == pytest.approx(5.0)
+    assert client.timeout.pool == pytest.approx(5.0)
+    assert client.timeout.read == pytest.approx(10.0)
+    assert client.timeout.write == pytest.approx(10.0)
+
+
 class TestCheckForStatus:
     async def test_success_does_nothing(self) -> None:
         request = httpx.Request("GET", "https://api.mergify.com/v1/repos/owner/repo")
