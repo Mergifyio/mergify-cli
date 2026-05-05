@@ -88,6 +88,18 @@ jobs:
           manylinux: auto
           sccache: true
 
+      # `twine check --strict` validates the wheel's metadata against
+      # the same rules PyPI's upload validator applies (README
+      # rendering, License-File presence, Description-Content-Type,
+      # etc.). Running it on every PR catches packaging-metadata
+      # regressions at PR time instead of at the next `release:
+      # published` event.
+      - name: Validate wheel metadata
+        shell: bash
+        run: |
+          python -m pip install --quiet twine
+          twine check --strict target/wheels/*.whl
+
       # Only upload artifacts when the caller actually needs them
       # (release.yml downloads them in its publish job). PR smoke
       # builds just need the build to succeed — keeping the
@@ -103,16 +115,18 @@ jobs:
     name: build sdist
     timeout-minutes: 10
     runs-on: ubuntu-24.04
-    # The sdist is only useful for the release publish step. PR
-    # smoke runs would just throw it away — skip the whole job.
-    if: inputs.stamp-version
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
 
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: 3.14
+
       - name: Stamp wheel version from git tag
+        if: inputs.stamp-version
         shell: bash
         run: |
           set -eu
@@ -125,7 +139,18 @@ jobs:
           command: sdist
           args: --out target/wheels
 
+      # See `Validate wheel metadata` above — twine's strict check
+      # exercises the metadata rules PyPI applies. Running it on PR
+      # would have caught the missing `License-File LICENSE`
+      # bundling that broke release 2026.5.5.1.
+      - name: Validate sdist metadata
+        shell: bash
+        run: |
+          python -m pip install --quiet twine
+          twine check --strict target/wheels/*.tar.gz
+
       - uses: actions/upload-artifact@v7
+        if: inputs.stamp-version
         with:
           name: wheel-sdist
           path: target/wheels/*.tar.gz
