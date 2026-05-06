@@ -10,6 +10,8 @@ description = "Native implementation of `mergify ci` subcommands."
 publish = false
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
 mergify-core = { path = "../mergify-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
