@@ -95,6 +95,50 @@ fine when the command is being deprecated/dropped from the CLI — the
 rule is "no two live copies of the same command", not "every Python
 copy must be replaced".
 
+### Port review checklist
+
+Walk through this before opening a port PR. Most regressions caught so
+far have been a violation of one of these.
+
+**HTTP calls — match the Python original's response handling exactly.**
+
+- If the Python original calls a method on the client and **ignores
+  the response** (e.g. `await client.post(...)` with no `.json()`),
+  use `post_no_response` / `delete_if_exists` / equivalent on the
+  Rust side. Do NOT write `let _: serde_json::Value = client.post(...)`
+  — `Value` still requires a valid JSON body, and a server that
+  returns an empty body fails at deserialization with `parse response
+  JSON: error decoding response body`. This regressed `ci scopes-send`
+  once (fixed in #1356); the cure is structural — pick the right HTTP
+  method up-front.
+- If the Python original parses the response, keep the same shape on
+  the Rust side. Fields the Python type-hints as `T | None` (or that
+  the server has historically tolerated as missing/null) should be
+  `Option<T>` with `#[serde(default)]` so a missing/null field doesn't
+  abort deserialization.
+
+**Test fixtures — mirror the real server, not what's convenient.**
+
+- Wiremock body templates must match what the real endpoint actually
+  returns. If the real endpoint sends an empty body, use
+  `ResponseTemplate::new(200)` — never `set_body_json(json!({}))`. The
+  latter passes deserialization in tests and masks empty-body bugs
+  that fail in production.
+- Add a regression test for the specific failure mode you're
+  preventing — exit code, error message, missing-field tolerance —
+  not just the happy path.
+
+**Strings & UX parity with click.**
+
+- Char-bounded validators ("must be ≤ N characters") use
+  `s.chars().count()`, not `s.len()`. The latter counts UTF-8 bytes
+  and rejects valid non-ASCII input.
+- Confirmation prompts go to stderr, matching click's `confirm` /
+  `prompt`. Stdout stays pipeable.
+- Resolve all required state (repository, token, API URL) before
+  prompting the user. A missing-token error surfacing after the user
+  types `y` is bad UX and worse for non-interactive invocations.
+
 ## Documentation
 
 When adding or changing a CLI feature, always update the documentation:
