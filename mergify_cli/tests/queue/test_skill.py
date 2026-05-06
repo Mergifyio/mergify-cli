@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shutil
+import subprocess
 
+import pytest
 import yaml
 
 
@@ -27,6 +30,37 @@ SKILL_PATH = (
 
 def _get_skill_content() -> str:
     return SKILL_PATH.read_text(encoding="utf-8")
+
+
+def _native_commands_for_group(group: str) -> set[str]:
+    """Ask the installed `mergify` binary which `<group> <sub>` pairs
+    it handles natively, then return the subcommands for `group`.
+
+    Spawning the binary keeps this test honest: the source of truth
+    is the binary itself, so a port that adds a native subcommand
+    (and its `NATIVE_COMMANDS` entry) automatically becomes visible
+    here. No parallel hard-coded list to drift.
+
+    Skips when `mergify` isn't on PATH — that's the case when tests
+    run before the package is installed (rare; `uv run pytest`
+    installs it first).
+    """
+    binary = shutil.which("mergify")
+    if binary is None:
+        pytest.skip("`mergify` binary not on PATH; install the wheel first")
+    out = subprocess.run(
+        [binary, "--list-native-commands"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    pairs = (line.split(maxsplit=1) for line in out.splitlines() if line.strip())
+    return {
+        sub
+        for pair in pairs
+        if len(pair) == 2 and pair[0] == group
+        for sub in [pair[1]]
+    }
 
 
 def test_skill_content_is_readable() -> None:
@@ -62,25 +96,23 @@ def test_skill_has_required_sections() -> None:
         assert section in content, f"Skill is missing required section: {section}"
 
 
-# Rust-native queue commands. Each port PR appends to this list when
-# it deletes the Python copy, so the validation below stays accurate
-# without needing to spawn the Rust binary at test time.
-NATIVE_QUEUE_COMMANDS: frozenset[str] = frozenset({"pause", "unpause", "status"})
-
-
 def test_skill_references_valid_commands() -> None:
     """Every `mergify queue <cmd>` reference in the skill must resolve
-    to either a registered click command (still-shimmed) or a known
-    Rust-native command. Catches typos and skill drift after a port."""
+    to either a registered click command (still-shimmed) or a
+    Rust-native command reported by the binary. Catches typos and
+    skill drift after a port — and stays accurate without a parallel
+    hard-coded list because the native set is queried from
+    `mergify --list-native-commands` itself.
+    """
     from mergify_cli.queue.cli import queue
 
     content = _get_skill_content()
     referenced = set(re.findall(r"mergify queue ([\w-]+)", content))
-    available = set(queue.commands.keys()) | NATIVE_QUEUE_COMMANDS
+    available = set(queue.commands.keys()) | _native_commands_for_group("queue")
 
     for cmd in referenced:
         assert cmd in available, (
             f"Skill references 'mergify queue {cmd}' but it's neither a "
-            f"registered click command nor a known Rust-native command. "
+            f"registered click command nor a Rust-native command. "
             f"Available: {sorted(available)}"
         )
