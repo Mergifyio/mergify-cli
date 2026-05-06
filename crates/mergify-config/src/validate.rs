@@ -108,7 +108,7 @@ fn validate_against_schema(
     let mut errors: Vec<ValidationError> = validator
         .iter_errors(config)
         .map(|err| {
-            let path = err.instance_path.to_string();
+            let path = err.instance_path().to_string();
             let pretty_path = if path.is_empty() || path == "/" {
                 "(root)".to_string()
             } else {
