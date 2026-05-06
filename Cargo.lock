@@ -1133,11 +1133,20 @@ dependencies = [
  "chrono",
  "indexmap",
  "mergify-core",
+ "mergify-tui",
  "serde",
  "serde_json",
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "mergify-tui"
+version = "0.0.0"
+dependencies = [
+ "anstyle",
+ "chrono",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 mergify-core = { path = "../mergify-core" }
+mergify-tui = { path = "../mergify-tui" }
 anstyle = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 indexmap = "2"

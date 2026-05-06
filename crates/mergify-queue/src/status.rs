@@ -26,7 +26,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::IsTerminal;
 use std::io::Write;
 
 use anstyle::AnsiColor;
@@ -39,6 +38,9 @@ use mergify_core::CliError;
 use mergify_core::HttpClient;
 use mergify_core::Output;
 use mergify_core::auth;
+use mergify_tui::Theme;
+use mergify_tui::relative_time;
+use mergify_tui::tree;
 use serde::Deserialize;
 use url::form_urlencoded;
 
@@ -201,77 +203,23 @@ fn emit_human(output: &mut dyn Output, repository: &str, view: &StatusView) -> s
     })
 }
 
-/// ANSI styling — opt-in based on stdout being a TTY and `NO_COLOR`
-/// being unset (the de-facto standard, <https://no-color.org>).
-///
-/// `anstyle::Style::new()` (the disabled variant for every field)
-/// emits no escape sequences in its `Display` impl, so the same
-/// formatting code paths produce plain text in non-TTY contexts.
-struct Theme {
-    enabled: bool,
-    bold: Style,
-    dim: Style,
-    /// SGR reset escape, or empty when colors are disabled. Using a
-    /// `&'static str` instead of `anstyle::Reset` keeps both the
-    /// styled and plain code paths free of escape sequences when
-    /// `enabled = false`.
-    reset: &'static str,
-    pr_number: Style,
-    author: Style,
-    priority: Style,
-    relative: Style,
-    pause_warn: Style,
-}
-
-impl Theme {
-    fn detect() -> Self {
-        // `cfg!(test)` makes the unit tests deterministic: when
-        // `cargo test` runs from a terminal the parent stdout *is* a
-        // TTY, but tests write into in-memory buffers and asserting
-        // on raw output shouldn't depend on the developer's terminal.
-        let enabled = !cfg!(test)
-            && std::io::stdout().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none();
-        Self::new(enabled)
+/// Map a queue batch status code to a foreground color, honoring
+/// the theme's enabled flag. Mirrors Python's `STATUS_STYLES`;
+/// unknown codes render dim.
+fn batch_status_style(theme: &Theme, code: &str) -> Style {
+    if !theme.enabled {
+        return Style::new();
     }
-
-    fn new(enabled: bool) -> Self {
-        let on = |style: Style| if enabled { style } else { Style::new() };
-        Self {
-            enabled,
-            bold: on(Style::new().bold()),
-            dim: on(Style::new().dimmed()),
-            reset: if enabled { "\x1b[0m" } else { "" },
-            pr_number: on(Style::new().fg_color(Some(AnsiColor::Cyan.into()))),
-            author: on(Style::new().dimmed()),
-            priority: on(Style::new().fg_color(Some(AnsiColor::Magenta.into()))),
-            relative: on(Style::new().dimmed()),
-            pause_warn: on(Style::new().bold().fg_color(Some(AnsiColor::Yellow.into()))),
-        }
-    }
-
-    /// Return the per-state foreground color for a batch-status icon.
-    /// Mirrors Python's `STATUS_STYLES` map; unknown codes render
-    /// with no color (the default terminal foreground).
-    fn icon_style(&self, code: &str) -> Style {
-        if !self.enabled {
-            return Style::new();
-        }
-        let color = match code {
-            "running" | "merged" => Some(AnsiColor::Green),
-            "failed" => Some(AnsiColor::Red),
-            "bisecting"
-            | "preparing"
-            | "waiting_for_previous_batches"
-            | "waiting_for_requeue"
-            | "waiting_schedule" => Some(AnsiColor::Yellow),
-            "waiting_for_merge" | "frozen" => Some(AnsiColor::Cyan),
-            _ => None,
-        };
-        match color {
-            Some(c) => Style::new().fg_color(Some(c.into())),
-            None => Style::new().dimmed(),
-        }
+    match code {
+        "running" | "merged" => theme.fg(AnsiColor::Green),
+        "failed" => theme.fg(AnsiColor::Red),
+        "bisecting"
+        | "preparing"
+        | "waiting_for_previous_batches"
+        | "waiting_for_requeue"
+        | "waiting_schedule" => theme.fg(AnsiColor::Yellow),
+        "waiting_for_merge" | "frozen" => theme.fg(AnsiColor::Cyan),
+        _ => theme.dim,
     }
 }
 
@@ -285,7 +233,7 @@ fn print_pause(
     write!(
         w,
         "{W}⚠ Queue is paused: \"{reason}\"{R}",
-        W = theme.pause_warn,
+        W = theme.warn,
         R = theme.reset,
     )?;
     if let Some(ts) = &pause.paused_at {
@@ -320,16 +268,7 @@ fn print_batches(
 
         let last_batch_idx = scope_batches.len() - 1;
         for (bi, batch) in scope_batches.iter().enumerate() {
-            let is_last_batch = bi == last_batch_idx;
-            // `├──`/`└──` mark the batch row; the continuation
-            // column is `│  ` for non-last batches and `   ` for
-            // the last so the tree closes cleanly.
-            let branch = if is_last_batch {
-                "└── "
-            } else {
-                "├── "
-            };
-            let continuation = if is_last_batch { "    " } else { "│   " };
+            let (branch, continuation) = tree::branch_chars(bi == last_batch_idx);
             print_batch_line(w, theme, branch, batch, now)?;
             print_batch_prs(w, theme, continuation, batch)?;
         }
@@ -345,7 +284,7 @@ fn print_batch_line(
     now: DateTime<Utc>,
 ) -> std::io::Result<()> {
     let icon = status_icon(&batch.status.code);
-    let icon_style = theme.icon_style(&batch.status.code);
+    let icon_style = batch_status_style(theme, &batch.status.code);
     write!(
         w,
         "{branch}{S}{icon} {code}{R}",
@@ -366,13 +305,13 @@ fn print_batch_line(
     if let Some(started) = &batch.started_at {
         let rel = relative_time(started, now, false);
         if !rel.is_empty() {
-            write!(w, "  {D}{rel}{R}", D = theme.relative, R = theme.reset)?;
+            write!(w, "  {D}{rel}{R}", D = theme.dim, R = theme.reset)?;
         }
     }
     if let Some(eta) = &batch.estimated_merge_at {
         let rel = relative_time(eta, now, true);
         if !rel.is_empty() {
-            write!(w, "  {D}ETA {rel}{R}", D = theme.relative, R = theme.reset)?;
+            write!(w, "  {D}ETA {rel}{R}", D = theme.dim, R = theme.reset)?;
         }
     }
     writeln!(w)
@@ -389,18 +328,14 @@ fn print_batch_prs(
     }
     let last_pr_idx = batch.pull_requests.len() - 1;
     for (pi, pr) in batch.pull_requests.iter().enumerate() {
-        let pr_branch = if pi == last_pr_idx {
-            "└── "
-        } else {
-            "├── "
-        };
+        let (pr_branch, _) = tree::branch_chars(pi == last_pr_idx);
         writeln!(
             w,
             "{continuation}{pr_branch}{N}#{num}{R} {title} {A}({author}){R}",
-            N = theme.pr_number,
+            N = theme.cyan,
             num = pr.number,
             title = pr.title,
-            A = theme.author,
+            A = theme.dim,
             author = pr.author.login,
             R = theme.reset,
         )?;
@@ -419,31 +354,26 @@ fn print_waiting_prs(
         write!(
             w,
             "  {N}#{num}{R}  {title}  {A}{author}{R}",
-            N = theme.pr_number,
+            N = theme.cyan,
             num = pr.number,
             title = pr.title,
-            A = theme.author,
+            A = theme.dim,
             author = pr.author.login,
             R = theme.reset,
         )?;
         if let Some(prio) = &pr.priority_alias {
-            write!(w, "  {P}{prio}{R}", P = theme.priority, R = theme.reset)?;
+            write!(w, "  {P}{prio}{R}", P = theme.magenta, R = theme.reset)?;
         }
         if let Some(queued_at) = &pr.queued_at {
             let rel = relative_time(queued_at, now, false);
             if !rel.is_empty() {
-                write!(
-                    w,
-                    "  {D}queued {rel}{R}",
-                    D = theme.relative,
-                    R = theme.reset,
-                )?;
+                write!(w, "  {D}queued {rel}{R}", D = theme.dim, R = theme.reset)?;
             }
         }
         if let Some(eta) = &pr.estimated_merge_at {
             let rel = relative_time(eta, now, true);
             if !rel.is_empty() {
-                write!(w, "  {D}ETA {rel}{R}", D = theme.relative, R = theme.reset)?;
+                write!(w, "  {D}ETA {rel}{R}", D = theme.dim, R = theme.reset)?;
             }
         }
         writeln!(w)?;
@@ -465,35 +395,6 @@ fn status_icon(code: &str) -> &'static str {
         "waiting_schedule" => "⏰",
         "frozen" => "❄",
         _ => "?",
-    }
-}
-
-/// Format an ISO-8601/RFC-3339 timestamp as a relative duration
-/// (`s`/`m`/`h`/`d`). Past timestamps render as `"… ago"`; future
-/// timestamps as `"~…"` when `future = true`.
-///
-/// Returns an empty string when the timestamp can't be parsed —
-/// mirrors the Python implementation, which silently degrades on
-/// malformed input rather than failing the whole render.
-fn relative_time(iso: &str, now: DateTime<Utc>, future: bool) -> String {
-    let Ok(parsed) = DateTime::parse_from_rfc3339(iso) else {
-        return String::new();
-    };
-    let parsed = parsed.with_timezone(&Utc);
-    let delta = (now - parsed).num_seconds().abs();
-    let value = if delta < 60 {
-        format!("{delta}s")
-    } else if delta < 3600 {
-        format!("{}m", delta / 60)
-    } else if delta < 86400 {
-        format!("{}h", delta / 3600)
-    } else {
-        format!("{}d", delta / 86400)
-    };
-    if future {
-        format!("~{value}")
-    } else {
-        format!("{value} ago")
     }
 }
 
@@ -612,58 +513,9 @@ mod tests {
         assert!(path.ends_with("?branch=feature%2Ffoo+bar"), "got {path}");
     }
 
-    #[test]
-    fn relative_time_seconds() {
-        let now = DateTime::parse_from_rfc3339("2026-01-01T00:01:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(relative_time("2026-01-01T00:00:30Z", now, false), "30s ago");
-    }
-
-    #[test]
-    fn relative_time_minutes() {
-        let now = DateTime::parse_from_rfc3339("2026-01-01T01:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(relative_time("2026-01-01T00:55:00Z", now, false), "5m ago");
-    }
-
-    #[test]
-    fn relative_time_hours() {
-        let now = DateTime::parse_from_rfc3339("2026-01-01T05:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(relative_time("2026-01-01T00:00:00Z", now, false), "5h ago");
-    }
-
-    #[test]
-    fn relative_time_days() {
-        let now = DateTime::parse_from_rfc3339("2026-01-08T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(relative_time("2026-01-01T00:00:00Z", now, false), "7d ago");
-    }
-
-    #[test]
-    fn relative_time_future_prefix() {
-        // ETA-style timestamps render as `~…` so users can
-        // distinguish "happened 5m ago" from "in 5m".
-        let now = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(relative_time("2026-01-01T00:30:00Z", now, true), "~30m");
-    }
-
-    #[test]
-    fn relative_time_unparseable_returns_empty() {
-        // Mirrors Python: a malformed timestamp shouldn't fail the
-        // whole render — degrade gracefully so the rest of the
-        // status block still appears.
-        let now = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(relative_time("not-a-date", now, false), "");
-    }
+    // `relative_time` lives in `mergify-tui::time` and is exercised
+    // there; we re-export it via `mergify_tui::relative_time` and
+    // don't re-test it here.
 
     #[test]
     fn topological_sort_orders_parents_before_children() {
