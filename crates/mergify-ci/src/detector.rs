@@ -78,17 +78,57 @@ fn parse_repository_url(url_str: &str) -> Option<String> {
 
 fn validate_owner_repo(path: &str) -> Option<String> {
     let (owner, repo) = path.split_once('/')?;
-    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-        return None;
-    }
-    let valid = |s: &str| {
-        s.chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '-')
-    };
-    if !valid(owner) || !valid(repo) {
+    if !is_valid_segment(owner) || !is_valid_segment(repo) || repo.contains('/') {
         return None;
     }
     Some(format!("{owner}/{repo}"))
+}
+
+/// Allowed character set for an `owner` or `repo` path segment.
+///
+/// Matches GitHub's allowance (alphanumerics, `_`, `.`, `-`) and the
+/// regex used by `parse_repository_url`. Rejects every URL-reserved
+/// character (`?`, `#`, `%`, `/`, space) so callers can interpolate
+/// the segments straight into a request path without percent-encoding
+/// and without enabling path or query injection.
+fn is_valid_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '-')
+}
+
+/// Clap `value_parser` for `--repository`. Returning `Result<_, String>`
+/// makes clap surface a bad value as exit code 2 instead of letting it
+/// slip through to runtime as a `Configuration` error.
+///
+/// # Errors
+///
+/// Returns the validation message from `split_owner_repo` when the
+/// input is not exactly `owner/repo` with allowed characters.
+pub fn parse_owner_repo(value: &str) -> Result<String, String> {
+    split_owner_repo(value)
+        .map(|_| value.to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Split a `"owner/repo"` string into its two parts. The
+/// Mergify CI Insights endpoints take owner and repository name as
+/// separate path segments, while `--repository` accepts the
+/// `owner/repo` shorthand. Rejects empty parts and any character
+/// outside `is_valid_segment` so the values can be interpolated into
+/// URL paths without further escaping.
+pub fn split_owner_repo(value: &str) -> Result<(&str, &str), CliError> {
+    let mismatch = || {
+        CliError::Configuration(format!(
+            "invalid repository {value:?}: expected `owner/repo`",
+        ))
+    };
+    let (owner, repo) = value.split_once('/').ok_or_else(mismatch)?;
+    if !is_valid_segment(owner) || !is_valid_segment(repo) || repo.contains('/') {
+        return Err(mismatch());
+    }
+    Ok((owner, repo))
 }
 
 #[must_use]
@@ -341,6 +381,50 @@ mod tests {
                 assert_eq!(get_github_pull_request_number().unwrap(), None);
             },
         );
+    }
+
+    #[test]
+    fn split_owner_repo_accepts_owner_repo() {
+        assert_eq!(
+            split_owner_repo("Mergifyio/monorepo").unwrap(),
+            ("Mergifyio", "monorepo")
+        );
+        assert_eq!(split_owner_repo("a/b").unwrap(), ("a", "b"));
+    }
+
+    #[test]
+    fn split_owner_repo_rejects_inputs_without_exactly_one_slash() {
+        for bad in ["", "owner", "owner/", "/repo", "a/b/c", "/", "//"] {
+            let err = split_owner_repo(bad).unwrap_err();
+            assert!(
+                matches!(err, CliError::Configuration(_)),
+                "input {bad:?} should map to Configuration, got {err:?}",
+            );
+            assert!(
+                err.to_string().contains("owner/repo"),
+                "error for {bad:?} should mention expected shape, got: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn split_owner_repo_rejects_url_reserved_characters() {
+        // These would otherwise inject extra path or query segments
+        // when interpolated into a request URL.
+        for bad in [
+            "owner/repo?x=1",
+            "owner/repo#frag",
+            "owner/repo%2e",
+            "own er/repo",
+            "owner /repo",
+            "owner/re po",
+        ] {
+            let err = split_owner_repo(bad).unwrap_err();
+            assert!(
+                matches!(err, CliError::Configuration(_)),
+                "input {bad:?} should map to Configuration, got {err:?}",
+            );
+        }
     }
 
     #[test]
