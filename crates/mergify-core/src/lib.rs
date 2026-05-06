@@ -15,6 +15,7 @@
 //! Git operations, interactive prompts, and config loading arrive
 //! in subsequent sub-phases.
 
+pub mod auth;
 pub mod error;
 pub mod exit_code;
 pub mod http;
