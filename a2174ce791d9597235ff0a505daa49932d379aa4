@@ -1,0 +1,1 @@
+address copilot review: drop the finally that nukes the temp message file on rebase conflict (so git rebase --continue can still read it), and align the displayed action plan with the rebase action actually used (amend when -m is given, reword otherwise)
