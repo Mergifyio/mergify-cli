@@ -26,6 +26,7 @@ A branch is a stack. Keep stacks short and focused:
 - **Fixup**: Stash any local changes first (`git stash -u`), then use `mergify stack fixup <SHA>...` to fold a commit into its parent (drops the listed commit's message). Non-interactive — never use `git rebase -i` for this.
 - **Squash**: Stash any local changes first (`git stash -u`), then use `mergify stack squash SRC... into TARGET [-m "msg"]` to combine multiple commits into one, with an optional custom message. Non-interactive — never use `git rebase -i` for this.
 - **Reword**: Stash any local changes first (`git stash -u`), then use `mergify stack reword <SHA> -m "new message"` to change a commit's message in place. Non-interactive when `-m` is given — never use `git rebase -i` for this.
+- **Drop**: Stash any local changes first (`git stash -u`), then use `mergify stack drop <SHA>...` to remove commits from the stack. Non-interactive — never use `git rebase -i` for this.
 - **Commit titles**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
 - **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.**
 - **Ticket references**: Include ticket/issue references (e.g., `MRGFY-1234`, `Fixes #123`) in the commit message body, not added separately to the PR.
@@ -46,6 +47,7 @@ A branch is a stack. Keep stacks short and focused:
 | `git rebase -i` to squash commits | `mergify stack squash A B into X [-m "..."]` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `git rebase -i` to change a commit message | `mergify stack reword <SHA> -m "..."` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `git rebase -i` to amend a mid-stack commit | `mergify stack edit <SHA-or-Change-Id-prefix>` then `git commit --amend` then `git rebase --continue` | Non-interactive — pauses the rebase at the target commit without spawning an editor |
+| `git rebase -i` to drop a commit | `mergify stack drop <SHA>...` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `GIT_SEQUENCE_EDITOR='sed -i ...' git rebase -i` (any variant) | One of `mergify stack {edit,fixup,squash,reorder,move}` | Hand-rolled sequence-editor scripts are brittle; there is already a non-interactive command for every common rewrite |
 | Deferring lint fixes to a later commit | Include the fix in the commit that caused it | Each commit runs CI independently; later commits won't save earlier ones |
 | Rebase/reorder/checkout/sync with dirty worktree | `git stash -u` first, then `git stash pop` after | Uncommitted changes are lost or cause conflicts during these operations |
@@ -72,6 +74,8 @@ mergify stack squash X Y into Z -m "msg"  # Fold X Y into Z with a custom messag
 mergify stack reword X -m "msg"    # Change commit X's message non-interactively
 mergify stack reword X             # Change commit X's message via $GIT_EDITOR (TTY only)
 mergify stack edit X               # Pause the rebase at X so you can `git commit --amend` it (X is required; no-arg form is interactive)
+mergify stack drop X               # Drop commit X from the stack
+mergify stack drop X Y Z           # Drop multiple commits in one rebase
 mergify stack note -m "why"        # Attach an amend reason to HEAD (shown in PR revision history)
 mergify stack note <SHA-or-Change-Id-prefix> -m "why"  # Attach to a specific commit in the stack
 mergify stack note --append -m "more"                  # Append to an existing note
@@ -137,6 +141,7 @@ git stash -u                # Stash tracked + untracked changes if any
 - `mergify stack fixup`
 - `mergify stack squash`
 - `mergify stack reword`
+- `mergify stack drop`
 - `mergify stack checkout`
 - `mergify stack sync`
 - `mergify stack new` (switches to new branch)
