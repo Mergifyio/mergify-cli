@@ -150,17 +150,20 @@ async def stack_squash(
         run_action_rebase(base, new_shas, actions)
     else:
         msg_fd, msg_path = tempfile.mkstemp(suffix=".txt", prefix="mergify_squash_msg_")
-        try:
-            with os.fdopen(msg_fd, "w") as f:
-                f.write(message)
-            run_action_rebase(
-                base,
-                new_shas,
-                actions,
-                exec_after_sha=src_shas[-1],
-                exec_command=f"git commit --amend -F {shlex.quote(msg_path)}",
-            )
-        finally:
-            pathlib.Path(msg_path).unlink(missing_ok=True)
+        with os.fdopen(msg_fd, "w") as f:
+            f.write(message)
+        # Intentionally NOT in a `finally`: if `run_action_rebase` raises
+        # SystemExit (conflicts), the rebase-todo still references this
+        # file, so `git rebase --continue` will need it to complete the
+        # `exec git commit --amend -F …` line. Leak the file rather than
+        # break --continue; the system temp directory is cleaned up by the OS.
+        run_action_rebase(
+            base,
+            new_shas,
+            actions,
+            exec_after_sha=src_shas[-1],
+            exec_command=f"git commit --amend -F {shlex.quote(msg_path)}",
+        )
+        pathlib.Path(msg_path).unlink(missing_ok=True)
 
     console.print("Commits squashed successfully.", style="green")
