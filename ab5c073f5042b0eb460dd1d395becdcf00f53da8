@@ -1,0 +1,1 @@
+address copilot review: reword the /tmp comment to system temp directory; add test that monkeypatches run_action_rebase to raise SystemExit and asserts the message file persists for git rebase --continue
