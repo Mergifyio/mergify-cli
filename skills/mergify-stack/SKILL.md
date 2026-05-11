@@ -21,7 +21,7 @@ A branch is a stack. Keep stacks short and focused:
 - **Push**: Use `mergify stack push` (never `git push`)
 - **Fixes**: Use `git commit --amend` (never create new commits to fix issues)
 - **Amend notes**: When amending a commit that already has a PR (i.e. has been pushed), attach a `mergify stack note` BEFORE `mergify stack push` to record *why* the commit was amended. The note appears in the PR's "Revision history" comment and JSON marker, so reviewers can see the reason without diffing.
-- **Mid-stack fixes**: Stash any local changes first (`git stash -u`), then use `git rebase -i` to edit the specific commit, amend it, continue rebase, then `mergify stack push`, then `git stash pop`
+- **Mid-stack fixes**: Stash any local changes first (`git stash -u`), then use `mergify stack edit <SHA-or-Change-Id-prefix>` to pause the rebase at the target commit. Amend it with `git commit --amend`, then `git rebase --continue`, then `mergify stack push`, then `git stash pop`. Non-interactive — never use `git rebase -i` for this. (Calling `mergify stack edit` with no argument falls back to a fully interactive `git rebase -i` and will hang in agent contexts — always pass a commit prefix.)
 - **Reordering**: Stash any local changes first (`git stash -u`), then use `mergify stack reorder` (list all commits in desired order) or `mergify stack move` (move a single commit) instead of manual `git rebase -i` — non-interactive and avoids `GIT_SEQUENCE_EDITOR` quoting issues
 - **Fixup**: Stash any local changes first (`git stash -u`), then use `mergify stack fixup <SHA>...` to fold a commit into its parent (drops the listed commit's message). Non-interactive — never use `git rebase -i` for this.
 - **Squash**: Stash any local changes first (`git stash -u`), then use `mergify stack squash SRC... into TARGET [-m "msg"]` to combine multiple commits into one, with an optional custom message. Non-interactive — never use `git rebase -i` for this.
@@ -45,6 +45,8 @@ A branch is a stack. Keep stacks short and focused:
 | `git rebase -i` to fixup a commit | `mergify stack fixup <SHA>` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `git rebase -i` to squash commits | `mergify stack squash A B into X [-m "..."]` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `git rebase -i` to change a commit message | `mergify stack reword <SHA> -m "..."` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
+| `git rebase -i` to amend a mid-stack commit | `mergify stack edit <SHA-or-Change-Id-prefix>` then `git commit --amend` then `git rebase --continue` | Non-interactive — pauses the rebase at the target commit without spawning an editor |
+| `GIT_SEQUENCE_EDITOR='sed -i ...' git rebase -i` (any variant) | One of `mergify stack {edit,fixup,squash,reorder,move}` | Hand-rolled sequence-editor scripts are brittle; there is already a non-interactive command for every common rewrite |
 | Deferring lint fixes to a later commit | Include the fix in the commit that caused it | Each commit runs CI independently; later commits won't save earlier ones |
 | Rebase/reorder/checkout/sync with dirty worktree | `git stash -u` first, then `git stash pop` after | Uncommitted changes are lost or cause conflicts during these operations |
 | Amending a pushed commit with no explanation | `mergify stack note -m "why"` before `mergify stack push` | The reason is recorded in the PR's Revision history table and JSON marker, so reviewers don't need to diff to understand the change |
@@ -69,6 +71,7 @@ mergify stack squash X into Y      # Reorder X adjacent to Y, fold X into Y (kee
 mergify stack squash X Y into Z -m "msg"  # Fold X Y into Z with a custom message
 mergify stack reword X -m "msg"    # Change commit X's message non-interactively
 mergify stack reword X             # Change commit X's message via $GIT_EDITOR (TTY only)
+mergify stack edit X               # Pause the rebase at X so you can `git commit --amend` it (X is required; no-arg form is interactive)
 mergify stack note -m "why"        # Attach an amend reason to HEAD (shown in PR revision history)
 mergify stack note <SHA-or-Change-Id-prefix> -m "why"  # Attach to a specific commit in the stack
 mergify stack note --append -m "more"                  # Append to an existing note
@@ -129,7 +132,7 @@ git stash -u                # Stash tracked + untracked changes if any
 ```
 
 **Operations that require this check:**
-- `git rebase -i` (mid-stack fixes)
+- `mergify stack edit <commit>` (mid-stack fixes)
 - `mergify stack reorder` / `mergify stack move`
 - `mergify stack fixup`
 - `mergify stack squash`
