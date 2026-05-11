@@ -28,6 +28,22 @@ use mergify_core::StdioOutput;
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
 
+    // Test hook used by `test_binary_build.py` to verify the
+    // wheel-installed binary produces UTF-8 output (especially on
+    // Windows). The Python entry-point printed these markers from
+    // `cli.py::main` before any subcommand ran; now that the Rust
+    // binary handles `--help` natively the Python path is no
+    // longer guaranteed to fire, so the marker has to live here.
+    // The Rust binary is UTF-8 native on every platform — we don't
+    // need (or do) the Python `os.execv` re-exec trick — so we
+    // report `utf8_mode=1` on Windows (matching the post-re-exec
+    // expectation) and `utf8_mode=0` elsewhere.
+    if env::var_os("MERGIFY_CLI_TESTING_UTF8_MODE").is_some() {
+        let utf8_mode = u8::from(cfg!(target_os = "windows"));
+        println!("utf8_mode={utf8_mode}");
+        println!("✅");
+    }
+
     if let Some(cmd) = detect_native(&argv) {
         return run_native(cmd);
     }
@@ -67,17 +83,6 @@ struct CiScopesSendOpts {
     file_deprecated: Option<PathBuf>,
 }
 
-/// Try to recognize the invocation as a native command.
-///
-/// Returns ``None`` when the argv doesn't look like a native
-/// command — callers fall back to the Python shim, which produces
-/// the same error messages as before the port started. When the
-/// argv obviously targets a native command (contains ``config``
-/// and ``validate``/``simulate``) but clap can't parse it — e.g.
-/// the user gave a bad flag or an invalid URL — this function
-/// prints clap's formatted error to stderr and exits the process
-/// with clap's exit code (2), matching the Python CLI's behavior
-/// for argument errors.
 /// Heuristic: does argv look like the user intended a native
 /// subcommand (`config validate`, `config simulate`, `ci
 /// scopes-send`)?
@@ -97,6 +102,38 @@ fn looks_native(argv: &[String]) -> bool {
     })
 }
 
+/// Did clap exit on `--help` / `-h` / `--version`? Those return a
+/// special `Err` whose `kind()` is `DisplayHelp` /
+/// `DisplayHelpOnMissingArgumentOrSubcommand` / `DisplayVersion`;
+/// callers should always honor them and exit (printing the help /
+/// version) instead of falling through to the Python shim or
+/// surfacing them as argument errors.
+fn is_help_or_version(err: &clap::Error) -> bool {
+    matches!(
+        err.kind(),
+        clap::error::ErrorKind::DisplayHelp
+            | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    )
+}
+
+/// Try to recognize the invocation as a native command.
+///
+/// Returns ``None`` when the argv doesn't look like a native
+/// command — callers fall back to the Python shim, which produces
+/// the same error messages as before the port started. When the
+/// argv obviously targets a native command (contains ``config``
+/// and ``validate``/``simulate``) but clap can't parse it — e.g.
+/// the user gave a bad flag or an invalid URL — this function
+/// prints clap's formatted error to stderr and exits the process
+/// with clap's exit code (2), matching the Python CLI's behavior
+/// for argument errors.
+///
+/// Argument *values* that are accepted by clap as `String` but
+/// fail later domain validation (e.g. an `--api-url` that doesn't
+/// parse as a URL) surface as [`mergify_core::CliError`] instead
+/// — the corresponding exit code is the one chosen by the command
+/// implementation (typically [`mergify_core::ExitCode::Configuration`]
+/// = 8), not 2.
 fn detect_native(argv: &[String]) -> Option<NativeCommand> {
     let looks_native = looks_native(argv);
 
@@ -104,6 +141,15 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
         std::iter::once("mergify".to_string()).chain(argv.iter().cloned()),
     ) {
         Ok(parsed) => parsed,
+        Err(err) if is_help_or_version(&err) => {
+            // ``--help`` (or implicit help on a subcommand group)
+            // is always handled natively by clap — even when
+            // ``looks_native`` is false. Otherwise we'd fall
+            // through to the Python shim's help, which no longer
+            // lists Rust-native subcommands. ``err.exit()`` prints
+            // to stdout and calls ``process::exit(0)``.
+            err.exit()
+        }
         Err(err) if looks_native => {
             // Native intent + clap rejection = surface clap's error
             // and exit. ``err.exit()`` prints to stderr and calls
@@ -219,7 +265,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 
 #[derive(Parser)]
 #[command(name = "mergify", disable_help_subcommand = true)]
-#[command(disable_version_flag = true, disable_help_flag = true)]
+#[command(disable_version_flag = true)]
 struct CliRoot {
     #[command(subcommand)]
     command: Subcommands,
