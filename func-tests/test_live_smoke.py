@@ -99,6 +99,56 @@ def test_queue_pause_unpause_roundtrip(
     )
 
 
+def test_queue_status(
+    live_admin_token: str,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`GET /v1/repos/{owner}/{repo}/merge-queue/status`.
+
+    Uses the admin-scoped token because all queue endpoints
+    (read or write) require queue-management scope on the test
+    repo; the CI-scoped token is rejected with 403.
+
+    ``--json`` mode is a passthrough of the API response, so the
+    smoke test only checks that the call succeeds and parses as
+    JSON — the contract we want preserved across the Python →
+    Rust port is the URL, the auth, and that the response is
+    valid JSON.
+    """
+    import json
+
+    # Group-level options (``--token`` / ``--api-url`` /
+    # ``--repository``) come BEFORE the subcommand. Click requires
+    # this for the Python implementation (the options live on the
+    # ``@queue`` group); Rust accepts both orders via clap's
+    # ``global = true``. Put them on the group so the same test
+    # works against both ends of the port.
+    result = cli(
+        "queue",
+        "--api-url",
+        API_URL,
+        "--token",
+        live_admin_token,
+        "--repository",
+        REPOSITORY,
+        "status",
+        "--json",
+    )
+    assert result.returncode == 0, (
+        f"queue status failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"queue status --json emitted non-JSON output\n"
+            f"error: {exc}\nstdout:\n{result.stdout}",
+        )
+    assert isinstance(payload, dict), (
+        f"queue status --json must emit a JSON object\nstdout:\n{result.stdout}"
+    )
+
+
 def test_ci_git_refs_fallback(
     cli: typing.Callable[..., typing.Any],
 ) -> None:
