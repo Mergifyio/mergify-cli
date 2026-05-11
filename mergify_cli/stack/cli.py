@@ -20,6 +20,7 @@ from mergify_cli.stack import note as stack_note_mod
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import reorder as stack_reorder_mod
+from mergify_cli.stack import reword as stack_reword_mod
 from mergify_cli.stack import setup as stack_setup_mod
 from mergify_cli.stack import squash as stack_squash_mod
 from mergify_cli.stack import sync as stack_sync_mod
@@ -644,6 +645,31 @@ async def open_cmd(
 @utils.run_with_asyncio
 async def fixup(*, commits: tuple[str, ...], dry_run: bool) -> None:
     await stack_squash_mod.stack_fixup(list(commits), dry_run=dry_run)
+
+
+@stack.command(help="Change a commit's message")
+@click.argument("commit")
+@click.option(
+    "-m",
+    "--message",
+    "message",
+    default=None,
+    help="New commit message. If omitted, opens $GIT_EDITOR.",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show the plan without rebasing",
+)
+@utils.run_with_asyncio
+async def reword(*, commit: str, message: str | None, dry_run: bool) -> None:
+    await stack_reword_mod.stack_reword(
+        commit_prefix=commit,
+        message=message,
+        dry_run=dry_run,
+    )
 
 
 @stack.command(help="Squash commits into a target commit")
