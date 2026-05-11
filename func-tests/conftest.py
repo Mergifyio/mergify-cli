@@ -75,10 +75,29 @@ class CliResult:
 
 @pytest.fixture
 def live_token() -> str:
-    """Skip the live test if `LIVE_TEST_MERGIFY_TOKEN` isn't set."""
-    token = os.environ.get("LIVE_TEST_MERGIFY_TOKEN", "").strip()
+    """Token for read-only / pull-scoped live endpoints.
+
+    Skips the test if ``LIVE_TEST_MERGIFY_TOKEN_CI`` isn't set.
+    Use this for everything that doesn't need queue-admin rights
+    (scopes-send, junit-process, queue status / show, etc.).
+    """
+    token = os.environ.get("LIVE_TEST_MERGIFY_TOKEN_CI", "").strip()
     if not token:
-        pytest.skip("LIVE_TEST_MERGIFY_TOKEN unset")
+        pytest.skip("LIVE_TEST_MERGIFY_TOKEN_CI unset")
+    return token
+
+
+@pytest.fixture
+def live_admin_token() -> str:
+    """Token for queue-admin live endpoints (pause / unpause).
+
+    Skips the test if ``LIVE_TEST_MERGIFY_TOKEN_ADMIN`` isn't
+    set. Separated from ``live_token`` so the CI-scoped token
+    can stay narrow.
+    """
+    token = os.environ.get("LIVE_TEST_MERGIFY_TOKEN_ADMIN", "").strip()
+    if not token:
+        pytest.skip("LIVE_TEST_MERGIFY_TOKEN_ADMIN unset")
     return token
 
 
