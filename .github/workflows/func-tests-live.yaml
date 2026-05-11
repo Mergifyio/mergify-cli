@@ -35,5 +35,14 @@ jobs:
       - name: Live smoke tests
         shell: bash
         env:
-          LIVE_TEST_MERGIFY_TOKEN: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN }}
+          # Two tokens with different scopes:
+          # - _CI exercises read-only / pull-scoped endpoints
+          #   (scopes-send, junit-process, queue status, queue show,
+          #   ci git-refs / queue-info).
+          # - _ADMIN exercises destructive queue-admin endpoints
+          #   (queue pause / unpause).
+          # Tests select the appropriate fixture; absent tokens
+          # cause individual tests to skip rather than fail.
+          LIVE_TEST_MERGIFY_TOKEN_CI: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN_CI }}
+          LIVE_TEST_MERGIFY_TOKEN_ADMIN: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN_ADMIN }}
         run: uv run --locked poe live-test

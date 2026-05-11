@@ -23,7 +23,7 @@ pub mod output;
 
 pub use error::CliError;
 pub use exit_code::ExitCode;
-pub use http::{ApiFlavor, Client as HttpClient, RetryPolicy};
+pub use http::{ApiFlavor, Client as HttpClient, DeleteOutcome, RetryPolicy};
 pub use output::{Output, OutputMode, StdioOutput};
 
 /// Compile-time version string taken from the crate package metadata
