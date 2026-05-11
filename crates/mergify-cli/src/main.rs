@@ -27,6 +27,7 @@ use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
 use mergify_queue::pause::PauseOptions;
+use mergify_queue::show::ShowOptions;
 use mergify_queue::status::StatusOptions;
 use mergify_queue::unpause::UnpauseOptions;
 
@@ -89,6 +90,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("queue", "pause"),
     ("queue", "unpause"),
     ("queue", "status"),
+    ("queue", "show"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -102,6 +104,7 @@ enum NativeCommand {
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
     QueueStatus(QueueStatusOpts),
+    QueueShow(QueueShowOpts),
 }
 
 struct ConfigSimulateOpts {
@@ -141,6 +144,15 @@ struct QueueStatusOpts {
     token: Option<String>,
     api_url: Option<String>,
     branch: Option<String>,
+    output_json: bool,
+}
+
+struct QueueShowOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    pr_number: u64,
+    verbose: bool,
     output_json: bool,
 }
 
@@ -193,6 +205,7 @@ fn is_help_or_version(err: &clap::Error) -> bool {
 /// — the corresponding exit code is the one chosen by the command
 /// implementation (typically [`mergify_core::ExitCode::Configuration`]
 /// = 8), not 2.
+#[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn detect_native(argv: &[String]) -> Option<NativeCommand> {
     let looks_native = looks_native(argv);
 
@@ -303,9 +316,28 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             branch,
             output_json: json,
         })),
+        Subcommands::Queue(QueueArgs {
+            repository,
+            token,
+            api_url,
+            command:
+                QueueSubcommand::Show(ShowCliArgs {
+                    pr_number,
+                    verbose,
+                    json,
+                }),
+        }) => Some(NativeCommand::QueueShow(QueueShowOpts {
+            repository,
+            token,
+            api_url,
+            pr_number,
+            verbose,
+            output_json: json,
+        })),
     }
 }
 
+#[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn run_native(cmd: NativeCommand) -> ExitCode {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -388,6 +420,20 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
                         branch: opts.branch.as_deref(),
+                        output_json: opts.output_json,
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::QueueShow(opts) => {
+                mergify_queue::show::run(
+                    ShowOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        pr_number: opts.pr_number,
+                        verbose: opts.verbose,
                         output_json: opts.output_json,
                     },
                     &mut output,
@@ -567,6 +613,8 @@ enum QueueSubcommand {
     Unpause,
     /// Show merge queue status for the repository.
     Status(StatusCliArgs),
+    /// Show detailed state of a pull request in the merge queue.
+    Show(ShowCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -586,6 +634,22 @@ struct StatusCliArgs {
     /// Filter the queue by branch name.
     #[arg(long, short = 'b')]
     branch: Option<String>,
+
+    /// Emit the raw API response as a single JSON document.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct ShowCliArgs {
+    /// Pull request number to inspect.
+    #[arg(value_name = "PR_NUMBER")]
+    pr_number: u64,
+
+    /// Show the full checks table and the conditions tree instead
+    /// of compact summaries.
+    #[arg(long, short = 'v', default_value_t = false)]
+    verbose: bool,
 
     /// Emit the raw API response as a single JSON document.
     #[arg(long, default_value_t = false)]

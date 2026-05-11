@@ -1,0 +1,838 @@
+//! `mergify queue show` — detailed state of a single PR in the
+//! merge queue.
+//!
+//! `GET /v1/repos/<repo>/merge-queue/pull/<pr_number>`. Two output
+//! modes:
+//!
+//! - `--json`: pretty-prints the raw API response as a single JSON
+//!   document. The schema is Mergify's API contract, not this CLI's,
+//!   so unknown fields are preserved.
+//! - Human (default): metadata block (position / priority / queue
+//!   rule / queued / ETA), then a CI-state line and a checks
+//!   section, then a conditions section. `--verbose` switches the
+//!   checks summary to a full table and the conditions summary to
+//!   a tree.
+//!
+//! 404 responses are special-cased: the API returns 404 for "PR is
+//! not currently in the merge queue", which is a routine caller
+//! branch rather than a server failure. The command returns a
+//! [`CliError::MergifyApi`] whose message is `PR #N is not in the
+//! merge queue`; the binary's top-level handler prints it to
+//! stderr as `mergify: PR #N is not in the merge queue` (the
+//! `mergify: ` prefix is the binary's standard error envelope)
+//! and exits with the Mergify-API error code. Live smoke tests
+//! assert against the substring, which is stable across the
+//! Python and Rust implementations.
+
+use std::io::Write;
+
+use anstyle::AnsiColor;
+use anstyle::Style;
+use chrono::DateTime;
+use chrono::Utc;
+use mergify_core::ApiFlavor;
+use mergify_core::CliError;
+use mergify_core::HttpClient;
+use mergify_core::Output;
+use mergify_core::auth;
+use mergify_tui::Theme;
+use mergify_tui::relative_time;
+use mergify_tui::tree;
+use serde::Deserialize;
+
+pub struct ShowOptions<'a> {
+    pub repository: Option<&'a str>,
+    pub token: Option<&'a str>,
+    pub api_url: Option<&'a str>,
+    pub pr_number: u64,
+    pub verbose: bool,
+    pub output_json: bool,
+}
+
+#[derive(Deserialize)]
+struct PullView {
+    number: u64,
+    #[serde(default)]
+    queued_at: Option<String>,
+    #[serde(default)]
+    estimated_time_of_merge: Option<String>,
+    #[serde(default)]
+    position: Option<u64>,
+    #[serde(default)]
+    priority_rule_name: Option<String>,
+    #[serde(default)]
+    queue_rule_name: Option<String>,
+    #[serde(default)]
+    mergeability_check: Option<MergeabilityCheck>,
+}
+
+#[derive(Deserialize)]
+struct MergeabilityCheck {
+    #[serde(default)]
+    check_type: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    ci_state: String,
+    #[serde(default)]
+    checks: Vec<Check>,
+    #[serde(default)]
+    conditions_evaluation: Option<ConditionEvaluation>,
+}
+
+#[derive(Deserialize)]
+struct Check {
+    name: String,
+    state: String,
+}
+
+#[derive(Deserialize)]
+struct ConditionEvaluation {
+    #[serde(default)]
+    label: String,
+    #[serde(default = "default_match_true")]
+    r#match: bool,
+    #[serde(default)]
+    subconditions: Vec<ConditionEvaluation>,
+}
+
+// The top-level `conditions_evaluation` payload may legitimately
+// omit `match` (it's the aggregator node, not a leaf). Treat a
+// missing flag as "matched" so we don't render a spurious failure
+// for the root.
+const fn default_match_true() -> bool {
+    true
+}
+
+/// Run the `queue show` command.
+pub async fn run(opts: ShowOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
+    let repository = auth::resolve_repository(opts.repository)?;
+    let token = auth::resolve_token(opts.token)?;
+    let api_url = auth::resolve_api_url(opts.api_url)?;
+
+    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
+    let path = format!(
+        "/v1/repos/{repository}/merge-queue/pull/{pr_number}",
+        pr_number = opts.pr_number,
+    );
+
+    output.status(&format!(
+        "Fetching merge queue state for PR #{n}…",
+        n = opts.pr_number,
+    ))?;
+
+    let raw: Option<serde_json::Value> = client.get_if_exists(&path).await?;
+    let Some(raw) = raw else {
+        return Err(CliError::MergifyApi(format!(
+            "PR #{n} is not in the merge queue",
+            n = opts.pr_number,
+        )));
+    };
+
+    if opts.output_json {
+        emit_json(output, &raw)?;
+        return Ok(());
+    }
+
+    let view: PullView = serde_json::from_value(raw)
+        .map_err(|e| CliError::Generic(format!("decode merge queue pull response: {e}")))?;
+    emit_human(output, &view, opts.verbose)?;
+    Ok(())
+}
+
+fn emit_json(output: &mut dyn Output, value: &serde_json::Value) -> std::io::Result<()> {
+    output.emit(value, &mut |w: &mut dyn Write| {
+        let rendered = serde_json::to_string_pretty(value)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        writeln!(w, "{rendered}")
+    })
+}
+
+fn emit_human(output: &mut dyn Output, view: &PullView, verbose: bool) -> std::io::Result<()> {
+    let now = Utc::now();
+    let theme = Theme::detect();
+    output.emit(&(), &mut |w: &mut dyn Write| {
+        print_metadata(w, &theme, view, now)?;
+
+        match &view.mergeability_check {
+            None => {
+                writeln!(w)?;
+                writeln!(
+                    w,
+                    "  {D}Waiting for mergeability check...{R}",
+                    D = theme.dim,
+                    R = theme.reset,
+                )?;
+            }
+            Some(mc) => {
+                print_checks_section(w, &theme, mc, verbose, now)?;
+                if let Some(conditions) = &mc.conditions_evaluation {
+                    print_conditions_section(w, &theme, conditions, verbose)?;
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+fn print_metadata(
+    w: &mut dyn Write,
+    theme: &Theme,
+    view: &PullView,
+    now: DateTime<Utc>,
+) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "{B}PR #{n}{R}",
+        B = theme.bold,
+        n = view.number,
+        R = theme.reset,
+    )?;
+    writeln!(w)?;
+    writeln!(
+        w,
+        "  Position:    {}",
+        display_or_dash(view.position.map(|n| n.to_string()).as_deref()),
+    )?;
+    writeln!(
+        w,
+        "  Priority:    {}",
+        display_or_dash(view.priority_rule_name.as_deref()),
+    )?;
+    writeln!(
+        w,
+        "  Queue rule:  {}",
+        display_or_dash(view.queue_rule_name.as_deref()),
+    )?;
+    writeln!(
+        w,
+        "  Queued at:   {}",
+        relative_or_raw_or_dash(view.queued_at.as_deref(), now, false),
+    )?;
+    writeln!(
+        w,
+        "  ETA:         {}",
+        relative_or_raw_or_dash(view.estimated_time_of_merge.as_deref(), now, true),
+    )
+}
+
+fn display_or_dash(value: Option<&str>) -> &str {
+    value.filter(|s| !s.is_empty()).unwrap_or("-")
+}
+
+fn relative_or_raw_or_dash(value: Option<&str>, now: DateTime<Utc>, future: bool) -> String {
+    let Some(raw) = value else {
+        return "-".to_string();
+    };
+    let rel = relative_time(raw, now, future);
+    if rel.is_empty() {
+        // Unparseable timestamp — show the raw string so the user
+        // sees *something* rather than a silent dash.
+        raw.to_string()
+    } else {
+        rel
+    }
+}
+
+fn print_checks_section(
+    w: &mut dyn Write,
+    theme: &Theme,
+    mc: &MergeabilityCheck,
+    verbose: bool,
+    now: DateTime<Utc>,
+) -> std::io::Result<()> {
+    writeln!(w)?;
+    let (icon, style) = check_state_glyph(theme, &mc.ci_state);
+    write!(
+        w,
+        "  CI State: {S}{icon} {state}{R}",
+        S = style,
+        state = mc.ci_state,
+        R = theme.reset,
+    )?;
+    if let Some(check_type) = mc.check_type.as_deref().filter(|s| !s.is_empty()) {
+        write!(w, "   {D}{check_type}{R}", D = theme.dim, R = theme.reset)?;
+    }
+    if let Some(started) = &mc.started_at {
+        let rel = relative_time(started, now, false);
+        if !rel.is_empty() {
+            write!(w, "   {D}started {rel}{R}", D = theme.dim, R = theme.reset)?;
+        }
+    }
+    writeln!(w)?;
+
+    if mc.checks.is_empty() {
+        return Ok(());
+    }
+
+    if verbose {
+        print_checks_table(w, theme, &mc.checks)
+    } else {
+        print_checks_summary(w, theme, &mc.checks)
+    }
+}
+
+fn print_checks_table(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> std::io::Result<()> {
+    let name_width = checks
+        .iter()
+        .map(|c| c.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    for check in checks {
+        let (icon, style) = check_state_glyph(theme, &check.state);
+        let pad = name_width.saturating_sub(check.name.chars().count());
+        writeln!(
+            w,
+            "  {D}{name}{spaces}{R}  {S}{icon} {state}{R}",
+            D = theme.dim,
+            name = check.name,
+            spaces = " ".repeat(pad),
+            R = theme.reset,
+            S = style,
+            state = check.state,
+        )?;
+    }
+    Ok(())
+}
+
+fn print_checks_summary(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> std::io::Result<()> {
+    let mut passed: u32 = 0;
+    let mut pending: u32 = 0;
+    let mut failed: u32 = 0;
+    for check in checks {
+        match check.state.as_str() {
+            "success" | "neutral" | "skipped" => passed += 1,
+            "pending" => pending += 1,
+            _ => failed += 1,
+        }
+    }
+
+    write!(w, "  Checks:  ")?;
+    write!(
+        w,
+        "{S}{passed} passed{R}",
+        S = enabled_fg(theme, AnsiColor::Green),
+        R = theme.reset,
+    )?;
+    if pending > 0 {
+        write!(
+            w,
+            ", {S}{pending} pending{R}",
+            S = enabled_fg(theme, AnsiColor::Blue),
+            R = theme.reset,
+        )?;
+    }
+    if failed > 0 {
+        write!(
+            w,
+            ", {S}{failed} failed{R}",
+            S = enabled_fg(theme, AnsiColor::Red),
+            R = theme.reset,
+        )?;
+    }
+    writeln!(w)?;
+
+    for check in checks {
+        if matches!(
+            check.state.as_str(),
+            "failure" | "error" | "timed_out" | "action_required"
+        ) {
+            let (icon, style) = check_state_glyph(theme, &check.state);
+            writeln!(
+                w,
+                "    {S}{icon} {state}{R}  {D}{name}{R}",
+                S = style,
+                state = check.state,
+                R = theme.reset,
+                D = theme.dim,
+                name = check.name,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Map a check state string to (icon, ANSI style). Mirrors Python's
+/// `CHECK_STATE_STYLES`; unknown states fall back to a dim `?` so
+/// the renderer never crashes on a new API code.
+fn check_state_glyph(theme: &Theme, state: &str) -> (&'static str, Style) {
+    match state {
+        "success" => ("✓", enabled_fg(theme, AnsiColor::Green)),
+        "pending" => ("◌", enabled_fg(theme, AnsiColor::Yellow)),
+        "failure" | "error" | "action_required" => ("✗", enabled_fg(theme, AnsiColor::Red)),
+        "timed_out" => ("⏰", enabled_fg(theme, AnsiColor::Red)),
+        "cancelled" | "neutral" | "skipped" | "stale" => ("○", theme.dim),
+        _ => ("?", theme.dim),
+    }
+}
+
+fn enabled_fg(theme: &Theme, color: AnsiColor) -> Style {
+    if theme.enabled {
+        theme.fg(color)
+    } else {
+        Style::new()
+    }
+}
+
+fn print_conditions_section(
+    w: &mut dyn Write,
+    theme: &Theme,
+    evaluation: &ConditionEvaluation,
+    verbose: bool,
+) -> std::io::Result<()> {
+    writeln!(w)?;
+    if verbose {
+        writeln!(w, "{B}Conditions{R}", B = theme.bold, R = theme.reset)?;
+        write_condition_tree(w, theme, &evaluation.subconditions, "")?;
+        return Ok(());
+    }
+
+    let top = &evaluation.subconditions;
+    if top.is_empty() {
+        return Ok(());
+    }
+
+    let met = top.iter().filter(|s| s.r#match).count();
+    let total = top.len();
+    let style = if met == total {
+        enabled_fg(theme, AnsiColor::Green)
+    } else {
+        enabled_fg(theme, AnsiColor::Yellow)
+    };
+    writeln!(
+        w,
+        "  Conditions: {S}{met}/{total} met{R}",
+        S = style,
+        R = theme.reset,
+    )?;
+
+    for sub in top {
+        if sub.r#match {
+            continue;
+        }
+        let summary = if sub.subconditions.is_empty() {
+            sub.label.clone()
+        } else {
+            summarize_failing_group(sub)
+        };
+        writeln!(
+            w,
+            "  {S}✗{R} {summary}",
+            S = enabled_fg(theme, AnsiColor::Red),
+            R = theme.reset,
+        )?;
+    }
+    Ok(())
+}
+
+fn summarize_failing_group(evaluation: &ConditionEvaluation) -> String {
+    let labels: Vec<String> = evaluation.subconditions.iter().map(child_label).collect();
+    if labels.len() <= 3 {
+        labels.join(" or ")
+    } else {
+        let head: Vec<&str> = labels.iter().take(2).map(String::as_str).collect();
+        format!("{} or ({} more)", head.join(" or "), labels.len() - 2)
+    }
+}
+
+fn child_label(evaluation: &ConditionEvaluation) -> String {
+    let label = &evaluation.label;
+    if !is_aggregator(label) {
+        return label.clone();
+    }
+    let Some(first) = evaluation.subconditions.first() else {
+        return label.clone();
+    };
+    if is_aggregator(&first.label) {
+        child_label(first)
+    } else {
+        first.label.clone()
+    }
+}
+
+fn is_aggregator(label: &str) -> bool {
+    matches!(label, "all of" | "any of" | "not")
+}
+
+fn write_condition_tree(
+    w: &mut dyn Write,
+    theme: &Theme,
+    nodes: &[ConditionEvaluation],
+    prefix: &str,
+) -> std::io::Result<()> {
+    if nodes.is_empty() {
+        return Ok(());
+    }
+    let last = nodes.len() - 1;
+    for (i, node) in nodes.iter().enumerate() {
+        let (branch, continuation) = tree::branch_chars(i == last);
+        let (icon, style) = if node.r#match {
+            ("✓", enabled_fg(theme, AnsiColor::Green))
+        } else {
+            ("✗", enabled_fg(theme, AnsiColor::Red))
+        };
+        writeln!(
+            w,
+            "{prefix}{branch}{S}{icon}{R} {label}",
+            S = style,
+            R = theme.reset,
+            label = node.label,
+        )?;
+        let child_prefix = format!("{prefix}{continuation}");
+        write_condition_tree(w, theme, &node.subconditions, &child_prefix)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use mergify_core::OutputMode;
+    use mergify_core::StdioOutput;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use super::*;
+
+    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+
+    struct Captured {
+        output: StdioOutput,
+        stdout: SharedBytes,
+        stderr: SharedBytes,
+    }
+
+    fn make_output(mode: OutputMode) -> Captured {
+        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let output = StdioOutput::with_sinks(
+            mode,
+            SharedWriter(std::sync::Arc::clone(&stdout)),
+            SharedWriter(std::sync::Arc::clone(&stderr)),
+        );
+        Captured {
+            output,
+            stdout,
+            stderr,
+        }
+    }
+
+    struct SharedWriter(SharedBytes);
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn pull_response() -> serde_json::Value {
+        json!({
+            "number": 123,
+            "queued_at": "2026-05-09T10:00:00Z",
+            "estimated_time_of_merge": "2026-05-09T11:00:00Z",
+            "position": 3,
+            "priority_rule_name": "default",
+            "queue_rule_name": "default",
+            "queue_rule": {"name": "default", "config": {}},
+            "mergeability_check": {
+                "check_type": "in_place",
+                "queue_pull_request_number": 123,
+                "started_at": "2026-05-09T10:05:00Z",
+                "ci_state": "pending",
+                "state": "running",
+                "checks": [
+                    {"name": "tests", "description": "", "state": "success"},
+                    {"name": "linters", "description": "", "state": "pending"},
+                    {"name": "security", "description": "", "state": "failure"},
+                ],
+                "conditions_evaluation": {
+                    "match": false,
+                    "label": "all of",
+                    "subconditions": [
+                        {
+                            "match": true,
+                            "label": "#check-success=tests",
+                            "subconditions": [],
+                        },
+                        {
+                            "match": false,
+                            "label": "#check-success=linters",
+                            "subconditions": [],
+                        },
+                    ],
+                },
+            },
+        })
+    }
+
+    async fn arrange(server: &MockServer, body: serde_json::Value, status: u16) {
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/merge-queue/pull/123"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn run_renders_metadata_and_compact_sections() {
+        let server = MockServer::start().await;
+        arrange(&server, pull_response(), 200).await;
+
+        let mut cap = make_output(OutputMode::Human);
+        let api_url = server.uri();
+        run(
+            ShowOptions {
+                repository: Some("owner/repo"),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                pr_number: 123,
+                verbose: false,
+                output_json: false,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+
+        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        assert!(stdout.contains("PR #123"), "got: {stdout:?}");
+        assert!(stdout.contains("Position:"), "got: {stdout:?}");
+        assert!(stdout.contains("CI State:"), "got: {stdout:?}");
+        // Compact summary: 1 passed (tests), 1 pending (linters), 1
+        // failed (security). The failing check name is listed below
+        // the summary line.
+        assert!(stdout.contains("1 passed"), "got: {stdout:?}");
+        assert!(stdout.contains("1 pending"), "got: {stdout:?}");
+        assert!(stdout.contains("1 failed"), "got: {stdout:?}");
+        assert!(stdout.contains("security"), "got: {stdout:?}");
+        // Compact conditions: "1/2 met" + the failing label.
+        assert!(stdout.contains("1/2 met"), "got: {stdout:?}");
+        assert!(stdout.contains("#check-success=linters"), "got: {stdout:?}");
+    }
+
+    #[tokio::test]
+    async fn run_renders_verbose_table_and_tree() {
+        let server = MockServer::start().await;
+        arrange(&server, pull_response(), 200).await;
+
+        let mut cap = make_output(OutputMode::Human);
+        let api_url = server.uri();
+        run(
+            ShowOptions {
+                repository: Some("owner/repo"),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                pr_number: 123,
+                verbose: true,
+                output_json: false,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+
+        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        // Verbose table: every check name appears as its own row.
+        assert!(stdout.contains("tests"), "got: {stdout:?}");
+        assert!(stdout.contains("linters"), "got: {stdout:?}");
+        assert!(stdout.contains("security"), "got: {stdout:?}");
+        // Verbose conditions: tree header + box-drawing characters.
+        assert!(stdout.contains("Conditions"), "got: {stdout:?}");
+        assert!(
+            stdout.contains("├──") || stdout.contains("└──"),
+            "got: {stdout:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_emits_json_passthrough() {
+        let server = MockServer::start().await;
+        // Add a synthetic field to verify unknown fields survive
+        // the round-trip.
+        let mut body = pull_response();
+        body["future_field"] = json!("preserved");
+        arrange(&server, body, 200).await;
+
+        let mut cap = make_output(OutputMode::Json);
+        let api_url = server.uri();
+        run(
+            ShowOptions {
+                repository: Some("owner/repo"),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                pr_number: 123,
+                verbose: false,
+                output_json: true,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+
+        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(parsed["number"], json!(123));
+        assert_eq!(parsed["future_field"], json!("preserved"));
+    }
+
+    #[tokio::test]
+    async fn run_404_is_not_in_queue() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/merge-queue/pull/999"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut cap = make_output(OutputMode::Human);
+        let api_url = server.uri();
+        let err = run(
+            ShowOptions {
+                repository: Some("owner/repo"),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                pr_number: 999,
+                verbose: false,
+                output_json: false,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, CliError::MergifyApi(_)),
+            "expected MergifyApi, got {err:?}",
+        );
+        assert_eq!(err.exit_code(), mergify_core::ExitCode::MergifyApiError);
+        assert!(
+            err.to_string().contains("not in the merge queue"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_no_mergeability_check() {
+        let server = MockServer::start().await;
+        let body = json!({
+            "number": 123,
+            "queued_at": "2026-05-09T10:00:00Z",
+            "position": 1,
+            "priority_rule_name": "default",
+            "queue_rule_name": "default",
+            "queue_rule": {"name": "default", "config": {}},
+            "mergeability_check": null,
+        });
+        arrange(&server, body, 200).await;
+
+        let mut cap = make_output(OutputMode::Human);
+        let api_url = server.uri();
+        run(
+            ShowOptions {
+                repository: Some("owner/repo"),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                pr_number: 123,
+                verbose: false,
+                output_json: false,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+
+        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        assert!(
+            stdout.contains("Waiting for mergeability check"),
+            "got: {stdout:?}",
+        );
+    }
+
+    #[test]
+    fn summarize_failing_group_two_labels() {
+        let group = ConditionEvaluation {
+            label: "any of".to_string(),
+            r#match: false,
+            subconditions: vec![
+                ConditionEvaluation {
+                    label: "a".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                },
+                ConditionEvaluation {
+                    label: "b".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                },
+            ],
+        };
+        assert_eq!(summarize_failing_group(&group), "a or b");
+    }
+
+    #[test]
+    fn summarize_failing_group_truncates_at_three_plus() {
+        let group = ConditionEvaluation {
+            label: "any of".to_string(),
+            r#match: false,
+            subconditions: vec![
+                ConditionEvaluation {
+                    label: "a".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                },
+                ConditionEvaluation {
+                    label: "b".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                },
+                ConditionEvaluation {
+                    label: "c".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                },
+                ConditionEvaluation {
+                    label: "d".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                },
+            ],
+        };
+        // 4 items: keep first 2, summarize the rest.
+        assert_eq!(summarize_failing_group(&group), "a or b or (2 more)");
+    }
+
+    #[test]
+    fn child_label_recurses_through_aggregators() {
+        let nested = ConditionEvaluation {
+            label: "any of".to_string(),
+            r#match: false,
+            subconditions: vec![ConditionEvaluation {
+                label: "all of".to_string(),
+                r#match: false,
+                subconditions: vec![ConditionEvaluation {
+                    label: "leaf".to_string(),
+                    r#match: false,
+                    subconditions: vec![],
+                }],
+            }],
+        };
+        assert_eq!(child_label(&nested), "leaf");
+    }
+
+    // Suppress dead-code warnings for the captured-stderr accessor:
+    // the existing tests use stdout assertions, but the field is
+    // wired up the same way as in pause/unpause/status for parity.
+    #[allow(dead_code)]
+    fn _stderr_accessor_lives(c: &Captured) -> SharedBytes {
+        std::sync::Arc::clone(&c.stderr)
+    }
+}
