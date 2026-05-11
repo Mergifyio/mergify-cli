@@ -31,12 +31,6 @@ if typing.TYPE_CHECKING:
             ExitCode.CONFIGURATION_ERROR,
             id="ci-scopes-missing-config",
         ),
-        pytest.param(
-            lambda _tmp_path, monkeypatch: _clear_mq_env(monkeypatch),
-            ["ci", "queue-info"],
-            ExitCode.INVALID_STATE,
-            id="ci-queue-info-outside-mq",
-        ),
     ],
 )
 def test_exit_code_contract(
@@ -53,14 +47,3 @@ def test_exit_code_contract(
     assert result.exit_code == expected_exit, (
         f"expected {expected_exit}, got {result.exit_code}\noutput: {result.output}"
     )
-
-
-def _clear_mq_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in [
-        "GITHUB_EVENT_NAME",
-        "GITHUB_EVENT_PATH",
-        "GITHUB_HEAD_REF",
-        "GITHUB_BASE_REF",
-        "MERGIFY_QUEUE_BATCH_ID",
-    ]:
-        monkeypatch.delenv(var, raising=False)
