@@ -16,19 +16,16 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import re
+import shlex
 import subprocess
-from typing import TYPE_CHECKING
 
 import pytest
 
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.squash import stack_fixup
 from mergify_cli.stack.squash import stack_squash
-
-
-if TYPE_CHECKING:
-    import pathlib
 
 
 def _run_git(*args: str, cwd: pathlib.Path | None = None) -> str:
@@ -494,3 +491,58 @@ class TestStackSquash:
             message=None,
             dry_run=False,
         )
+
+    async def test_squash_with_message_keeps_temp_file_on_conflict(
+        self,
+        stack_repo: tuple[pathlib.Path, list[tuple[str, str | None]]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If the rebase exits via SystemExit (e.g. conflicts), the temp
+        message file MUST persist so `git rebase --continue` can read it
+        when replaying the `exec git commit --amend -F …` line."""
+        repo, commits = stack_repo
+        os.chdir(repo)
+
+        captured: list[str] = []
+
+        def fake_rebase(
+            _base: str,
+            _ordered_shas: list[str],
+            _actions: dict[str, str],
+            *,
+            exec_after_sha: str | None = None,
+            exec_command: str | None = None,
+        ) -> None:
+            assert exec_command is not None, "squash with -m must inject an exec line"
+            assert exec_after_sha is not None
+            # exec_command is `git commit --amend -F <shlex-quoted path>`;
+            # shlex.split strips the quoting added by `shlex.quote(msg_path)`.
+            captured.append(shlex.split(exec_command)[-1])
+            raise SystemExit(ExitCode.CONFLICT)
+
+        monkeypatch.setattr(
+            "mergify_cli.stack.squash.run_action_rebase",
+            fake_rebase,
+        )
+
+        sha_a = commits[0][0][:12]
+        sha_c = commits[2][0][:12]
+
+        with pytest.raises(SystemExit) as exc_info:
+            await stack_squash(
+                src_prefixes=[sha_c],
+                target_prefix=sha_a,
+                message="Combined commit message",
+                dry_run=False,
+            )
+        assert exc_info.value.code == ExitCode.CONFLICT
+
+        assert captured, "fake_rebase was not invoked with exec_command"
+        msg_file = pathlib.Path(captured[0])
+        assert msg_file.exists(), (
+            f"temp message file {msg_file} was deleted before the rebase "
+            "could be continued — git rebase --continue would then fail "
+            "to replay the `exec git commit --amend -F …` line"
+        )
+        # Don't pollute the temp dir between tests.
+        msg_file.unlink()
