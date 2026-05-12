@@ -99,6 +99,31 @@ def test_queue_pause_unpause_roundtrip(
     )
 
 
+def test_ci_git_refs_fallback(
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`mergify ci git-refs` falls back to ``HEAD^..HEAD`` when no
+    CI provider env is set.
+
+    Doesn't need ``live_token`` — the command is locally evaluated
+    (no API call). The conftest fixture scrubs every CI/event env
+    var and runs in a tmp dir, so the detector lands on its
+    literal-string fallback path. This is the same smoke test we
+    want to keep working when the command moves from Python to
+    Rust — same contract, both ends of the port.
+    """
+    result = cli("ci", "git-refs")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # Pin the exact two-line output. Substring matches would let
+    # added lines or rearrangements slip through silently, which
+    # defeats the "pin the contract" intent. The Python and Rust
+    # implementations both emit precisely this text on the
+    # fallback path.
+    assert result.stdout == "Base: HEAD^\nHead: HEAD\n", (
+        f"output drifted from the pinned format\nstdout:\n{result.stdout!r}"
+    )
+
+
 def test_scopes_send(
     live_token: str,
     cli: typing.Callable[..., typing.Any],
