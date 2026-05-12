@@ -22,5 +22,9 @@ mergify-py-shim = { path = "../mergify-py-shim" }
 mergify-queue = { path = "../mergify-queue" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
 
+[dev-dependencies]
+regex = "1"
+serde_yaml_ng = "0.10"
+
 [lints]
 workspace = true
