@@ -16,28 +16,32 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import typing
 
 import httpx
 import respx
 
+from mergify_cli import utils
 from mergify_cli.stack import replay
 
 
 if typing.TYPE_CHECKING:
+    import pathlib
+
     from mergify_cli.tests import utils as test_utils
 
 
 async def test_compute_merged_tree_clean(git_mock: test_utils.GitMock) -> None:
-    """Clean merge returns the merged tree SHA."""
+    """Clean merge returns the merged tree SHA: new_sha replayed onto parent_old_sha."""
     git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
     git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
     git_mock.mock(
         "merge-tree",
         "--write-tree",
-        "--merge-base=parent_old_sha",
-        "parent_new_sha",
-        "old_sha",
+        "--merge-base=parent_new_sha",
+        "parent_old_sha",
+        "new_sha",
         output="merged_tree_sha",
     )
 
@@ -45,7 +49,7 @@ async def test_compute_merged_tree_clean(git_mock: test_utils.GitMock) -> None:
 
     assert result == replay.MergedTree(
         tree_sha="merged_tree_sha",
-        parent_new_sha="parent_new_sha",
+        parent_old_sha="parent_old_sha",
     )
 
 
@@ -58,9 +62,9 @@ async def test_compute_merged_tree_conflict_returns_none(
     git_mock.mock_error(
         "merge-tree",
         "--write-tree",
-        "--merge-base=parent_old_sha",
-        "parent_new_sha",
-        "old_sha",
+        "--merge-base=parent_new_sha",
+        "parent_old_sha",
+        "new_sha",
     )
 
     result = await replay.compute_merged_tree(old_sha="old_sha", new_sha="new_sha")
@@ -150,23 +154,25 @@ async def test_upload_replay_commit_posts_tree_then_commit() -> None:
             client=client,
             user="owner",
             repo="repo",
-            base_tree_sha="parent_new_tree_sha",
-            parent_new_sha="parent_new_sha",
+            base_tree_sha="parent_old_tree_sha",
             old_sha="abc1234",
+            new_sha="def5678",
             entries=entries,
         )
 
     assert sha == "new_commit_server_sha"
     assert tree_route.called
     tree_body = json.loads(tree_route.calls.last.request.read())
-    assert tree_body["base_tree"] == "parent_new_tree_sha"
+    assert tree_body["base_tree"] == "parent_old_tree_sha"
     assert tree_body["tree"] == [
         {"path": "src/a.py", "mode": "100644", "type": "blob", "sha": "bbb2222"},
     ]
     assert commit_route.called
     commit_body = json.loads(commit_route.calls.last.request.read())
     assert commit_body["tree"] == "new_tree_server_sha"
-    assert commit_body["parents"] == ["parent_new_sha"]
+    # Synth commit must be a CHILD of old_sha so that compare/old_sha...amend_sha
+    # uses old_sha as merge-base and renders the actual amendment.
+    assert commit_body["parents"] == ["abc1234"]
 
 
 @respx.mock
@@ -182,9 +188,9 @@ async def test_upload_replay_commit_returns_none_on_api_error() -> None:
             client=client,
             user="owner",
             repo="repo",
-            base_tree_sha="parent_new_tree_sha",
-            parent_new_sha="parent_new_sha",
+            base_tree_sha="parent_old_tree_sha",
             old_sha="abc1234",
+            new_sha="def5678",
             entries=[],
         )
 
@@ -207,9 +213,9 @@ async def test_upload_replay_commit_returns_none_on_commit_post_failure() -> Non
             client=client,
             user="owner",
             repo="repo",
-            base_tree_sha="parent_new_tree_sha",
-            parent_new_sha="parent_new_sha",
+            base_tree_sha="parent_old_tree_sha",
             old_sha="abc1234",
+            new_sha="def5678",
             entries=[],
         )
 
@@ -231,18 +237,18 @@ async def test_replay_for_revision_happy_path(git_mock: test_utils.GitMock) -> N
     git_mock.mock(
         "merge-tree",
         "--write-tree",
-        "--merge-base=parent_old_sha",
-        "parent_new_sha",
-        "old_sha",
+        "--merge-base=parent_new_sha",
+        "parent_old_sha",
+        "new_sha",
         output="merged_tree_sha",
     )
-    git_mock.mock("rev-parse", "parent_new_sha^{tree}", output="parent_new_tree_sha")
+    git_mock.mock("rev-parse", "parent_old_sha^{tree}", output="parent_old_tree_sha")
     git_mock.mock(
         "diff-tree",
         "-r",
         "--raw",
         "--no-renames",
-        "parent_new_tree_sha",
+        "parent_old_tree_sha",
         "merged_tree_sha",
         output=":100644 100644 aaa bbb M\tsrc/x.py\n",
     )
@@ -269,9 +275,9 @@ async def test_replay_for_revision_conflict_returns_none(
     git_mock.mock_error(
         "merge-tree",
         "--write-tree",
-        "--merge-base=parent_old_sha",
-        "parent_new_sha",
-        "old_sha",
+        "--merge-base=parent_new_sha",
+        "parent_old_sha",
+        "new_sha",
     )
 
     async with httpx.AsyncClient(base_url="https://api.github.com") as client:
@@ -290,24 +296,24 @@ async def test_replay_for_revision_conflict_returns_none(
 async def test_replay_for_revision_no_diff_returns_none(
     git_mock: test_utils.GitMock,
 ) -> None:
-    """If merged tree equals parent_new's tree, there's nothing to upload."""
+    """If merged tree equals parent_old's tree, there's nothing to upload."""
     git_mock.mock("rev-parse", "old_sha^", output="parent_old_sha")
     git_mock.mock("rev-parse", "new_sha^", output="parent_new_sha")
     git_mock.mock(
         "merge-tree",
         "--write-tree",
-        "--merge-base=parent_old_sha",
-        "parent_new_sha",
-        "old_sha",
+        "--merge-base=parent_new_sha",
+        "parent_old_sha",
+        "new_sha",
         output="merged_tree_sha",
     )
-    git_mock.mock("rev-parse", "parent_new_sha^{tree}", output="parent_new_tree_sha")
+    git_mock.mock("rev-parse", "parent_old_sha^{tree}", output="parent_old_tree_sha")
     git_mock.mock(
         "diff-tree",
         "-r",
         "--raw",
         "--no-renames",
-        "parent_new_tree_sha",
+        "parent_old_tree_sha",
         "merged_tree_sha",
         output="",
     )
@@ -334,12 +340,12 @@ async def test_replay_for_revision_rev_parse_tree_error_returns_none(
     git_mock.mock(
         "merge-tree",
         "--write-tree",
-        "--merge-base=parent_old_sha",
-        "parent_new_sha",
-        "old_sha",
+        "--merge-base=parent_new_sha",
+        "parent_old_sha",
+        "new_sha",
         output="merged_tree_sha",
     )
-    git_mock.mock_error("rev-parse", "parent_new_sha^{tree}")
+    git_mock.mock_error("rev-parse", "parent_old_sha^{tree}")
 
     async with httpx.AsyncClient(base_url="https://api.github.com") as client:
         sha = await replay.replay_for_revision(
@@ -351,3 +357,63 @@ async def test_replay_for_revision_rev_parse_tree_error_returns_none(
         )
 
     assert sha is None
+
+
+async def test_compute_merged_tree_against_real_git(
+    _git_repo: None,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Drive compute_merged_tree against a real git repo with a real
+    merge-tree call (no mocking) to lock in the orientation.
+
+    Models the bug we fixed: a PR amended on a stable base. If the
+    merge-tree arguments regress (e.g. someone swaps `parent_old_sha`
+    and `parent_new_sha` back), the merged tree would equal old_sha's
+    tree and the assertion below would fail.
+    """
+
+    def run(*args: str) -> str:
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+
+    # base commit on main (the PR base), then the old PR head and the new
+    # PR head, both anchored on the same base — mirrors a force-pushed PR
+    # whose base did not move (the scenario where the original sibling-on-
+    # new-base replay produced a useless full-PR diff).
+    (tmp_path / "base.txt").write_text("base\n")
+    run("add", "base.txt")
+    run("commit", "-m", "base")
+    base_sha = run("rev-parse", "HEAD")
+
+    # old PR head: adds routes.py
+    (tmp_path / "routes.py").write_text("# routes\n")
+    run("add", "routes.py")
+    run("commit", "-m", "add routes")
+    old_sha = run("rev-parse", "HEAD")
+
+    # new PR head: starts again from base, adds routes.py (same blob) plus
+    # the amendment (a follow-up migration + a tweak to an existing file).
+    run("reset", "--hard", base_sha)
+    (tmp_path / "routes.py").write_text("# routes\n")
+    (tmp_path / "migration.py").write_text("# migration\n")
+    (tmp_path / "base.txt").write_text("base\nindex\n")
+    run("add", "routes.py", "migration.py", "base.txt")
+    run("commit", "-m", "add routes + follow-up migration")
+    new_sha = run("rev-parse", "HEAD")
+
+    merged = await replay.compute_merged_tree(old_sha=old_sha, new_sha=new_sha)
+    assert merged is not None
+    assert merged.parent_old_sha == base_sha
+
+    # diff-tree between old_sha's tree and the merged tree must contain
+    # ONLY the amendment (migration.py added, base.txt modified). If the
+    # orientation regresses, this will pick up routes.py too.
+    diff = await utils.git(
+        "diff-tree",
+        "-r",
+        "--no-renames",
+        "--name-status",
+        old_sha,
+        merged.tree_sha,
+    )
+    changed = sorted(line.split("\t", 1)[1] for line in diff.splitlines() if line)
+    assert changed == ["base.txt", "migration.py"]
