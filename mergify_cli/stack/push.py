@@ -850,6 +850,12 @@ class _RevisionEntry:
     new_sha: str
     timestamp: datetime.datetime | None
     reason: str = ""
+    # Synthetic commit produced by replay_for_revision. Its parent is
+    # old_sha and its tree is new_sha's content re-applied onto
+    # parent(old_sha) — so `compare/old_sha...replay_sha` uses old_sha
+    # as merge-base and renders just the user's amendment (rebase noise
+    # excluded). None when the synth commit could not be produced
+    # (conflict, API error, or no-op).
     replay_sha: str | None = None
 
     @property
@@ -863,24 +869,6 @@ class _RevisionEntry:
         if self.timestamp is None:
             return None
         return self.timestamp.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    @property
-    def effective_old_sha(self) -> str:
-        """SHA to use as the 'from' anchor in compare URLs.
-
-        Prefers replay_sha when present (rebase-aware diff anchored at
-        the synthetic replay commit); falls back to old_sha otherwise.
-
-        Initial entries have old_sha=None and never get a compare URL,
-        so callers must guard with an old_sha-not-None check; this
-        property asserts the invariant rather than returning None and
-        forcing every caller to cast.
-        """
-        sha = self.replay_sha or self.old_sha
-        if sha is None:
-            msg = "effective_old_sha called on initial entry (old_sha=None)"
-            raise AssertionError(msg)
-        return sha
 
 
 @dataclasses.dataclass
@@ -963,6 +951,19 @@ class RevisionHistoryComment:
             ),
         )
 
+    def _entry_head_sha(self, entry: _RevisionEntry) -> str:
+        """SHA to use as the 'to' anchor in compare URLs.
+
+        Prefers replay_sha when present: it's a synth child of old_sha
+        holding new_sha's tree re-applied onto parent(old_sha), so
+        compare/old_sha...replay_sha renders just the amendment (the
+        merge-base GitHub picks for the compare page is old_sha itself).
+
+        Falls back to new_sha otherwise — the resulting URL still uses
+        old_sha as base; the diff just includes any rebase noise.
+        """
+        return entry.replay_sha if entry.replay_sha is not None else entry.new_sha
+
     def _render_entry(self, entry: _RevisionEntry) -> str:
         if entry.old_sha is None:
             changes_cell = f"`{entry.new_sha[:7]}`"
@@ -972,11 +973,13 @@ class RevisionHistoryComment:
                 f"`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}` _(rebase only)_"
             )
         else:
-            url = self._compare_url(entry.effective_old_sha, entry.new_sha)
+            url = self._compare_url(entry.old_sha, self._entry_head_sha(entry))
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
             if entry.replay_sha is not None:
                 # Synthetic replay commits get GC'd by GitHub eventually; keep
-                # a durable raw-diff link for the long tail.
+                # a durable raw-diff link (always-resolvable PR-head SHAs) for
+                # the long tail. Its diff includes any rebase noise, which is
+                # the price of durability.
                 raw_url = self._compare_url(entry.old_sha, entry.new_sha)
                 changes_cell = f"{changes_cell} ([raw]({raw_url}))"
         reason_cell = _escape_reason(entry.reason)
@@ -1002,8 +1005,8 @@ class RevisionHistoryComment:
                         None
                         if e.old_sha is None
                         else self._compare_url(
-                            e.effective_old_sha,
-                            e.new_sha,
+                            e.old_sha,
+                            self._entry_head_sha(e),
                         )
                     ),
                 }
