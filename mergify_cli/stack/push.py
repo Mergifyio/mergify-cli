@@ -679,20 +679,20 @@ async def stack_push(
         console.log("[green]Comments updated.[/]")
 
         if revision_history:
-            # Compute replay SHAs after push_branches has made the new commits
+            # Compute amend SHAs after push_branches has made the new commits
             # (and their parents) reachable on the GitHub server. Doing this
             # before the push would cause the Git Data API uploads to fail for
             # any PR whose parent is another PR in the same stack — those
             # parents only exist server-side once we've pushed.
-            replay_sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+            amend_sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
-            async def _maybe_replay(
+            async def _maybe_amend(
                 change: changes.LocalChange,
             ) -> tuple[str, str | None]:
                 if change_types.get(change.id) != "content":
                     return change.id, None
                 try:
-                    async with replay_sem:
+                    async with amend_sem:
                         sha = await replay.replay_for_revision(
                             client=client,
                             user=user,
@@ -717,20 +717,20 @@ async def stack_push(
                     )
                 return change.id, sha
 
-            replay_results = await asyncio.gather(
+            amend_results = await asyncio.gather(
                 *(
-                    _maybe_replay(task.change)
+                    _maybe_amend(task.change)
                     for task in tasks
                     if task.change.action == "update" and task.change.pull is not None
                 ),
             )
-            replay_shas: dict[str, str | None] = dict(replay_results)
+            amend_shas: dict[str, str | None] = dict(amend_results)
 
             updated_changes = [
                 (
                     task.change,
                     change_types.get(task.change.id, "unknown"),
-                    replay_shas.get(task.change.id),
+                    amend_shas.get(task.change.id),
                 )
                 for task in tasks
                 if task.change.action == "update" and task.change.pull is not None
@@ -850,7 +850,13 @@ class _RevisionEntry:
     new_sha: str
     timestamp: datetime.datetime | None
     reason: str = ""
-    replay_sha: str | None = None
+    # Synthetic commit whose parent is old_sha and whose tree is new_sha's
+    # content re-applied onto parent(old_sha). Paired with old_sha in a
+    # `compare/old_sha...amend_sha` URL it renders the rebase-aware
+    # amendment — i.e. what the user actually changed, with rebase noise
+    # filtered out. None when the synth commit could not be produced
+    # (conflict, API error, or no-op).
+    amend_sha: str | None = None
 
     @property
     def timestamp_human(self) -> str:
@@ -863,24 +869,6 @@ class _RevisionEntry:
         if self.timestamp is None:
             return None
         return self.timestamp.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    @property
-    def effective_old_sha(self) -> str:
-        """SHA to use as the 'from' anchor in compare URLs.
-
-        Prefers replay_sha when present (rebase-aware diff anchored at
-        the synthetic replay commit); falls back to old_sha otherwise.
-
-        Initial entries have old_sha=None and never get a compare URL,
-        so callers must guard with an old_sha-not-None check; this
-        property asserts the invariant rather than returning None and
-        forcing every caller to cast.
-        """
-        sha = self.replay_sha or self.old_sha
-        if sha is None:
-            msg = "effective_old_sha called on initial entry (old_sha=None)"
-            raise AssertionError(msg)
-        return sha
 
 
 @dataclasses.dataclass
@@ -919,7 +907,7 @@ class RevisionHistoryComment:
         change_type: ChangeType,
         timestamp: datetime.datetime,
         reason: str = "",
-        replay_sha: str | None = None,
+        amend_sha: str | None = None,
     ) -> RevisionHistoryComment:
         entries = [
             _RevisionEntry(1, "initial", None, old_sha, timestamp),
@@ -930,7 +918,7 @@ class RevisionHistoryComment:
                 new_sha,
                 timestamp,
                 reason=reason,
-                replay_sha=replay_sha,
+                amend_sha=amend_sha,
             ),
         ]
         return cls(
@@ -948,7 +936,7 @@ class RevisionHistoryComment:
         change_type: ChangeType,
         timestamp: datetime.datetime,
         reason: str = "",
-        replay_sha: str | None = None,
+        amend_sha: str | None = None,
     ) -> None:
         next_number = len(self.entries) + 1
         self.entries.append(
@@ -959,9 +947,24 @@ class RevisionHistoryComment:
                 new_sha,
                 timestamp,
                 reason=reason,
-                replay_sha=replay_sha,
+                amend_sha=amend_sha,
             ),
         )
+
+    def _entry_compare_url(self, entry: _RevisionEntry) -> str:
+        """Compare URL anchored at old_sha \u2192 amend_sha (rebase-aware) when
+        the synth commit is available, else old_sha \u2192 new_sha (raw).
+
+        GitHub's compare URL semantics use merge-base(A, B) \u2192 B for both
+        `..` and `...` (they're normalised the same). The amend_sha is a
+        descendant of old_sha, so merge-base = old_sha and the page
+        renders exactly old_sha \u2192 amend_sha = the user's amendment.
+        """
+        if entry.old_sha is None:
+            msg = "_entry_compare_url called on initial entry (old_sha=None)"
+            raise AssertionError(msg)
+        head_sha = entry.amend_sha if entry.amend_sha is not None else entry.new_sha
+        return self._compare_url(entry.old_sha, head_sha)
 
     def _render_entry(self, entry: _RevisionEntry) -> str:
         if entry.old_sha is None:
@@ -972,11 +975,13 @@ class RevisionHistoryComment:
                 f"`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}` _(rebase only)_"
             )
         else:
-            url = self._compare_url(entry.effective_old_sha, entry.new_sha)
+            url = self._entry_compare_url(entry)
             changes_cell = f"[`{entry.old_sha[:7]} \u2192 {entry.new_sha[:7]}`]({url})"
-            if entry.replay_sha is not None:
-                # Synthetic replay commits get GC'd by GitHub eventually; keep
-                # a durable raw-diff link for the long tail.
+            if entry.amend_sha is not None:
+                # Synthetic amend commits get GC'd by GitHub eventually; keep
+                # a durable raw-diff link (always-resolvable PR-head SHAs) for
+                # the long tail. Its diff includes any rebase noise, which is
+                # the price of durability.
                 raw_url = self._compare_url(entry.old_sha, entry.new_sha)
                 changes_cell = f"{changes_cell} ([raw]({raw_url}))"
         reason_cell = _escape_reason(entry.reason)
@@ -987,7 +992,7 @@ class RevisionHistoryComment:
 
     def _json_marker(self, pull_number: int) -> str:
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "pull_number": pull_number,
             "entries": [
                 {
@@ -997,14 +1002,9 @@ class RevisionHistoryComment:
                     "new_sha": e.new_sha,
                     "timestamp_iso": e.timestamp_iso,
                     "reason": e.reason,
-                    "replay_sha": e.replay_sha,
+                    "amend_sha": e.amend_sha,
                     "compare_url": (
-                        None
-                        if e.old_sha is None
-                        else self._compare_url(
-                            e.effective_old_sha,
-                            e.new_sha,
-                        )
+                        None if e.old_sha is None else self._entry_compare_url(e)
                     ),
                 }
                 for e in self.entries
@@ -1101,7 +1101,7 @@ class RevisionHistoryComment:
                     continue
                 if (
                     isinstance(payload, dict)
-                    and payload.get("schema_version") == 1
+                    and payload.get("schema_version") in {1, 2}
                     and isinstance(payload.get("entries"), list)
                 ):
                     marker_entries = payload["entries"]
@@ -1135,9 +1135,13 @@ class RevisionHistoryComment:
                 reason = data.get("reason")
                 if isinstance(reason, str):
                     entry.reason = reason
-                replay_sha = data.get("replay_sha")
-                if isinstance(replay_sha, str) or replay_sha is None:
-                    entry.replay_sha = replay_sha
+                # schema v2 uses amend_sha; v1 used replay_sha with different
+                # semantics (sibling on new base) so we don't migrate the
+                # value — the rendered row is preserved verbatim via
+                # _raw_rows, so old comments keep their original URL.
+                amend_sha = data.get("amend_sha")
+                if isinstance(amend_sha, str) or amend_sha is None:
+                    entry.amend_sha = amend_sha
 
         return cls(
             github_server=github_server,
@@ -1219,7 +1223,7 @@ async def _update_revision_for_pull(
     change: changes.LocalChange,
     change_type: ChangeType,
     *,
-    replay_sha: str | None,
+    amend_sha: str | None,
     timestamp: datetime.datetime,
     sem: asyncio.Semaphore,
 ) -> None:
@@ -1247,7 +1251,7 @@ async def _update_revision_for_pull(
             change_type=change_type,
             timestamp=timestamp,
             reason=change.reason,
-            replay_sha=replay_sha,
+            amend_sha=amend_sha,
         )
 
         for comment in comments:
@@ -1265,7 +1269,7 @@ async def _update_revision_for_pull(
                         change_type=change_type,
                         timestamp=timestamp,
                         reason=change.reason,
-                        replay_sha=replay_sha,
+                        amend_sha=amend_sha,
                     )
                     new_body = parsed.body(pull_number)
                     if comment["body"] != new_body:
@@ -1310,11 +1314,11 @@ async def create_or_update_revision_comments(
                 github_server,
                 change,
                 change_type,
-                replay_sha=replay_sha,
+                amend_sha=amend_sha,
                 timestamp=now,
                 sem=sem,
             )
-            for change, change_type, replay_sha in updated_changes
+            for change, change_type, amend_sha in updated_changes
         ),
     )
 

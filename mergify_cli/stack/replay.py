@@ -27,7 +27,7 @@ from mergify_cli import utils
 @dataclasses.dataclass(frozen=True)
 class MergedTree:
     tree_sha: str
-    parent_new_sha: str
+    parent_old_sha: str
 
 
 async def compute_merged_tree(
@@ -35,7 +35,13 @@ async def compute_merged_tree(
     old_sha: str,
     new_sha: str,
 ) -> MergedTree | None:
-    """Compute the tree of `old_sha` replayed onto `parent(new_sha)`.
+    """Compute the tree of `new_sha` replayed onto `parent(old_sha)`.
+
+    The result is the user's amendment isolated from any rebase noise:
+    parent_old_sha + (parent_new_sha → new_sha diff). Pairing this tree
+    with `old_sha` as the commit's parent produces a commit whose diff
+    against `old_sha` is exactly the amendment — which is what we want
+    in the revision-history compare URL.
 
     Returns None on conflict, missing parents, or any git error.
     Requires git >= 2.38 for `git merge-tree --write-tree`.
@@ -52,9 +58,9 @@ async def compute_merged_tree(
         output = await utils.git(
             "merge-tree",
             "--write-tree",
-            f"--merge-base={parent_old_sha}",
-            parent_new_sha,
-            old_sha,
+            f"--merge-base={parent_new_sha}",
+            parent_old_sha,
+            new_sha,
         )
     except utils.CommandError:
         # Non-zero exit = conflict (or older git that doesn't support flags).
@@ -65,7 +71,7 @@ async def compute_merged_tree(
     if not lines:
         return None
 
-    return MergedTree(tree_sha=lines[0], parent_new_sha=parent_new_sha)
+    return MergedTree(tree_sha=lines[0], parent_old_sha=parent_old_sha)
 
 
 def _mode_to_type(mode: str) -> str:
@@ -141,16 +147,21 @@ async def upload_replay_commit(
     user: str,
     repo: str,
     base_tree_sha: str,
-    parent_new_sha: str,
     old_sha: str,
+    new_sha: str,
     entries: list[dict[str, str | None]],
 ) -> str | None:
     """Materialise a synthetic commit on the GitHub server, no ref attached.
 
-    Posts the tree delta with `base_tree=parent_new_tree_sha`, then a commit
-    with `parents=[parent_new_sha]`. Returns the commit SHA on success or
-    None on any API error. The unreferenced object will be GC'd by GitHub
-    eventually; the compare URL works in the meantime.
+    Posts the tree delta with `base_tree=parent_old_tree_sha`, then a commit
+    with `parents=[old_sha]`. The synthetic commit's parent is the previous
+    PR head, so GitHub's `compare/old_sha...amend_sha` URL uses old_sha as
+    merge-base and renders exactly the amendment — without the rebase noise
+    that a sibling-on-new-base would have surfaced.
+
+    Returns the commit SHA on success or None on any API error. The
+    unreferenced object will be GC'd by GitHub eventually; the compare URL
+    works in the meantime.
     """
     tree_payload: dict[str, typing.Any] = {
         "base_tree": base_tree_sha,
@@ -170,10 +181,10 @@ async def upload_replay_commit(
             f"/repos/{user}/{repo}/git/commits",
             json={
                 "message": (
-                    f"mergify-cli: replay {old_sha[:7]} on {parent_new_sha[:7]}"
+                    f"mergify-cli: replay {new_sha[:7]} on {old_sha[:7]}"
                 ),
                 "tree": new_tree_sha,
-                "parents": [parent_new_sha],
+                "parents": [old_sha],
             },
         )
         commit_resp.raise_for_status()
@@ -206,15 +217,15 @@ async def replay_for_revision(
 
     try:
         # ^{tree} dereferences a commit SHA to its root tree SHA (git plumbing syntax).
-        parent_new_tree_sha = await utils.git(
+        parent_old_tree_sha = await utils.git(
             "rev-parse",
-            f"{merged.parent_new_sha}^{{tree}}",
+            f"{merged.parent_old_sha}^{{tree}}",
         )
     except utils.CommandError:
         return None
 
     entries = await compute_tree_delta(
-        base_tree_sha=parent_new_tree_sha,
+        base_tree_sha=parent_old_tree_sha,
         merged_tree_sha=merged.tree_sha,
     )
     if not entries:
@@ -226,8 +237,8 @@ async def replay_for_revision(
         client=client,
         user=user,
         repo=repo,
-        base_tree_sha=parent_new_tree_sha,
-        parent_new_sha=merged.parent_new_sha,
+        base_tree_sha=parent_old_tree_sha,
         old_sha=old_sha,
+        new_sha=new_sha,
         entries=entries,
     )

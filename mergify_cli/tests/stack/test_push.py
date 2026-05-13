@@ -1205,7 +1205,7 @@ def test_revision_history_body_contains_json_marker() -> None:
     payload = json.loads(payload_str)
 
     assert payload == {
-        "schema_version": 1,
+        "schema_version": 2,
         "pull_number": 42,
         "entries": [
             {
@@ -1215,7 +1215,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "new_sha": "abc1234567890abcdef1234567890abcdef123456",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
                 "reason": "",
-                "replay_sha": None,
+                "amend_sha": None,
                 "compare_url": None,
             },
             {
@@ -1225,7 +1225,7 @@ def test_revision_history_body_contains_json_marker() -> None:
                 "new_sha": "def5678901234567890abcdef1234567890abcdef",
                 "timestamp_iso": "2026-04-14T14:30:00Z",
                 "reason": "",
-                "replay_sha": None,
+                "amend_sha": None,
                 "compare_url": (
                     "https://github.com/owner/repo/compare/"
                     "abc1234567890abcdef1234567890abcdef123456..."
@@ -1256,8 +1256,8 @@ def test_revision_history_body_json_marker_is_single_line_compact() -> None:
     assert '": ' not in marker_line
 
 
-def test_revision_history_comment_replay_sha_round_trip() -> None:
-    """replay_sha is preserved across body() and parse()."""
+def test_revision_history_comment_amend_sha_round_trip() -> None:
+    """amend_sha is preserved across body() and parse()."""
     original = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
         user="owner",
@@ -1266,7 +1266,7 @@ def test_revision_history_comment_replay_sha_round_trip() -> None:
         new_sha="def5678901234567890abcdef1234567890abcdef",
         change_type="content",
         timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
-        replay_sha="111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1",
+        amend_sha="111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1",
     )
     body = original.body(pull_number=1)
     parsed = push.RevisionHistoryComment.parse(
@@ -1276,9 +1276,9 @@ def test_revision_history_comment_replay_sha_round_trip() -> None:
         repo="repo",
     )
     assert parsed is not None
-    # entry 1 is "initial" (no replay), entry 2 has replay_sha
-    assert parsed.entries[1].replay_sha == "111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1"
-    assert parsed.entries[0].replay_sha is None
+    # entry 1 is "initial" (no amend), entry 2 has amend_sha
+    assert parsed.entries[1].amend_sha == "111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1"
+    assert parsed.entries[0].amend_sha is None
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
@@ -1388,12 +1388,13 @@ async def test_create_revision_comment_on_update(
 
 
 @pytest.mark.respx(base_url="https://api.github.com/")
-async def test_create_revision_comment_with_replay_sha_renders_dual_link(
+async def test_create_revision_comment_with_amend_sha_renders_dual_link(
     git_mock: test_utils.GitMock,
     respx_mock: respx.MockRouter,
 ) -> None:
-    """When replay_for_revision returns a SHA, the rendered comment uses it as
-    the primary URL anchor and appends a (raw) fallback link to old_sha."""
+    """When replay_for_revision returns a SHA, the rendered comment points
+    `old_sha...amend_sha` (rebase-aware) for the primary link and falls back
+    to `old_sha...new_sha` for the durable (raw) link."""
     git_mock.commit(
         test_utils.Commit(
             sha="new_commit_sha",
@@ -1461,7 +1462,7 @@ async def test_create_revision_comment_with_replay_sha_renders_dual_link(
         mock.patch.object(
             replay,
             "replay_for_revision",
-            return_value="replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            return_value="amendshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
         ),
     ):
         await push.stack_push(
@@ -1483,14 +1484,15 @@ async def test_create_revision_comment_with_replay_sha_renders_dual_link(
     ]
     assert len(revision_calls) == 1
     posted_body = json.loads(revision_calls[0].request.content)["body"]
-    # Primary link is anchored at the replay SHA
+    # Primary link anchors at old_sha and heads at the amend SHA.
     assert (
-        "/compare/replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX...new_commit_sha"
+        "/compare/old_commit_sha...amendshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         in posted_body
     )
-    # Raw fallback link is anchored at the original old SHA
+    # Raw fallback link uses the durable old_sha → new_sha pair.
     assert (
-        "([raw](https://github.com/user/repo/compare/old_commit_sha..." in posted_body
+        "([raw](https://github.com/user/repo/compare/old_commit_sha...new_commit_sha)"
+        in posted_body
     )
 
 
@@ -1583,7 +1585,7 @@ async def test_stack_push_survives_replay_for_revision_raising(
         )
 
     # The revision comment was still posted, falling back to the standard URL
-    # anchored at old_commit_sha (no replay_sha present).
+    # anchored at old_commit_sha (no amend_sha present).
     revision_calls = [
         call
         for call in post_revision_mock.calls
@@ -1594,7 +1596,7 @@ async def test_stack_push_survives_replay_for_revision_raising(
     assert len(revision_calls) == 1
     posted_body = json.loads(revision_calls[0].request.content)["body"]
     assert "/compare/old_commit_sha...new_commit_sha" in posted_body
-    # No raw fallback link since no replay_sha was produced.
+    # No raw fallback link since no amend_sha was produced.
     assert "[raw]" not in posted_body
 
 
@@ -2974,8 +2976,9 @@ def test_revision_history_renders_badge_for_pure_rebase() -> None:
     assert "`abc1234 → def5678`" in rebase_line
 
 
-def test_revision_history_uses_replay_sha_for_url_when_present() -> None:
-    """When replay_sha is set, primary URL anchors at it; raw link uses old_sha."""
+def test_revision_history_uses_amend_sha_for_url_when_present() -> None:
+    """When amend_sha is set, primary URL is old_sha→amend_sha; raw link
+    falls back to old_sha→new_sha for durability after GitHub GC."""
     comment = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
         user="owner",
@@ -2984,29 +2987,31 @@ def test_revision_history_uses_replay_sha_for_url_when_present() -> None:
         new_sha="bbb5678901234567890abcdef1234567890abcdef",
         change_type="content",
         timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
-        replay_sha="ccc9999999999999999999999999999999999999",
+        amend_sha="ccc9999999999999999999999999999999999999",
     )
     body = comment.body(pull_number=1)
     row = next(line for line in body.splitlines() if "| 2 | content |" in line)
     rebase_aware_url = (
         "https://github.com/owner/repo/compare/"
-        "ccc9999999999999999999999999999999999999"
-        "...bbb5678901234567890abcdef1234567890abcdef"
+        "aaa1234567890abcdef1234567890abcdef123456"
+        "...ccc9999999999999999999999999999999999999"
     )
     raw_url = (
         "https://github.com/owner/repo/compare/"
         "aaa1234567890abcdef1234567890abcdef123456"
         "...bbb5678901234567890abcdef1234567890abcdef"
     )
-    # Primary clickable label uses the human-readable SHAs and points at the
-    # rebase-aware URL (the synthetic replay commit).
+    # Primary clickable label keeps the human-readable old→new SHAs; the
+    # link targets the rebase-aware compare (old_sha to the synth amend
+    # commit), which renders just the user's amendment.
     assert f"[`aaa1234 → bbb5678`]({rebase_aware_url})" in row
-    # Raw link is appended for durability after GitHub GCs the synthetic commit.
+    # Raw link uses the durable old_sha → new_sha pair so the long tail
+    # still has a working URL after GitHub GCs the synthetic commit.
     assert f"([raw]({raw_url}))" in row
 
 
-def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
-    """When replay_sha is absent, single link anchors at old_sha; no raw link."""
+def test_revision_history_uses_old_sha_for_url_when_amend_sha_absent() -> None:
+    """When amend_sha is absent, single link anchors at old_sha; no raw link."""
     comment = push.RevisionHistoryComment.create_initial(
         github_server="https://api.github.com",
         user="owner",
@@ -3015,7 +3020,7 @@ def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
         new_sha="bbb5678901234567890abcdef1234567890abcdef",
         change_type="content",
         timestamp=datetime.datetime(2026, 4, 14, 14, 30, tzinfo=datetime.UTC),
-        # replay_sha omitted
+        # amend_sha omitted
     )
     body = comment.body(pull_number=1)
     row = next(line for line in body.splitlines() if "| 2 | content |" in line)
@@ -3023,15 +3028,15 @@ def test_revision_history_uses_old_sha_for_url_when_replay_sha_absent() -> None:
         "/compare/aaa1234567890abcdef1234567890abcdef123456"
         "...bbb5678901234567890abcdef1234567890abcdef" in row
     )
-    # No replay → no raw fallback link
+    # No amend → no raw fallback link
     assert "[raw]" not in row
 
 
 @pytest.mark.respx(base_url="https://api.github.com")
-async def test_create_or_update_revision_comments_passes_replay_sha(
+async def test_create_or_update_revision_comments_passes_amend_sha(
     respx_mock: respx.MockRouter,
 ) -> None:
-    """The replay_sha from change_types tuple lands in the rendered comment."""
+    """The amend_sha from change_types tuple lands in the rendered comment."""
     import httpx
 
     pull = {"number": 42, "merged_at": None, "head": {"sha": "newsha"}, "url": "u"}
@@ -3055,9 +3060,11 @@ async def test_create_or_update_revision_comments_passes_replay_sha(
             "owner",
             "repo",
             "https://api.github.com",
-            [(change, "content", "replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")],
+            [(change, "content", "amendshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")],
         )
 
     assert create_route.called
     body = create_route.calls.last.request.read()
-    assert b"replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX...newshaaaaaaaa" in body
+    # Primary link: old_sha → amend_sha (rebase-aware).
+    assert b"oldshaaaaaaaa" in body
+    assert b"...amendshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" in body
