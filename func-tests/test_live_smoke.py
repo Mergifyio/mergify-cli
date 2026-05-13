@@ -124,6 +124,29 @@ def test_ci_git_refs_fallback(
     )
 
 
+def test_ci_queue_info_outside_mq(
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`mergify ci queue-info` exits ``INVALID_STATE`` (7) when not
+    running on an MQ draft PR.
+
+    Doesn't need ``live_token`` — the command is locally
+    evaluated. The conftest fixture scrubs every event env var
+    and runs in a tmp dir, so the detector always reports
+    "no MQ context". This is the contract we want preserved
+    across the upcoming Python → Rust port.
+    """
+    result = cli("ci", "queue-info")
+    assert result.returncode == 7, (
+        f"expected INVALID_STATE (7), got {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "merge queue" in combined, (
+        f"expected MQ-context message\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
 def test_scopes_send(
     live_token: str,
     cli: typing.Callable[..., typing.Any],
