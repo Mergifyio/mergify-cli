@@ -60,7 +60,7 @@ dev = [
     "types-aiofiles==25.1.0.20260518",
     "types-click==7.1.8",
     "types-jsonschema==4.26.0.20260518",
-    "types-pyyaml==6.0.12.20260510",
+    "types-pyyaml==6.0.12.20260518",
     "anys==0.3.1",
     "responses==0.26.0",
 ]
