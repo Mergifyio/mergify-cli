@@ -36,11 +36,13 @@ jobs:
         shell: bash
         env:
           # Two tokens with different scopes:
-          # - _CI exercises read-only / pull-scoped endpoints
-          #   (scopes-send, junit-process, queue status, queue show,
-          #   ci git-refs / queue-info).
-          # - _ADMIN exercises destructive queue-admin endpoints
-          #   (queue pause / unpause).
+          # - _CI exercises CI-tooling endpoints (scopes-send,
+          #   junit-process). ci git-refs / queue-info are
+          #   locally evaluated and need no token at all.
+          # - _ADMIN exercises every endpoint under /merge-queue/
+          #   (status, show, pause, unpause). The CI token is
+          #   rejected with 403 on these, so they all share the
+          #   queue-management-scoped admin token.
           # Tests select the appropriate fixture; absent tokens
           # cause individual tests to skip rather than fail.
           LIVE_TEST_MERGIFY_TOKEN_CI: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN_CI }}

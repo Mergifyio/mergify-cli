@@ -75,11 +75,14 @@ class CliResult:
 
 @pytest.fixture
 def live_token() -> str:
-    """Token for read-only / pull-scoped live endpoints.
+    """Token for CI-integration live endpoints.
 
     Skips the test if ``LIVE_TEST_MERGIFY_TOKEN_CI`` isn't set.
-    Use this for everything that doesn't need queue-admin rights
-    (scopes-send, junit-process, queue status / show, etc.).
+    Use this for CI-tooling endpoints that don't touch the queue:
+    ``ci scopes-send`` and ``ci junit-process``. Every endpoint
+    under ``/merge-queue/`` (status, show, pause, unpause)
+    requires queue-management scope and rejects the CI token
+    with 403, so those tests must use [`live_admin_token`].
     """
     token = os.environ.get("LIVE_TEST_MERGIFY_TOKEN_CI", "").strip()
     if not token:
