@@ -1077,6 +1077,7 @@ dependencies = [
 name = "mergify-cli"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "clap",
  "mergify-ci",
  "mergify-config",
@@ -1125,6 +1126,7 @@ version = "0.0.0"
 dependencies = [
  "anstyle",
  "chrono",
+ "iana-time-zone",
  "mergify-core",
  "mergify-tui",
  "serde",

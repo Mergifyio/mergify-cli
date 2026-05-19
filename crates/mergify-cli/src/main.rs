@@ -26,7 +26,11 @@ use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
+use mergify_freeze::common::parse_naive_datetime;
+use mergify_freeze::create::CreateOptions as FreezeCreateOptions;
+use mergify_freeze::delete::DeleteOptions as FreezeDeleteOptions;
 use mergify_freeze::list::ListOptions as FreezeListOptions;
+use mergify_freeze::update::UpdateOptions as FreezeUpdateOptions;
 use mergify_queue::pause::PauseOptions;
 use mergify_queue::show::ShowOptions;
 use mergify_queue::status::StatusOptions;
@@ -93,6 +97,9 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("queue", "status"),
     ("queue", "show"),
     ("freeze", "list"),
+    ("freeze", "create"),
+    ("freeze", "update"),
+    ("freeze", "delete"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -108,6 +115,9 @@ enum NativeCommand {
     QueueStatus(QueueStatusOpts),
     QueueShow(QueueShowOpts),
     FreezeList(FreezeListOpts),
+    FreezeCreate(FreezeCreateOpts),
+    FreezeUpdate(FreezeUpdateOpts),
+    FreezeDelete(FreezeDeleteOpts),
 }
 
 struct ConfigSimulateOpts {
@@ -164,6 +174,39 @@ struct FreezeListOpts {
     token: Option<String>,
     api_url: Option<String>,
     output_json: bool,
+}
+
+struct FreezeCreateOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    reason: String,
+    timezone: Option<String>,
+    start: Option<chrono::NaiveDateTime>,
+    end: Option<chrono::NaiveDateTime>,
+    matching_conditions: Vec<String>,
+    exclude_conditions: Vec<String>,
+}
+
+struct FreezeUpdateOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    freeze_id: String,
+    reason: Option<String>,
+    timezone: Option<String>,
+    start: Option<chrono::NaiveDateTime>,
+    end: Option<chrono::NaiveDateTime>,
+    matching_conditions: Option<Vec<String>>,
+    exclude_conditions: Option<Vec<String>>,
+}
+
+struct FreezeDeleteOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    freeze_id: String,
+    delete_reason: Option<String>,
 }
 
 /// Heuristic: does argv look like the user intended a native
@@ -355,6 +398,86 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             api_url,
             output_json: json,
         })),
+        Subcommands::Freeze(FreezeArgs {
+            repository,
+            token,
+            api_url,
+            command:
+                FreezeSubcommand::Create(FreezeCreateCliArgs {
+                    reason,
+                    timezone,
+                    condition,
+                    start,
+                    end,
+                    exclude,
+                }),
+        }) => Some(NativeCommand::FreezeCreate(FreezeCreateOpts {
+            repository,
+            token,
+            api_url,
+            reason,
+            timezone,
+            start,
+            end,
+            matching_conditions: condition,
+            exclude_conditions: exclude,
+        })),
+        Subcommands::Freeze(FreezeArgs {
+            repository,
+            token,
+            api_url,
+            command:
+                FreezeSubcommand::Update(FreezeUpdateCliArgs {
+                    freeze_id,
+                    reason,
+                    timezone,
+                    condition,
+                    start,
+                    end,
+                    exclude,
+                }),
+        }) => Some(NativeCommand::FreezeUpdate(FreezeUpdateOpts {
+            repository,
+            token,
+            api_url,
+            freeze_id,
+            reason,
+            timezone,
+            start,
+            end,
+            // Python's "include the list when the flag was passed
+            // at least once" maps to `Some(vec)` only when the user
+            // actually supplied a value. clap collects multiple
+            // `-c`/`-e` into a `Vec<String>`, so an empty vec is
+            // indistinguishable from "flag never given" at this
+            // boundary — treat empty as `None` for parity.
+            matching_conditions: if condition.is_empty() {
+                None
+            } else {
+                Some(condition)
+            },
+            exclude_conditions: if exclude.is_empty() {
+                None
+            } else {
+                Some(exclude)
+            },
+        })),
+        Subcommands::Freeze(FreezeArgs {
+            repository,
+            token,
+            api_url,
+            command:
+                FreezeSubcommand::Delete(FreezeDeleteCliArgs {
+                    freeze_id,
+                    delete_reason,
+                }),
+        }) => Some(NativeCommand::FreezeDelete(FreezeDeleteOpts {
+            repository,
+            token,
+            api_url,
+            freeze_id,
+            delete_reason,
+        })),
     }
 }
 
@@ -468,6 +591,54 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
                         output_json: opts.output_json,
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::FreezeCreate(opts) => {
+                mergify_freeze::create::run(
+                    FreezeCreateOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        reason: &opts.reason,
+                        timezone: opts.timezone.as_deref(),
+                        start: opts.start,
+                        end: opts.end,
+                        matching_conditions: &opts.matching_conditions,
+                        exclude_conditions: &opts.exclude_conditions,
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::FreezeUpdate(opts) => {
+                mergify_freeze::update::run(
+                    FreezeUpdateOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        freeze_id: &opts.freeze_id,
+                        reason: opts.reason.as_deref(),
+                        timezone: opts.timezone.as_deref(),
+                        start: opts.start,
+                        end: opts.end,
+                        matching_conditions: opts.matching_conditions.as_deref(),
+                        exclude_conditions: opts.exclude_conditions.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::FreezeDelete(opts) => {
+                mergify_freeze::delete::run(
+                    FreezeDeleteOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        freeze_id: &opts.freeze_id,
+                        delete_reason: opts.delete_reason.as_deref(),
                     },
                     &mut output,
                 )
@@ -716,6 +887,12 @@ struct FreezeArgs {
 enum FreezeSubcommand {
     /// List scheduled freezes for a repository.
     List(FreezeListCliArgs),
+    /// Create a new scheduled freeze.
+    Create(FreezeCreateCliArgs),
+    /// Update an existing scheduled freeze.
+    Update(FreezeUpdateCliArgs),
+    /// Delete a scheduled freeze.
+    Delete(FreezeDeleteCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -724,4 +901,84 @@ struct FreezeListCliArgs {
     /// document.
     #[arg(long, default_value_t = false)]
     json: bool,
+}
+
+#[derive(clap::Args)]
+struct FreezeCreateCliArgs {
+    /// Reason for the freeze.
+    #[arg(long, required = true)]
+    reason: String,
+
+    /// IANA timezone name (e.g. ``Europe/Paris``, ``US/Eastern``).
+    /// Defaults to the system timezone when omitted.
+    #[arg(long)]
+    timezone: Option<String>,
+
+    /// Matching condition (repeatable, e.g. `-c base=main`).
+    #[arg(long = "condition", short = 'c')]
+    condition: Vec<String>,
+
+    /// Start time in ISO 8601 format (default: now).
+    #[arg(long, value_parser = parse_naive_datetime_arg)]
+    start: Option<chrono::NaiveDateTime>,
+
+    /// End time in ISO 8601 format (default: no end / emergency freeze).
+    #[arg(long, value_parser = parse_naive_datetime_arg)]
+    end: Option<chrono::NaiveDateTime>,
+
+    /// Exclude condition (repeatable, e.g. `-e label=hotfix`).
+    #[arg(long = "exclude", short = 'e')]
+    exclude: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct FreezeUpdateCliArgs {
+    /// Freeze ID (UUID).
+    #[arg(value_name = "FREEZE_ID")]
+    freeze_id: String,
+
+    /// Reason for the freeze.
+    #[arg(long)]
+    reason: Option<String>,
+
+    /// IANA timezone name.
+    #[arg(long)]
+    timezone: Option<String>,
+
+    /// Matching condition (repeatable). Passing the flag — even
+    /// with no value — replaces the existing list.
+    #[arg(long = "condition", short = 'c')]
+    condition: Vec<String>,
+
+    /// Start time in ISO 8601 format.
+    #[arg(long, value_parser = parse_naive_datetime_arg)]
+    start: Option<chrono::NaiveDateTime>,
+
+    /// End time in ISO 8601 format.
+    #[arg(long, value_parser = parse_naive_datetime_arg)]
+    end: Option<chrono::NaiveDateTime>,
+
+    /// Exclude condition (repeatable).
+    #[arg(long = "exclude", short = 'e')]
+    exclude: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct FreezeDeleteCliArgs {
+    /// Freeze ID (UUID).
+    #[arg(value_name = "FREEZE_ID")]
+    freeze_id: String,
+
+    /// Reason for deleting the freeze (required if the freeze is
+    /// currently active).
+    #[arg(long = "reason")]
+    delete_reason: Option<String>,
+}
+
+/// clap `value_parser` shim for `--start` / `--end`. Delegates to
+/// [`parse_naive_datetime`] and converts the typed `CliError` into a
+/// stringified parser error so clap can render it as a normal
+/// argument error.
+fn parse_naive_datetime_arg(value: &str) -> Result<chrono::NaiveDateTime, String> {
+    parse_naive_datetime(value).map_err(|e| e.to_string())
 }

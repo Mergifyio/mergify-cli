@@ -18,7 +18,6 @@ use std::io::Write;
 
 use anstyle::AnsiColor;
 use chrono::DateTime;
-use chrono::NaiveDateTime;
 use chrono::Utc;
 use mergify_core::ApiFlavor;
 use mergify_core::CliError;
@@ -26,31 +25,16 @@ use mergify_core::HttpClient;
 use mergify_core::Output;
 use mergify_core::auth;
 use mergify_tui::Theme;
-use serde::Deserialize;
+
+use crate::common::ScheduledFreeze;
+use crate::common::format_datetime;
+use crate::common::parse_naive_datetime;
 
 pub struct ListOptions<'a> {
     pub repository: Option<&'a str>,
     pub token: Option<&'a str>,
     pub api_url: Option<&'a str>,
     pub output_json: bool,
-}
-
-#[derive(Deserialize)]
-struct FreezeView {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    reason: Option<String>,
-    #[serde(default)]
-    start: Option<String>,
-    #[serde(default)]
-    end: Option<String>,
-    #[serde(default)]
-    timezone: Option<String>,
-    #[serde(default)]
-    matching_conditions: Vec<String>,
-    #[serde(default)]
-    exclude_conditions: Vec<String>,
 }
 
 /// Run the `freeze list` command.
@@ -79,7 +63,7 @@ pub async fn run(opts: ListOptions<'_>, output: &mut dyn Output) -> Result<(), C
         return Ok(());
     }
 
-    let views: Vec<FreezeView> = serde_json::from_value(freezes)
+    let views: Vec<ScheduledFreeze> = serde_json::from_value(freezes)
         .map_err(|e| CliError::Generic(format!("decode scheduled freezes response: {e}")))?;
     emit_human(output, &views, Utc::now())?;
     Ok(())
@@ -95,7 +79,7 @@ fn emit_json(output: &mut dyn Output, value: &serde_json::Value) -> std::io::Res
 
 fn emit_human(
     output: &mut dyn Output,
-    freezes: &[FreezeView],
+    freezes: &[ScheduledFreeze],
     now: DateTime<Utc>,
 ) -> std::io::Result<()> {
     let theme = Theme::detect();
@@ -113,7 +97,7 @@ const HEADERS: [&str; 6] = ["ID", "Reason", "Start", "End", "Conditions", "Statu
 fn render_table(
     w: &mut dyn Write,
     theme: &Theme,
-    freezes: &[FreezeView],
+    freezes: &[ScheduledFreeze],
     now: DateTime<Utc>,
 ) -> std::io::Result<()> {
     writeln!(
@@ -136,7 +120,7 @@ fn render_table(
     Ok(())
 }
 
-fn row_for(freeze: &FreezeView, now: DateTime<Utc>) -> [String; 6] {
+fn row_for(freeze: &ScheduledFreeze, now: DateTime<Utc>) -> [String; 6] {
     let id = freeze.id.clone().unwrap_or_default();
     let reason = freeze.reason.clone().unwrap_or_default();
     let timezone = freeze.timezone.as_deref().unwrap_or("");
@@ -149,17 +133,6 @@ fn row_for(freeze: &FreezeView, now: DateTime<Utc>) -> [String; 6] {
         "scheduled".to_string()
     };
     [id, reason, start, end, conditions, status]
-}
-
-/// Format `value` as `"<value> (<timezone>)"`. Mirrors Python's
-/// `_format_datetime`: returns `"-"` for missing/empty values so the
-/// table reads cleanly when the API omits an end time (open-ended
-/// emergency freeze).
-fn format_datetime(value: Option<&str>, timezone: &str) -> String {
-    match value.filter(|s| !s.is_empty()) {
-        None => "-".to_string(),
-        Some(v) => format!("{v} ({timezone})"),
-    }
 }
 
 /// Build the Conditions cell: matching conditions joined with `, `,
@@ -179,34 +152,18 @@ fn format_conditions(matching: &[String], exclude: &[String]) -> String {
 }
 
 /// Best-effort active flag — see module docs for the timezone caveat
-/// (same one the Python implementation acknowledges).
+/// (same one the Python implementation acknowledges). Delegates the
+/// ISO-8601 parse to [`parse_naive_datetime`] so the CLI-input parser
+/// and the API-response parser stay locked. A malformed `start` falls
+/// through to "scheduled" instead of aborting the render.
 fn is_active(start: Option<&str>, now: DateTime<Utc>) -> bool {
     let Some(start) = start else {
         return false;
     };
-    let Some(naive_start) = parse_iso_naive(start) else {
+    let Ok(naive_start) = parse_naive_datetime(start) else {
         return false;
     };
     naive_start <= now.naive_utc()
-}
-
-/// Parse an ISO-8601 datetime, ignoring any timezone offset so the
-/// comparison stays naive (matches Python's
-/// `datetime.fromisoformat(start)` on a naive-or-aware string —
-/// we treat both as the same wall-clock instant). Returns `None` on
-/// parse failure rather than panicking, so a malformed `start` falls
-/// through to "scheduled" instead of aborting the render.
-fn parse_iso_naive(value: &str) -> Option<NaiveDateTime> {
-    if let Ok(dt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
-        return Some(dt);
-    }
-    if let Ok(dt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Some(dt);
-    }
-    if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
-        return Some(dt.naive_utc());
-    }
-    None
 }
 
 fn column_widths(rows: &[[String; 6]]) -> [usize; 6] {
@@ -535,20 +492,6 @@ mod tests {
         // field be absent, so the renderer falls through here.
         assert!(!is_active(None, now));
         assert!(!is_active(Some("not a date"), now));
-    }
-
-    #[test]
-    fn format_datetime_missing_renders_dash() {
-        assert_eq!(format_datetime(None, "UTC"), "-");
-        assert_eq!(format_datetime(Some(""), "UTC"), "-");
-    }
-
-    #[test]
-    fn format_datetime_appends_timezone() {
-        assert_eq!(
-            format_datetime(Some("2026-01-01T10:00:00"), "Europe/Paris"),
-            "2026-01-01T10:00:00 (Europe/Paris)",
-        );
     }
 
     #[test]
