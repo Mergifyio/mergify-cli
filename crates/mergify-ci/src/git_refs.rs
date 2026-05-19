@@ -437,29 +437,10 @@ fn buildkite_meta_data_set(key: &str, value: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use tempfile::TempDir;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-    }
-
-    fn make_output() -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            OutputMode::Human,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stdout }
-    }
 
     fn no_notes(_branch: &str, _sha: &str) -> Option<MergeQueueMetadata> {
         None
@@ -473,7 +454,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_head_pair_when_no_event() {
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let refs = temp_env::with_vars_unset(
             ["GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "BUILDKITE"],
             || detect(&mut cap.output, &no_notes).unwrap(),
@@ -495,7 +476,7 @@ mod tests {
                 },
             }),
         );
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let refs = temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
@@ -516,7 +497,7 @@ mod tests {
             &dir,
             &serde_json::json!({"before": "old-sha", "after": "new-sha"}),
         );
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let refs = temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("push")),
@@ -543,7 +524,7 @@ mod tests {
                 },
             }),
         );
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let refs = temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
@@ -581,7 +562,7 @@ mod tests {
                 None
             }
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let refs = temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
@@ -600,7 +581,7 @@ mod tests {
             &dir,
             &serde_json::json!({"pull_request": {"head": {"sha": "h"}}}),
         );
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let err = temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
@@ -614,7 +595,7 @@ mod tests {
 
     #[test]
     fn detects_buildkite_pull_request() {
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let refs = temp_env::with_vars(
             [
                 ("BUILDKITE", Some("true")),
@@ -647,9 +628,9 @@ mod tests {
             head: "h".into(),
             source: ReferencesSource::GithubEventPush,
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         emit(&refs, Format::Text, &mut cap.output).unwrap();
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert_eq!(stdout, "Base: b\nHead: h\n");
     }
 
@@ -660,9 +641,9 @@ mod tests {
             head: "has space".into(),
             source: ReferencesSource::MergeQueue,
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         emit(&refs, Format::Shell, &mut cap.output).unwrap();
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(stdout.contains("MERGIFY_GIT_REFS_BASE=main"));
         assert!(stdout.contains("MERGIFY_GIT_REFS_HEAD='has space'"));
         assert!(stdout.contains("MERGIFY_GIT_REFS_SOURCE=merge_queue"));
@@ -675,9 +656,9 @@ mod tests {
             head: "HEAD".into(),
             source: ReferencesSource::GithubEventOther,
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         emit(&refs, Format::Json, &mut cap.output).unwrap();
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert_eq!(
             stdout.trim_end(),
             r#"{"base":null,"head":"HEAD","source":"github_event_other"}"#
@@ -690,16 +671,5 @@ mod tests {
         assert!(matches!(Format::parse("shell"), Ok(Format::Shell)));
         assert!(matches!(Format::parse("json"), Ok(Format::Json)));
         assert!(Format::parse("yaml").is_err());
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl std::io::Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }

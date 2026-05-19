@@ -470,7 +470,7 @@ fn write_condition_tree(
 #[cfg(test)]
 mod tests {
     use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -480,40 +480,6 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-        stderr: SharedBytes,
-    }
-
-    fn make_output(mode: OutputMode) -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            mode,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured {
-            output,
-            stdout,
-            stderr,
-        }
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
 
     fn pull_response() -> serde_json::Value {
         json!({
@@ -570,7 +536,7 @@ mod tests {
         let server = MockServer::start().await;
         arrange(&server, pull_response(), 200).await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             ShowOptions {
@@ -586,7 +552,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(stdout.contains("PR #123"), "got: {stdout:?}");
         assert!(stdout.contains("Position:"), "got: {stdout:?}");
         assert!(stdout.contains("CI State:"), "got: {stdout:?}");
@@ -607,7 +573,7 @@ mod tests {
         let server = MockServer::start().await;
         arrange(&server, pull_response(), 200).await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             ShowOptions {
@@ -623,7 +589,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         // Verbose table: every check name appears as its own row.
         assert!(stdout.contains("tests"), "got: {stdout:?}");
         assert!(stdout.contains("linters"), "got: {stdout:?}");
@@ -645,7 +611,7 @@ mod tests {
         body["future_field"] = json!("preserved");
         arrange(&server, body, 200).await;
 
-        let mut cap = make_output(OutputMode::Json);
+        let mut cap = Captured::new(OutputMode::Json);
         let api_url = server.uri();
         run(
             ShowOptions {
@@ -661,7 +627,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(parsed["number"], json!(123));
         assert_eq!(parsed["future_field"], json!("preserved"));
@@ -677,7 +643,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         let err = run(
             ShowOptions {
@@ -718,7 +684,7 @@ mod tests {
         });
         arrange(&server, body, 200).await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             ShowOptions {
@@ -734,7 +700,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(
             stdout.contains("Waiting for mergeability check"),
             "got: {stdout:?}",
@@ -810,13 +776,5 @@ mod tests {
             }],
         };
         assert_eq!(child_label(&nested), "leaf");
-    }
-
-    // Suppress dead-code warnings for the captured-stderr accessor:
-    // the existing tests use stdout assertions, but the field is
-    // wired up the same way as in pause/unpause/status for parity.
-    #[allow(dead_code)]
-    fn _stderr_accessor_lives(c: &Captured) -> SharedBytes {
-        std::sync::Arc::clone(&c.stderr)
     }
 }
