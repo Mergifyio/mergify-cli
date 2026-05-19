@@ -11,11 +11,11 @@ publish = false
 
 [dependencies]
 mergify-core = { path = "../mergify-core" }
+getrandom = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
 url = "2"
-uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 mergify-test-support = { path = "../mergify-test-support" }
