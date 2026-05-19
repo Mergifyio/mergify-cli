@@ -7,12 +7,10 @@
 
 use std::io::Write;
 
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
+use mergify_core::CommandContext;
 use mergify_core::DeleteOutcome;
-use mergify_core::HttpClient;
 use mergify_core::Output;
-use mergify_core::auth;
 
 pub struct UnpauseOptions<'a> {
     pub repository: Option<&'a str>,
@@ -22,14 +20,15 @@ pub struct UnpauseOptions<'a> {
 
 /// Run the `queue unpause` command.
 pub async fn run(opts: UnpauseOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
 
-    output.status(&format!("Unpausing merge queue for {repository}…"))?;
+    output.status(&format!(
+        "Unpausing merge queue for {repo}…",
+        repo = ctx.repository,
+    ))?;
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
-    let path = format!("/v1/repos/{repository}/merge-queue/pause");
+    let client = ctx.mergify_client()?;
+    let path = format!("/v1/repos/{}/merge-queue/pause", ctx.repository);
 
     match client.delete_if_exists(&path).await? {
         DeleteOutcome::Deleted => {

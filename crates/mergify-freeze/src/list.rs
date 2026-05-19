@@ -19,11 +19,9 @@ use std::io::Write;
 use anstyle::AnsiColor;
 use chrono::DateTime;
 use chrono::Utc;
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
-use mergify_core::HttpClient;
+use mergify_core::CommandContext;
 use mergify_core::Output;
-use mergify_core::auth;
 use mergify_tui::Theme;
 
 use crate::common::ScheduledFreeze;
@@ -39,14 +37,15 @@ pub struct ListOptions<'a> {
 
 /// Run the `freeze list` command.
 pub async fn run(opts: ListOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
 
-    output.status(&format!("Fetching scheduled freezes for {repository}…"))?;
+    output.status(&format!(
+        "Fetching scheduled freezes for {repo}…",
+        repo = ctx.repository,
+    ))?;
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
-    let path = format!("/v1/repos/{repository}/scheduled_freeze");
+    let client = ctx.mergify_client()?;
+    let path = format!("/v1/repos/{}/scheduled_freeze", ctx.repository);
     let raw: serde_json::Value = client.get(&path).await?;
 
     // Python's `list_freezes` returns `data["scheduled_freezes"]`
