@@ -15,6 +15,10 @@
 //!   palette. The same closure-based emit code paths produce
 //!   styled output on a TTY and plain text everywhere else with no
 //!   conditional branching at every write.
+//! - [`glyph`]: [`StyledGlyph`] — pairs a Unicode icon with the
+//!   [`anstyle::Style`] it's drawn in. Used by commands that map
+//!   state codes (check states, batch states, …) to a small visual
+//!   token.
 //! - [`time`]: [`relative_time`](time::relative_time) formats an
 //!   ISO-8601/RFC-3339 timestamp as a coarse delta (`Ns` / `Nm` /
 //!   `Nh` / `Nd`), with `~…` / `… ago` decorators for
@@ -27,9 +31,11 @@
 //!   [`LAST_CONTINUATION`](tree::LAST_CONTINUATION)) and the
 //!   [`branch_chars`](tree::branch_chars) helper.
 
+pub mod glyph;
 pub mod theme;
 pub mod time;
 pub mod tree;
 
+pub use glyph::StyledGlyph;
 pub use theme::Theme;
 pub use time::relative_time;
