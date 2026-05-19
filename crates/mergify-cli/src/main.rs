@@ -49,6 +49,18 @@ fn main() -> ExitCode {
         println!("✅");
     }
 
+    // Hidden flag — used by `mergify_cli/tests/queue/test_skill.py`
+    // (and any future cross-language test) to learn the set of
+    // commands the Rust binary handles natively without resorting
+    // to a hardcoded list that drifts. Format is one
+    // `<group> <subcommand>` pair per line.
+    if argv.first().is_some_and(|a| a == "--list-native-commands") {
+        for (group, sub) in NATIVE_COMMANDS {
+            println!("{group} {sub}");
+        }
+        return ExitCode::SUCCESS;
+    }
+
     if let Some(cmd) = detect_native(&argv) {
         return run_native(cmd);
     }
@@ -61,6 +73,23 @@ fn main() -> ExitCode {
         }
     }
 }
+
+/// Single source of truth for the `(group, subcommand)` pairs the
+/// Rust binary handles natively. Used by [`looks_native`] for argv
+/// recognition and by the `--list-native-commands` hidden flag so
+/// out-of-process tests can discover the list without hard-coding
+/// it. Add new entries here when porting a command; the matching
+/// `clap` `Subcommands` variant is what actually wires it up.
+const NATIVE_COMMANDS: &[(&str, &str)] = &[
+    ("config", "validate"),
+    ("config", "simulate"),
+    ("ci", "scopes-send"),
+    ("ci", "git-refs"),
+    ("ci", "queue-info"),
+    ("queue", "pause"),
+    ("queue", "unpause"),
+    ("queue", "status"),
+];
 
 /// Native commands the Rust binary handles without delegating to
 /// the Python shim.
@@ -126,12 +155,9 @@ struct QueueStatusOpts {
 /// classify the invocation as native.
 fn looks_native(argv: &[String]) -> bool {
     argv.windows(2).any(|pair| {
-        matches!(
-            (pair[0].as_str(), pair[1].as_str()),
-            ("config", "validate" | "simulate")
-                | ("ci", "scopes-send" | "git-refs" | "queue-info")
-                | ("queue", "pause" | "unpause" | "status"),
-        )
+        NATIVE_COMMANDS
+            .iter()
+            .any(|(g, s)| pair[0] == *g && pair[1] == *s)
     })
 }
 
