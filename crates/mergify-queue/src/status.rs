@@ -137,7 +137,7 @@ pub async fn run(opts: StatusOptions<'_>, output: &mut dyn Output) -> Result<(),
     let raw: serde_json::Value = client.get(&path).await?;
 
     if opts.output_json {
-        emit_json(output, &raw)?;
+        output.emit_json_value(&raw)?;
     } else {
         let view: StatusView = serde_json::from_value(raw)
             .map_err(|e| CliError::Generic(format!("decode merge queue status response: {e}")))?;
@@ -157,14 +157,6 @@ fn build_path(repository: &str, branch: Option<&str>) -> String {
         path.push_str(&encoded);
     }
     path
-}
-
-fn emit_json(output: &mut dyn Output, value: &serde_json::Value) -> std::io::Result<()> {
-    output.emit(value, &mut |w: &mut dyn Write| {
-        let rendered = serde_json::to_string_pretty(value)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        writeln!(w, "{rendered}")
-    })
 }
 
 fn emit_human(output: &mut dyn Output, repository: &str, view: &StatusView) -> std::io::Result<()> {

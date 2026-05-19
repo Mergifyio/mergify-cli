@@ -141,14 +141,12 @@ fn confirm(skip: bool, is_tty: bool, repository: &str) -> Result<(), CliError> {
 }
 
 fn emit_confirmation(output: &mut dyn Output, response: &PauseResponse) -> std::io::Result<()> {
-    let reason = response.reason.clone();
-    let paused_at = response.paused_at.clone();
     output.emit(&(), &mut |w: &mut dyn Write| {
-        match &reason {
+        match &response.reason {
             Some(r) => write!(w, "Queue paused: \"{r}\"")?,
             None => write!(w, "Queue paused")?,
         }
-        if let Some(ts) = &paused_at {
+        if let Some(ts) = &response.paused_at {
             write!(w, " (since {ts})")?;
         }
         writeln!(w)
