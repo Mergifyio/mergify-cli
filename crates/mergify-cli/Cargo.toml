@@ -14,6 +14,7 @@ name = "mergify"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4.5", features = ["derive"] }
 mergify-ci = { path = "../mergify-ci" }
 mergify-config = { path = "../mergify-config" }
