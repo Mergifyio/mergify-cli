@@ -11,11 +11,9 @@
 use std::io::Write;
 
 use chrono::NaiveDateTime;
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
-use mergify_core::HttpClient;
+use mergify_core::CommandContext;
 use mergify_core::Output;
-use mergify_core::auth;
 use serde::Serialize;
 
 use crate::common::NaiveDateTimeWire;
@@ -56,9 +54,7 @@ struct CreatePayload<'a> {
 
 /// Run the `freeze create` command.
 pub async fn run(opts: CreateOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
     let timezone = match opts.timezone {
         Some(tz) => tz.to_string(),
         None => detect_local_timezone()?,
@@ -85,10 +81,13 @@ pub async fn run(opts: CreateOptions<'_>, output: &mut dyn Output) -> Result<(),
         },
     };
 
-    output.status(&format!("Creating scheduled freeze for {repository}…"))?;
+    output.status(&format!(
+        "Creating scheduled freeze for {repo}…",
+        repo = ctx.repository,
+    ))?;
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
-    let path = format!("/v1/repos/{repository}/scheduled_freeze");
+    let client = ctx.mergify_client()?;
+    let path = format!("/v1/repos/{}/scheduled_freeze", ctx.repository);
     let freeze: ScheduledFreeze = client.post(&path, &payload).await?;
 
     output.emit(&(), &mut |w: &mut dyn Write| {
