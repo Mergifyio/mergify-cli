@@ -184,32 +184,7 @@ fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Clear every CI-provider env var the detector inspects, then
-    /// apply the test-specific overrides on top. Without this, a
-    /// test running on a real CI host inherits provider state and
-    /// the detector picks the wrong branch.
-    pub(crate) fn with_ci_env<F: FnOnce() -> R, R>(extra: &[(&str, Option<&str>)], f: F) -> R {
-        let mut vars: Vec<(String, Option<String>)> = [
-            "JENKINS_URL",
-            "GITHUB_ACTIONS",
-            "GITHUB_REPOSITORY",
-            "GITHUB_EVENT_PATH",
-            "CIRCLECI",
-            "CIRCLE_REPOSITORY_URL",
-            "BUILDKITE",
-            "BUILDKITE_REPO",
-            "BUILDKITE_PULL_REQUEST",
-            "GIT_URL",
-        ]
-        .into_iter()
-        .map(|k| (k.to_string(), None))
-        .collect();
-        for (k, v) in extra {
-            vars.push((k.to_string(), v.map(ToString::to_string)));
-        }
-        temp_env::with_vars(vars, f)
-    }
+    use crate::testing::with_ci_env;
 
     #[test]
     fn ci_provider_jenkins_takes_precedence() {
