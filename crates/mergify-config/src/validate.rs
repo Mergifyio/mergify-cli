@@ -57,10 +57,10 @@ pub async fn run(explicit_path: Option<&Path>, output: &mut dyn Output) -> Resul
 fn load_yaml(path: &Path) -> Result<serde_json::Value, CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::Configuration(format!("cannot read {}: {e}", path.display())))?;
-    // Parse as YAML into serde_norway::Value, then convert to JSON
+    // Parse as YAML into serde_yaml_ng::Value, then convert to JSON
     // so jsonschema can validate. The conversion is always lossless
     // for valid Mergify configs (mappings, sequences, scalars).
-    let yaml_value: serde_norway::Value = serde_norway::from_str(&text)
+    let yaml_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
         .map_err(|e| CliError::Configuration(format!("Invalid YAML in {}: {e}", path.display())))?;
     // Mergify configs are YAML mappings at the top level; an empty
     // file deserializes to Null, which we treat as an empty mapping.
