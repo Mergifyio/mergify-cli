@@ -1155,7 +1155,6 @@ version = "0.0.0"
 dependencies = [
  "anstyle",
  "chrono",
- "indexmap",
  "mergify-core",
  "mergify-test-support",
  "mergify-tui",
