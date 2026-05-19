@@ -1081,6 +1081,7 @@ dependencies = [
  "mergify-ci",
  "mergify-config",
  "mergify-core",
+ "mergify-freeze",
  "mergify-py-shim",
  "mergify-queue",
  "regex",
@@ -1115,6 +1116,20 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+ "wiremock",
+]
+
+[[package]]
+name = "mergify-freeze"
+version = "0.0.0"
+dependencies = [
+ "anstyle",
+ "chrono",
+ "mergify-core",
+ "mergify-tui",
+ "serde",
+ "serde_json",
+ "tokio",
  "wiremock",
 ]
 
