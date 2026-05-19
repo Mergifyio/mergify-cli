@@ -149,6 +149,53 @@ def test_queue_status(
     )
 
 
+def test_queue_show_not_in_queue(
+    live_admin_token: str,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`GET /v1/repos/{owner}/{repo}/merge-queue/pull/{n}` 404 path.
+
+    Uses the admin-scoped token because all queue endpoints (read
+    or write) require queue-management scope on the test repo;
+    the CI-scoped token is rejected with 403.
+
+    Calls with a PR number that is almost certainly not in the
+    queue (the test repo has far fewer than this many PRs).
+    Both Python and Rust special-case 404 with the same
+    user-facing message and ``MERGIFY_API_ERROR`` exit code (6)
+    — that contract is what this test pins.
+
+    Testing the 404 path (instead of a real queued PR) makes the
+    test independent of whether PR #1 happens to be queued at run
+    time. The endpoint reachability, auth, and 404 mapping are
+    the parts that would silently break on a URL or schema drift.
+    """
+    # Group-level options come BEFORE the subcommand — same
+    # invocation shape as the queue status smoke test (Click
+    # requires it for Python, Rust accepts both via clap's
+    # ``global = true``).
+    result = cli(
+        "queue",
+        "--api-url",
+        API_URL,
+        "--token",
+        live_admin_token,
+        "--repository",
+        REPOSITORY,
+        "show",
+        "99999999",
+    )
+    assert result.returncode == 6, (
+        f"expected MERGIFY_API_ERROR (6), got {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "not in the merge queue" in combined, (
+        f"expected 'not in the merge queue' message\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
 def test_ci_git_refs_fallback(
     cli: typing.Callable[..., typing.Any],
 ) -> None:
