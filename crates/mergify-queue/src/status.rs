@@ -454,8 +454,7 @@ fn group_by_scope<'a>(batches: &[&'a Batch]) -> IndexMap<String, Vec<&'a Batch>>
 
 #[cfg(test)]
 mod tests {
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -465,28 +464,6 @@ mod tests {
     use wiremock::matchers::query_param;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-    }
-
-    fn make_output(mode: OutputMode) -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            mode,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stdout }
-    }
-
-    fn stdout_string(cap: &Captured) -> String {
-        String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap()
-    }
 
     #[test]
     fn build_path_no_branch() {
@@ -624,7 +601,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -639,7 +616,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
         assert_eq!(parsed, response);
     }
@@ -659,7 +636,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -674,7 +651,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         assert!(stdout.contains("Merge Queue: owner/repo"), "got {stdout}");
         assert!(stdout.contains("Queue is paused"), "got {stdout}");
         assert!(stdout.contains("deploy freeze"), "got {stdout}");
@@ -695,7 +672,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -710,7 +687,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         assert!(stdout.contains("Queue is empty"), "got {stdout}");
     }
 
@@ -761,7 +738,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -776,7 +753,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         assert!(stdout.contains("Batches"), "got {stdout}");
         assert!(stdout.contains("running"), "got {stdout}");
         assert!(stdout.contains("checks 3/5"), "got {stdout}");
@@ -822,7 +799,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -837,7 +814,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         // Two scopes → each labelled by its own name (no
         // generic "Batches" header).
         assert!(stdout.contains("frontend"), "got {stdout}");
@@ -861,7 +838,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -899,7 +876,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             StatusOptions {
@@ -913,16 +890,5 @@ mod tests {
         )
         .await
         .unwrap();
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }

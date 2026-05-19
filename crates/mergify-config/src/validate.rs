@@ -156,8 +156,7 @@ fn emit_result(
 mod tests {
     use std::fs;
 
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -255,31 +254,17 @@ mod tests {
 
     #[test]
     fn emit_result_success_writes_to_output() {
-        let buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stdout_writer = SharedWriter(std::sync::Arc::clone(&buf));
-        let stderr_writer = SharedWriter(std::sync::Arc::clone(&stderr_buf));
-        let mut output = StdioOutput::with_sinks(OutputMode::Human, stdout_writer, stderr_writer);
-
-        emit_result(&mut output, Path::new("/tmp/x.yml"), &[]).unwrap();
-        let stdout = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        let mut cap = Captured::human();
+        emit_result(&mut cap.output, Path::new("/tmp/x.yml"), &[]).unwrap();
+        let stdout = cap.stdout();
         assert!(stdout.contains("is valid"));
     }
 
     #[test]
     fn emit_result_errors_lists_each() {
-        let buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stdout_writer = SharedWriter(std::sync::Arc::clone(&buf));
-        let stderr_writer = SharedWriter(std::sync::Arc::clone(&stderr_buf));
-        let mut output = StdioOutput::with_sinks(OutputMode::Human, stdout_writer, stderr_writer);
-
+        let mut cap = Captured::human();
         emit_result(
-            &mut output,
+            &mut cap.output,
             Path::new("/tmp/x.yml"),
             &[ValidationError {
                 path: "pull_request_rules.0".into(),
@@ -288,21 +273,9 @@ mod tests {
         )
         .unwrap();
 
-        let stdout = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(stdout.contains("has 1 error(s)"));
         assert!(stdout.contains("pull_request_rules.0"));
         assert!(stdout.contains("is not of type string"));
-    }
-
-    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }

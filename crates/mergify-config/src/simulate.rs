@@ -134,8 +134,7 @@ fn emit_result(output: &mut dyn Output, response: &SimulatorResponse) -> std::io
 mod tests {
     use std::fs;
 
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -205,16 +204,7 @@ mod tests {
         };
         let api_url = server.uri();
 
-        let stdout: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut output = StdioOutput::with_sinks(
-            OutputMode::Human,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-
+        let mut cap = Captured::human();
         run(
             SimulateOptions {
                 pull_request: &pull_request,
@@ -222,13 +212,12 @@ mod tests {
                 token: Some("test-token"),
                 api_url: Some(&api_url),
             },
-            &mut output,
+            &mut cap.output,
         )
         .await
         .unwrap();
 
-        let stdout_bytes = stdout.lock().unwrap().clone();
-        let stdout_str = String::from_utf8(stdout_bytes).unwrap();
+        let stdout_str = cap.stdout();
         assert!(
             stdout_str.contains("Would merge immediately"),
             "expected title in output: {stdout_str:?}",
@@ -237,17 +226,5 @@ mod tests {
             stdout_str.contains("All conditions pass."),
             "expected summary in output: {stdout_str:?}",
         );
-    }
-
-    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }
