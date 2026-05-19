@@ -1,0 +1,17 @@
+[package]
+name = "mergify-tui"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reusable terminal-UI primitives for mergify-cli: ANSI styling, relative-time formatter, tree-drawing characters."
+publish = false
+
+[dependencies]
+anstyle = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[lints]
+workspace = true
