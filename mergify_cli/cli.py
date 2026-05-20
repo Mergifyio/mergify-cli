@@ -30,7 +30,6 @@ from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.dym import DYMGroup
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.freeze import cli as freeze_cli_mod
-from mergify_cli.queue import cli as queue_cli_mod
 from mergify_cli.stack import cli as stack_cli_mod
 
 
@@ -54,7 +53,6 @@ def cli(
 cli.add_command(stack_cli_mod.stack)
 cli.add_command(ci_cli_mod.ci)
 cli.add_command(freeze_cli_mod.freeze)
-cli.add_command(queue_cli_mod.queue)
 
 
 def main() -> None:

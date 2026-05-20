@@ -129,6 +129,23 @@ impl Client {
         self.decode_json(resp).await
     }
 
+    /// GET `path`, returning `None` on 404. Other 4xx/5xx responses
+    /// surface as the normal `CliError` API failure. Mirrors
+    /// [`Self::delete_if_exists`] but for read-only endpoints where
+    /// "not found" is a meaningful caller branch (e.g. `queue show`
+    /// must distinguish "PR not in queue" from a genuine API
+    /// failure).
+    pub async fn get_if_exists<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<Option<T>, CliError> {
+        let url = self.join(path)?;
+        match self.execute_request_optional(self.inner.get(url)).await? {
+            Some(resp) => self.decode_json(resp).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// POST `body` as JSON to `path` and deserialize the JSON
     /// response as `T`.
     pub async fn post<B: Serialize + ?Sized, T: DeserializeOwned>(
@@ -197,14 +214,29 @@ impl Client {
             .map_err(|e| self.api_error(format!("invalid path {path:?}: {e}")))
     }
 
-    /// Execute a request that cares only about the HTTP status.
+    /// Single retry/auth/error driver behind every public verb.
     ///
-    /// Used by [`Self::delete_if_exists`] — the response body (if
-    /// any) is discarded.
-    async fn execute_status(
+    /// `tolerate_not_found` lets callers opt into "404 is a
+    /// caller-branch, not an error" semantics:
+    ///
+    /// - `false` (default for `get` / `post` / `put`): 404 surfaces
+    ///   as a [`CliError`] like any other 4xx.
+    /// - `true` (for `get_if_exists` / `delete_if_exists`): 404
+    ///   short-circuits to `Ok(None)`. The HTTP body is dropped.
+    ///
+    /// Success (2xx) always returns `Ok(Some(response))` — the
+    /// caller decides whether to decode the body, drop it, or
+    /// map it to a domain type.
+    ///
+    /// 5xx is retried with exponential backoff (`self.retry`);
+    /// transient send errors (timeout / connect) are retried with
+    /// the same backoff. Other terminal errors and non-5xx 4xx
+    /// fail immediately.
+    async fn execute_with_retry(
         &self,
         builder: reqwest::RequestBuilder,
-    ) -> Result<DeleteOutcome, CliError> {
+        tolerate_not_found: bool,
+    ) -> Result<Option<reqwest::Response>, CliError> {
         let mut backoff = self.retry.initial_backoff;
         let mut last_message = String::from("HTTP request failed without response");
 
@@ -223,10 +255,10 @@ impl Client {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {
-                        return Ok(DeleteOutcome::Deleted);
+                        return Ok(Some(resp));
                     }
-                    if status == StatusCode::NOT_FOUND {
-                        return Ok(DeleteOutcome::NotFound);
+                    if tolerate_not_found && status == StatusCode::NOT_FOUND {
+                        return Ok(None);
                     }
                     last_message = error_message(status, resp).await;
                     if status.is_server_error() && attempt + 1 < self.retry.max_attempts {
@@ -249,49 +281,40 @@ impl Client {
         Err(self.api_error(last_message))
     }
 
+    /// Send a request that must return a response. 404 is treated
+    /// like any other 4xx (caller error → [`CliError`]).
     async fn execute_request(
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, CliError> {
-        let mut backoff = self.retry.initial_backoff;
-        let mut last_message = String::from("HTTP request failed without response");
+        // `tolerate_not_found = false` means the driver never
+        // returns `None`; `Option::expect` documents that invariant.
+        Ok(self
+            .execute_with_retry(builder, false)
+            .await?
+            .expect("execute_with_retry returned None despite tolerate_not_found=false"))
+    }
 
-        for attempt in 0..self.retry.max_attempts {
-            let Some(cloned) = builder.try_clone() else {
-                return Err(self.api_error(
-                    "request body is not cloneable (streaming?) — cannot retry".into(),
-                ));
-            };
-            let req = match &self.token {
-                Some(token) => cloned.bearer_auth(token),
-                None => cloned,
-            };
+    /// Send a request where 404 is a routine caller branch
+    /// rather than a server failure. Used by [`Self::get_if_exists`].
+    async fn execute_request_optional(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<Option<reqwest::Response>, CliError> {
+        self.execute_with_retry(builder, true).await
+    }
 
-            match req.send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status.is_success() {
-                        return Ok(resp);
-                    }
-                    last_message = error_message(status, resp).await;
-                    if status.is_server_error() && attempt + 1 < self.retry.max_attempts {
-                        tokio::time::sleep(backoff).await;
-                        backoff *= 2;
-                        continue;
-                    }
-                    return Err(self.api_error(last_message));
-                }
-                Err(e) if is_transient(&e) && attempt + 1 < self.retry.max_attempts => {
-                    last_message = format!("network error: {e}");
-                    tokio::time::sleep(backoff).await;
-                    backoff *= 2;
-                }
-                Err(e) => {
-                    return Err(self.api_error(self.terminal_send_error_message(&e)));
-                }
-            }
+    /// Send a request that cares only about the HTTP status.
+    /// Used by [`Self::delete_if_exists`] — the response body
+    /// (if any) is discarded.
+    async fn execute_status(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<DeleteOutcome, CliError> {
+        match self.execute_with_retry(builder, true).await? {
+            Some(_) => Ok(DeleteOutcome::Deleted),
+            None => Ok(DeleteOutcome::NotFound),
         }
-        Err(self.api_error(last_message))
     }
 
     async fn decode_json<T: DeserializeOwned>(
@@ -707,5 +730,93 @@ mod tests {
             "error message not bounded: len={}",
             msg.len()
         );
+    }
+
+    #[tokio::test]
+    async fn get_if_exists_returns_some_on_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .and(header("Authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Foo { bar: 7 }))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let got: Option<Foo> = client.get_if_exists("/foo").await.unwrap();
+        assert_eq!(got, Some(Foo { bar: 7 }));
+    }
+
+    #[tokio::test]
+    async fn get_if_exists_returns_none_on_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/missing"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let got: Option<Foo> = client.get_if_exists("/missing").await.unwrap();
+        assert!(got.is_none(), "expected None on 404, got {got:?}");
+    }
+
+    #[tokio::test]
+    async fn get_if_exists_surfaces_other_4xx_as_error() {
+        // 403 / 401 / 422 etc. are real failures, not "doesn't
+        // exist" — they must surface as `CliError`. Only 404 is
+        // mapped to `None`.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/forbidden"))
+            .respond_with(ResponseTemplate::new(403).set_body_string(r#"{"detail":"nope"}"#))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let err = client.get_if_exists::<Foo>("/forbidden").await.unwrap_err();
+        assert!(
+            matches!(err, CliError::MergifyApi(_)),
+            "expected MergifyApi, got {err:?}",
+        );
+        assert!(err.to_string().contains("403"));
+    }
+
+    #[tokio::test]
+    async fn get_if_exists_retries_5xx_then_succeeds() {
+        // Same retry semantics as `get`: a 500 on the first
+        // attempt should not short-circuit; the second attempt's
+        // 200 must be returned as `Some`.
+        struct FlakyRespond {
+            calls: Arc<AtomicU32>,
+        }
+        impl Respond for FlakyRespond {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    ResponseTemplate::new(500)
+                } else {
+                    ResponseTemplate::new(200).set_body_json(Foo { bar: 9 })
+                }
+            }
+        }
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicU32::new(0));
+        Mock::given(method("GET"))
+            .and(path("/flaky"))
+            .respond_with(FlakyRespond {
+                calls: Arc::clone(&calls),
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let got: Option<Foo> = client.get_if_exists("/flaky").await.unwrap();
+        assert_eq!(got, Some(Foo { bar: 9 }));
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "expected two attempts");
     }
 }
