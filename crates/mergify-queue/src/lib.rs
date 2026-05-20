@@ -10,5 +10,6 @@
 //! ports next.
 
 pub mod pause;
+pub mod show;
 pub mod status;
 pub mod unpause;

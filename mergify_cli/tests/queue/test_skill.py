@@ -102,21 +102,17 @@ def test_skill_has_required_sections() -> None:
 
 def test_skill_references_valid_commands() -> None:
     """Every `mergify queue <cmd>` reference in the skill must resolve
-    to either a registered click command (still-shimmed) or a
-    Rust-native command reported by the binary. Catches typos and
-    skill drift after a port — and stays accurate without a parallel
-    hard-coded list because the native set is queried from
-    `mergify --list-native-commands` itself.
+    to a Rust-native command reported by the binary. The whole
+    `queue` group has been ported, so the binary is the only source
+    of truth — no parallel click-command list to consult.
     """
-    from mergify_cli.queue.cli import queue
-
     content = _get_skill_content()
     referenced = set(re.findall(r"mergify queue ([\w-]+)", content))
-    available = set(queue.commands.keys()) | _native_commands_for_group("queue")
+    available = _native_commands_for_group("queue")
 
     for cmd in referenced:
         assert cmd in available, (
-            f"Skill references 'mergify queue {cmd}' but it's neither a "
-            f"registered click command nor a Rust-native command. "
+            f"Skill references 'mergify queue {cmd}' but it's not a "
+            f"Rust-native command reported by `mergify --list-native-commands`. "
             f"Available: {sorted(available)}"
         )
