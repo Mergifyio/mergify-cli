@@ -246,6 +246,113 @@ def test_freeze_list(
     )
 
 
+def test_freeze_create_update_delete_roundtrip(
+    live_admin_token: str,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`POST` + `PATCH` + `POST .../{id}/delete` round-trip on
+    ``/v1/repos/{owner}/{repo}/scheduled_freeze``.
+
+    Uses the admin-scoped token (scheduled-freeze endpoints sit
+    under the queue-management family and the CI-scoped token is
+    rejected with 403).
+
+    The roundtrip schedules a freeze far in the future so we don't
+    disturb real merges in the test repo. Cleanup runs from
+    ``finally`` so the freeze is deleted even if an assertion in
+    the middle of the test fails — and the test is also tolerant
+    of a leaked freeze from a previous interrupted run (the create
+    still succeeds because each run uses a unique reason; the
+    orphan can be cleaned up out of band).
+
+    The Mergify API requires ``delete_reason`` on every delete
+    (the Python ``--reason`` help text says "required if freeze is
+    active", but the server returns 422 for a missing key
+    regardless of the freeze's active state). The test always
+    passes ``--reason`` so the cleanup succeeds even on the
+    server-validated path.
+    """
+    import re
+    import time
+
+    # Unique reason so concurrent or repeated runs don't fight over
+    # the same row.
+    reason = f"func-tests-live-smoke-{int(time.time())}"
+
+    create = cli(
+        "freeze",
+        "--api-url",
+        API_URL,
+        "--token",
+        live_admin_token,
+        "--repository",
+        REPOSITORY,
+        "create",
+        "--reason",
+        reason,
+        "--timezone",
+        "UTC",
+        "--start",
+        "2099-01-01T00:00:00",
+        "--end",
+        "2099-01-02T00:00:00",
+    )
+    assert create.returncode == 0, (
+        f"freeze create failed\nstdout:\n{create.stdout}\nstderr:\n{create.stderr}"
+    )
+    # The Python create command prints the freeze body via
+    # ``_print_freeze`` — pull the UUID out so we can target the
+    # update + delete by ID. The Rust port emits the same human
+    # block, so this regex pins both ends of the port.
+    match = re.search(r"ID:\s+([0-9a-fA-F-]{36})", create.stdout)
+    assert match, f"could not find freeze ID in create output\nstdout:\n{create.stdout}"
+    freeze_id = match.group(1)
+
+    try:
+        update = cli(
+            "freeze",
+            "--api-url",
+            API_URL,
+            "--token",
+            live_admin_token,
+            "--repository",
+            REPOSITORY,
+            "update",
+            freeze_id,
+            "--reason",
+            f"{reason}-updated",
+        )
+        assert update.returncode == 0, (
+            f"freeze update failed\nstdout:\n{update.stdout}\nstderr:\n{update.stderr}"
+        )
+        assert f"{reason}-updated" in update.stdout, (
+            f"freeze update did not echo the new reason\n"
+            f"stdout:\n{update.stdout}\nstderr:\n{update.stderr}"
+        )
+    finally:
+        delete = cli(
+            "freeze",
+            "--api-url",
+            API_URL,
+            "--token",
+            live_admin_token,
+            "--repository",
+            REPOSITORY,
+            "delete",
+            freeze_id,
+            "--reason",
+            f"{reason}-cleanup",
+        )
+
+    assert delete.returncode == 0, (
+        f"freeze delete failed\nstdout:\n{delete.stdout}\nstderr:\n{delete.stderr}"
+    )
+    assert "deleted" in delete.stdout.lower(), (
+        f"freeze delete did not print confirmation\n"
+        f"stdout:\n{delete.stdout}\nstderr:\n{delete.stderr}"
+    )
+
+
 def test_ci_git_refs_fallback(
     cli: typing.Callable[..., typing.Any],
 ) -> None:
