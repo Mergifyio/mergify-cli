@@ -1,0 +1,25 @@
+[package]
+name = "mergify-freeze"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native implementation of `mergify freeze` subcommands."
+publish = false
+
+[dependencies]
+mergify-core = { path = "../mergify-core" }
+mergify-tui = { path = "../mergify-tui" }
+anstyle = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
+wiremock = "0.6"
+
+[lints]
+workspace = true
