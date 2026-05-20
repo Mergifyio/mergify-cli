@@ -129,7 +129,7 @@ pub async fn run(opts: ShowOptions<'_>, output: &mut dyn Output) -> Result<(), C
     };
 
     if opts.output_json {
-        emit_json(output, &raw)?;
+        output.emit_json_value(&raw)?;
         return Ok(());
     }
 
@@ -137,14 +137,6 @@ pub async fn run(opts: ShowOptions<'_>, output: &mut dyn Output) -> Result<(), C
         .map_err(|e| CliError::Generic(format!("decode merge queue pull response: {e}")))?;
     emit_human(output, &view, opts.verbose)?;
     Ok(())
-}
-
-fn emit_json(output: &mut dyn Output, value: &serde_json::Value) -> std::io::Result<()> {
-    output.emit(value, &mut |w: &mut dyn Write| {
-        let rendered = serde_json::to_string_pretty(value)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        writeln!(w, "{rendered}")
-    })
 }
 
 fn emit_human(output: &mut dyn Output, view: &PullView, verbose: bool) -> std::io::Result<()> {
@@ -310,14 +302,14 @@ fn print_checks_summary(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> s
     write!(
         w,
         "{S}{passed} passed{R}",
-        S = enabled_fg(theme, AnsiColor::Green),
+        S = theme.fg(AnsiColor::Green),
         R = theme.reset,
     )?;
     if pending > 0 {
         write!(
             w,
             ", {S}{pending} pending{R}",
-            S = enabled_fg(theme, AnsiColor::Blue),
+            S = theme.fg(AnsiColor::Blue),
             R = theme.reset,
         )?;
     }
@@ -325,7 +317,7 @@ fn print_checks_summary(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> s
         write!(
             w,
             ", {S}{failed} failed{R}",
-            S = enabled_fg(theme, AnsiColor::Red),
+            S = theme.fg(AnsiColor::Red),
             R = theme.reset,
         )?;
     }
@@ -356,20 +348,12 @@ fn print_checks_summary(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> s
 /// the renderer never crashes on a new API code.
 fn check_state_glyph(theme: &Theme, state: &str) -> (&'static str, Style) {
     match state {
-        "success" => ("✓", enabled_fg(theme, AnsiColor::Green)),
-        "pending" => ("◌", enabled_fg(theme, AnsiColor::Yellow)),
-        "failure" | "error" | "action_required" => ("✗", enabled_fg(theme, AnsiColor::Red)),
-        "timed_out" => ("⏰", enabled_fg(theme, AnsiColor::Red)),
+        "success" => ("✓", theme.fg(AnsiColor::Green)),
+        "pending" => ("◌", theme.fg(AnsiColor::Yellow)),
+        "failure" | "error" | "action_required" => ("✗", theme.fg(AnsiColor::Red)),
+        "timed_out" => ("⏰", theme.fg(AnsiColor::Red)),
         "cancelled" | "neutral" | "skipped" | "stale" => ("○", theme.dim),
         _ => ("?", theme.dim),
-    }
-}
-
-fn enabled_fg(theme: &Theme, color: AnsiColor) -> Style {
-    if theme.enabled {
-        theme.fg(color)
-    } else {
-        Style::new()
     }
 }
 
@@ -394,9 +378,9 @@ fn print_conditions_section(
     let met = top.iter().filter(|s| s.r#match).count();
     let total = top.len();
     let style = if met == total {
-        enabled_fg(theme, AnsiColor::Green)
+        theme.fg(AnsiColor::Green)
     } else {
-        enabled_fg(theme, AnsiColor::Yellow)
+        theme.fg(AnsiColor::Yellow)
     };
     writeln!(
         w,
@@ -417,7 +401,7 @@ fn print_conditions_section(
         writeln!(
             w,
             "  {S}✗{R} {summary}",
-            S = enabled_fg(theme, AnsiColor::Red),
+            S = theme.fg(AnsiColor::Red),
             R = theme.reset,
         )?;
     }
@@ -466,9 +450,9 @@ fn write_condition_tree(
     for (i, node) in nodes.iter().enumerate() {
         let (branch, continuation) = tree::branch_chars(i == last);
         let (icon, style) = if node.r#match {
-            ("✓", enabled_fg(theme, AnsiColor::Green))
+            ("✓", theme.fg(AnsiColor::Green))
         } else {
-            ("✗", enabled_fg(theme, AnsiColor::Red))
+            ("✗", theme.fg(AnsiColor::Red))
         };
         writeln!(
             w,

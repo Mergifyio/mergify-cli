@@ -42,6 +42,23 @@ pub trait Output {
     /// no-op to preserve stdout purity; in human mode it writes to
     /// stderr so piping stdout into a file is unaffected.
     fn status(&mut self, message: &str) -> io::Result<()>;
+
+    /// Emit a raw [`serde_json::Value`] as the command's only output.
+    ///
+    /// Convenience wrapper for the `--json` passthrough commands
+    /// (`queue status`, `queue show`, `freeze list`, …) — every such
+    /// command needs the same shape: the value goes out as one JSON
+    /// document, both when the [`OutputMode`] is `Json` and (via the
+    /// human closure) when the user passed `--json` but the
+    /// [`OutputMode`] is still `Human`. Implemented in terms of
+    /// [`Output::emit`].
+    fn emit_json_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
+        self.emit(value, &mut |w| {
+            let rendered = serde_json::to_string_pretty(value)
+                .map_err(|err| io::Error::other(err.to_string()))?;
+            writeln!(w, "{rendered}")
+        })
+    }
 }
 
 /// `dyn Serialize` cannot be constructed directly because
