@@ -1,9 +1,13 @@
 //! Native Rust implementation of the `mergify freeze` subcommands.
 //!
-//! `freeze list` is the first port — a read-only `GET` on
-//! `/v1/repos/<repo>/scheduled_freeze` with either a JSON
-//! passthrough of the inner `scheduled_freezes` array or a
-//! human-readable table. `create` / `update` / `delete` follow
-//! the same module-per-subcommand layout once they land.
+//! Each freeze subcommand owns a module. `list` is a read-only GET;
+//! `create`/`update`/`delete` mutate the `/v1/repos/<repo>/scheduled_freeze`
+//! resource and share a small block of helpers in [`common`] —
+//! "print one freeze", naive-datetime parsing, system-timezone
+//! detection.
 
+pub mod common;
+pub mod create;
+pub mod delete;
 pub mod list;
+pub mod update;
