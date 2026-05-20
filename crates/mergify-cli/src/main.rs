@@ -26,6 +26,7 @@ use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
+use mergify_freeze::list::ListOptions as FreezeListOptions;
 use mergify_queue::pause::PauseOptions;
 use mergify_queue::show::ShowOptions;
 use mergify_queue::status::StatusOptions;
@@ -91,6 +92,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("queue", "unpause"),
     ("queue", "status"),
     ("queue", "show"),
+    ("freeze", "list"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -105,6 +107,7 @@ enum NativeCommand {
     QueueUnpause(QueueUnpauseOpts),
     QueueStatus(QueueStatusOpts),
     QueueShow(QueueShowOpts),
+    FreezeList(FreezeListOpts),
 }
 
 struct ConfigSimulateOpts {
@@ -153,6 +156,13 @@ struct QueueShowOpts {
     api_url: Option<String>,
     pr_number: u64,
     verbose: bool,
+    output_json: bool,
+}
+
+struct FreezeListOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
     output_json: bool,
 }
 
@@ -334,6 +344,17 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             verbose,
             output_json: json,
         })),
+        Subcommands::Freeze(FreezeArgs {
+            repository,
+            token,
+            api_url,
+            command: FreezeSubcommand::List(FreezeListCliArgs { json }),
+        }) => Some(NativeCommand::FreezeList(FreezeListOpts {
+            repository,
+            token,
+            api_url,
+            output_json: json,
+        })),
     }
 }
 
@@ -440,6 +461,18 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 )
                 .await
             }
+            NativeCommand::FreezeList(opts) => {
+                mergify_freeze::list::run(
+                    FreezeListOptions {
+                        repository: opts.repository.as_deref(),
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                        output_json: opts.output_json,
+                    },
+                    &mut output,
+                )
+                .await
+            }
         }
     });
 
@@ -469,6 +502,8 @@ enum Subcommands {
     Ci(CiArgs),
     /// Manage the Mergify merge queue.
     Queue(QueueArgs),
+    /// Manage scheduled freezes.
+    Freeze(FreezeArgs),
 }
 
 #[derive(clap::Args)]
@@ -652,6 +687,41 @@ struct ShowCliArgs {
     verbose: bool,
 
     /// Emit the raw API response as a single JSON document.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct FreezeArgs {
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't', global = true)]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u', global = true)]
+    api_url: Option<String>,
+
+    /// Repository full name (owner/repo). Falls back to
+    /// ``GITHUB_REPOSITORY`` env var.
+    #[arg(long, short = 'r', global = true)]
+    repository: Option<String>,
+
+    #[command(subcommand)]
+    command: FreezeSubcommand,
+}
+
+#[derive(Subcommand)]
+enum FreezeSubcommand {
+    /// List scheduled freezes for a repository.
+    List(FreezeListCliArgs),
+}
+
+#[derive(clap::Args)]
+struct FreezeListCliArgs {
+    /// Emit the raw `scheduled_freezes` array as a single JSON
+    /// document.
     #[arg(long, default_value_t = false)]
     json: bool,
 }
