@@ -1,17 +1,17 @@
 //! `mergify` binary entry point.
 //!
 //! Dispatch logic: every invocation is speculatively parsed with
-//! clap, which knows about the native commands
-//! ([`ConfigSubcommand::Validate`], [`ConfigSubcommand::Simulate`]).
-//! If clap succeeds with a known native variant the binary runs
-//! that code path natively. Any parse failure — including
-//! subcommands clap doesn't know about (``stack push``, ``ci
-//! junit-process``, …) — falls through to [`mergify_py_shim::run`],
-//! which hands the original argv to ``python3 -m mergify_cli``.
+//! clap, which knows about the natively-ported commands listed in
+//! [`NATIVE_COMMANDS`]. If clap succeeds with a known native
+//! variant the binary runs that code path natively. Any parse
+//! failure — including subcommands clap doesn't know about
+//! (``stack push``, ``ci junit-process``, …) — falls through to
+//! [`mergify_py_shim::run`], which hands the original argv to
+//! ``python3 -m mergify_cli``.
 //!
-//! As each command ports (Phase 1.4+), new variants land on the
-//! clap enum and the shim fallback shrinks. Phase 6 deletes the
-//! shim entirely.
+//! As each Python command is ported to Rust, a new entry lands in
+//! [`NATIVE_COMMANDS`] and a matching clap variant; the shim
+//! fallback shrinks accordingly until it can be removed entirely.
 
 use std::env;
 use std::path::PathBuf;
