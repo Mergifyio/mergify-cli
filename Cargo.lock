@@ -223,6 +223,7 @@ checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -1061,6 +1062,8 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 name = "mergify-ci"
 version = "0.0.0"
 dependencies = [
+ "chrono",
+ "futures",
  "mergify-core",
  "serde",
  "serde_json",

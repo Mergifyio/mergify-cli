@@ -22,6 +22,9 @@ and global options (`--token`, `--repository`, `--api-url`).
 - **`mergify ci`** — Upload JUnit results, evaluate quarantine, detect git
   refs and CI scopes.
   [Docs](https://docs.mergify.com/ci-insights/)
+- **`mergify tests`** — Inspect test health tracked by Mergify CI Insights
+  (`mergify tests show NAME...`).
+  [Docs](https://docs.mergify.com/ci-insights/)
 - **`mergify queue`** — Monitor and manage the Mergify merge queue.
   [Docs](https://docs.mergify.com/merge-queue/)
 - **`mergify freeze`** — Create and manage scheduled merge freezes.

@@ -22,6 +22,7 @@ use clap::Subcommand;
 use mergify_ci::git_refs::Format as GitRefsFormat;
 use mergify_ci::git_refs::GitRefsOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
+use mergify_ci::tests_show::TestsShowOptions;
 use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
@@ -87,6 +88,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("ci", "scopes-send"),
     ("ci", "git-refs"),
     ("ci", "queue-info"),
+    ("tests", "show"),
     ("queue", "pause"),
     ("queue", "unpause"),
     ("queue", "status"),
@@ -101,6 +103,7 @@ enum NativeCommand {
     CiScopesSend(CiScopesSendOpts),
     CiGitRefs { format: GitRefsFormat },
     CiQueueInfo,
+    TestsShow(TestsShowOpts),
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
     QueueStatus(QueueStatusOpts),
@@ -154,6 +157,19 @@ struct QueueShowOpts {
     pr_number: u64,
     verbose: bool,
     output_json: bool,
+}
+
+struct TestsShowOpts {
+    repository: String,
+    test_names: Vec<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    pipeline_name: Vec<String>,
+    pipeline_name_exclude: Vec<String>,
+    job_name: Vec<String>,
+    job_name_exclude: Vec<String>,
+    per_page: Option<u32>,
+    json: bool,
 }
 
 /// Heuristic: does argv look like the user intended a native
@@ -278,6 +294,32 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::QueueInfo,
         }) => Some(NativeCommand::CiQueueInfo),
+        Subcommands::Tests(TestsArgs {
+            command:
+                TestsSubcommand::Show(TestsShowCliArgs {
+                    repository,
+                    test_names,
+                    token,
+                    api_url,
+                    pipeline_name,
+                    pipeline_name_exclude,
+                    job_name,
+                    job_name_exclude,
+                    per_page,
+                    json,
+                }),
+        }) => Some(NativeCommand::TestsShow(TestsShowOpts {
+            repository,
+            test_names,
+            token,
+            api_url,
+            pipeline_name,
+            pipeline_name_exclude,
+            job_name,
+            job_name_exclude,
+            per_page,
+            json,
+        })),
         Subcommands::Queue(QueueArgs {
             repository,
             token,
@@ -350,36 +392,60 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
         }
     };
 
-    let mut output = StdioOutput::new(OutputMode::Human);
+    // Each command picks its `OutputMode` after the pattern match —
+    // every command except `tests show` uses Human; that one
+    // honors `--json`.
+    let mode = match &cmd {
+        NativeCommand::TestsShow(opts) if opts.json => OutputMode::Json,
+        _ => OutputMode::Human,
+    };
+    let mut output = StdioOutput::new(mode);
 
-    let result = rt.block_on(async {
+    let result: Result<mergify_core::ExitCode, mergify_core::CliError> = rt.block_on(async {
         match cmd {
             NativeCommand::ConfigValidate { config_file } => {
-                mergify_config::validate::run(config_file.as_deref(), &mut output).await
+                mergify_config::validate::run(config_file.as_deref(), &mut output)
+                    .await
+                    .map(|()| mergify_core::ExitCode::Success)
             }
-            NativeCommand::ConfigSimulate(opts) => {
-                mergify_config::simulate::run(
-                    SimulateOptions {
-                        pull_request: &opts.pull_request,
-                        config_file: opts.config_file.as_deref(),
+            NativeCommand::ConfigSimulate(opts) => mergify_config::simulate::run(
+                SimulateOptions {
+                    pull_request: &opts.pull_request,
+                    config_file: opts.config_file.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::CiScopesSend(opts) => mergify_ci::scopes_send::run(
+                ScopesSendOptions {
+                    repository: opts.repository.as_deref(),
+                    pull_request: opts.pull_request,
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                    scopes: &opts.scopes,
+                    scopes_json: opts.scopes_json.as_deref(),
+                    scopes_file: opts.scopes_file.as_deref(),
+                    deprecated_file: opts.file_deprecated.as_deref(),
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::TestsShow(opts) => {
+                mergify_ci::tests_show::run(
+                    TestsShowOptions {
+                        repository: &opts.repository,
+                        test_names: &opts.test_names,
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
-                    },
-                    &mut output,
-                )
-                .await
-            }
-            NativeCommand::CiScopesSend(opts) => {
-                mergify_ci::scopes_send::run(
-                    ScopesSendOptions {
-                        repository: opts.repository.as_deref(),
-                        pull_request: opts.pull_request,
-                        token: opts.token.as_deref(),
-                        api_url: opts.api_url.as_deref(),
-                        scopes: &opts.scopes,
-                        scopes_json: opts.scopes_json.as_deref(),
-                        scopes_file: opts.scopes_file.as_deref(),
-                        deprecated_file: opts.file_deprecated.as_deref(),
+                        pipeline_name: &opts.pipeline_name,
+                        pipeline_name_exclude: &opts.pipeline_name_exclude,
+                        job_name: &opts.job_name,
+                        job_name_exclude: &opts.job_name_exclude,
+                        per_page: opts.per_page,
                     },
                     &mut output,
                 )
@@ -387,64 +453,63 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             }
             NativeCommand::CiGitRefs { format } => {
                 mergify_ci::git_refs::run(&GitRefsOptions { format }, &mut output)
+                    .map(|()| mergify_core::ExitCode::Success)
             }
-            NativeCommand::CiQueueInfo => mergify_ci::queue_info::run(&mut output),
-            NativeCommand::QueuePause(opts) => {
-                mergify_queue::pause::run(
-                    PauseOptions {
-                        repository: opts.repository.as_deref(),
-                        token: opts.token.as_deref(),
-                        api_url: opts.api_url.as_deref(),
-                        reason: &opts.reason,
-                        yes_i_am_sure: opts.yes_i_am_sure,
-                    },
-                    &mut output,
-                )
-                .await
+            NativeCommand::CiQueueInfo => {
+                mergify_ci::queue_info::run(&mut output).map(|()| mergify_core::ExitCode::Success)
             }
-            NativeCommand::QueueUnpause(opts) => {
-                mergify_queue::unpause::run(
-                    UnpauseOptions {
-                        repository: opts.repository.as_deref(),
-                        token: opts.token.as_deref(),
-                        api_url: opts.api_url.as_deref(),
-                    },
-                    &mut output,
-                )
-                .await
-            }
-            NativeCommand::QueueStatus(opts) => {
-                mergify_queue::status::run(
-                    StatusOptions {
-                        repository: opts.repository.as_deref(),
-                        token: opts.token.as_deref(),
-                        api_url: opts.api_url.as_deref(),
-                        branch: opts.branch.as_deref(),
-                        output_json: opts.output_json,
-                    },
-                    &mut output,
-                )
-                .await
-            }
-            NativeCommand::QueueShow(opts) => {
-                mergify_queue::show::run(
-                    ShowOptions {
-                        repository: opts.repository.as_deref(),
-                        token: opts.token.as_deref(),
-                        api_url: opts.api_url.as_deref(),
-                        pr_number: opts.pr_number,
-                        verbose: opts.verbose,
-                        output_json: opts.output_json,
-                    },
-                    &mut output,
-                )
-                .await
-            }
+            NativeCommand::QueuePause(opts) => mergify_queue::pause::run(
+                PauseOptions {
+                    repository: opts.repository.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                    reason: &opts.reason,
+                    yes_i_am_sure: opts.yes_i_am_sure,
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::QueueUnpause(opts) => mergify_queue::unpause::run(
+                UnpauseOptions {
+                    repository: opts.repository.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::QueueStatus(opts) => mergify_queue::status::run(
+                StatusOptions {
+                    repository: opts.repository.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                    branch: opts.branch.as_deref(),
+                    output_json: opts.output_json,
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::QueueShow(opts) => mergify_queue::show::run(
+                ShowOptions {
+                    repository: opts.repository.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                    pr_number: opts.pr_number,
+                    verbose: opts.verbose,
+                    output_json: opts.output_json,
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
         }
     });
 
     match result {
-        Ok(()) => ExitCode::from(mergify_core::ExitCode::Success.as_u8()),
+        Ok(code) => ExitCode::from(code.as_u8()),
         Err(err) => {
             let code = err.exit_code();
             eprintln!("mergify: {err}");
@@ -467,6 +532,8 @@ enum Subcommands {
     Config(ConfigArgs),
     /// Mergify CI-related commands.
     Ci(CiArgs),
+    /// Inspect tests tracked by Mergify CI Insights.
+    Tests(TestsArgs),
     /// Manage the Mergify merge queue.
     Queue(QueueArgs),
 }
@@ -541,6 +608,70 @@ struct GitRefsCliArgs {
         value_parser = mergify_ci::git_refs::Format::parse,
     )]
     format: GitRefsFormat,
+}
+
+#[derive(clap::Args)]
+struct TestsArgs {
+    #[command(subcommand)]
+    command: TestsSubcommand,
+}
+
+#[derive(Subcommand)]
+enum TestsSubcommand {
+    /// Look up tests by name and print their health and metrics.
+    Show(TestsShowCliArgs),
+}
+
+#[derive(clap::Args)]
+struct TestsShowCliArgs {
+    /// Test name(s) to look up. Glob patterns (`*`, `?`) are
+    /// supported by the API.
+    #[arg(value_name = "NAME", required = true, num_args = 1..)]
+    test_names: Vec<String>,
+
+    /// Repository full name (owner/repo).
+    #[arg(
+        long,
+        short = 'r',
+        required = true,
+        value_parser = mergify_ci::detector::parse_owner_repo,
+    )]
+    repository: String,
+
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+
+    /// Restrict matches to the given pipeline name(s).
+    #[arg(long = "pipeline-name")]
+    pipeline_name: Vec<String>,
+
+    /// Exclude matches from the given pipeline name(s).
+    #[arg(long = "pipeline-name-exclude")]
+    pipeline_name_exclude: Vec<String>,
+
+    /// Restrict matches to the given job name(s).
+    #[arg(long = "job-name")]
+    job_name: Vec<String>,
+
+    /// Exclude matches from the given job name(s).
+    #[arg(long = "job-name-exclude")]
+    job_name_exclude: Vec<String>,
+
+    /// Maximum number of identities the search endpoint may return
+    /// per page (1–100, server default is 10).
+    #[arg(long = "per-page", value_parser = clap::value_parser!(u32).range(1..=100))]
+    per_page: Option<u32>,
+
+    /// Emit a single JSON document to stdout instead of human prose.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
