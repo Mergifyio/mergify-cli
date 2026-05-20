@@ -106,28 +106,9 @@ pub fn detect(output: &mut dyn Output) -> std::io::Result<Option<MergeQueueMetad
 
 #[cfg(test)]
 mod tests {
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stderr: SharedBytes,
-    }
-
-    fn make_output() -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            OutputMode::Human,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stderr }
-    }
 
     #[test]
     fn parse_yaml_block_extracts_metadata() {
@@ -152,10 +133,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let result = extract_from_event(&ev, &mut cap.output).unwrap();
         assert!(result.is_none());
-        assert!(cap.stderr.lock().unwrap().is_empty());
+        assert!(cap.stderr().is_empty());
     }
 
     #[test]
@@ -168,10 +149,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let result = extract_from_event(&ev, &mut cap.output).unwrap();
         assert!(result.is_none());
-        let stderr = String::from_utf8(cap.stderr.lock().unwrap().clone()).unwrap();
+        let stderr = cap.stderr();
         assert!(stderr.contains("without body"), "got: {stderr:?}");
     }
 
@@ -186,19 +167,8 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let meta = extract_from_event(&ev, &mut cap.output).unwrap().unwrap();
         assert_eq!(meta.checking_base_sha, "deadbeef");
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl std::io::Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }

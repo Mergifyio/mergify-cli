@@ -64,29 +64,10 @@ fn write_github_output(metadata: &MergeQueueMetadata) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use mergify_core::ExitCode;
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use tempfile::TempDir;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-    }
-
-    fn make_output() -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            OutputMode::Human,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stdout }
-    }
 
     fn write_event_file(dir: &TempDir, body: &str, title: &str) -> PathBuf {
         let path = dir.path().join("event.json");
@@ -102,7 +83,7 @@ mod tests {
 
     #[test]
     fn errors_when_not_in_mq_context() {
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let err = temp_env::with_vars_unset(["GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH"], || {
             run(&mut cap.output).unwrap_err()
         });
@@ -119,7 +100,7 @@ mod tests {
             "merge queue: batch",
         );
 
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
@@ -129,7 +110,7 @@ mod tests {
             || run(&mut cap.output).unwrap(),
         );
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(stdout.contains("\"checking_base_sha\": \"abc123\""));
         assert!(stdout.contains("\"number\": 10"));
     }
@@ -144,7 +125,7 @@ mod tests {
         );
         let gha_output = dir.path().join("gha_output");
 
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         temp_env::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
@@ -157,16 +138,5 @@ mod tests {
         let written = std::fs::read_to_string(&gha_output).unwrap();
         assert!(written.starts_with("queue_metadata<<ghadelimiter_"));
         assert!(written.contains("\"checking_base_sha\":\"deadbeef\""));
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl std::io::Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }

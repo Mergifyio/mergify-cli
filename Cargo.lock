@@ -1062,6 +1062,7 @@ name = "mergify-ci"
 version = "0.0.0"
 dependencies = [
  "mergify-core",
+ "mergify-test-support",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -1096,6 +1097,7 @@ version = "0.0.0"
 dependencies = [
  "jsonschema",
  "mergify-core",
+ "mergify-test-support",
  "serde",
  "serde_json",
  "serde_norway",
@@ -1128,6 +1130,7 @@ dependencies = [
  "chrono",
  "iana-time-zone",
  "mergify-core",
+ "mergify-test-support",
  "mergify-tui",
  "serde",
  "serde_json",
@@ -1152,12 +1155,20 @@ dependencies = [
  "chrono",
  "indexmap",
  "mergify-core",
+ "mergify-test-support",
  "mergify-tui",
  "serde",
  "serde_json",
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "mergify-test-support"
+version = "0.0.0"
+dependencies = [
+ "mergify-core",
 ]
 
 [[package]]
