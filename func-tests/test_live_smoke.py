@@ -196,6 +196,56 @@ def test_queue_show_not_in_queue(
     )
 
 
+def test_freeze_list(
+    live_admin_token: str,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`GET /v1/repos/{owner}/{repo}/scheduled_freeze`.
+
+    Uses the admin-scoped token because scheduled-freeze endpoints
+    sit under the queue-management family; the CI-scoped token is
+    rejected with 403.
+
+    ``--json`` mode is a passthrough of the inner
+    ``scheduled_freezes`` array (Python's ``list_freezes`` returns
+    ``data["scheduled_freezes"]``, the CLI prints that verbatim).
+    The smoke test only checks the call succeeds and parses as a
+    JSON array — the contract preserved across the Python → Rust
+    port is the URL, the auth, and the array shape of the
+    ``--json`` output.
+    """
+    import json
+
+    # Group-level options (``--token`` / ``--api-url`` /
+    # ``--repository``) come BEFORE the subcommand — Click requires
+    # it on the Python side (options live on ``@freeze``), Rust
+    # accepts both via clap's ``global = true``.
+    result = cli(
+        "freeze",
+        "--api-url",
+        API_URL,
+        "--token",
+        live_admin_token,
+        "--repository",
+        REPOSITORY,
+        "list",
+        "--json",
+    )
+    assert result.returncode == 0, (
+        f"freeze list failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"freeze list --json emitted non-JSON output\n"
+            f"error: {exc}\nstdout:\n{result.stdout}",
+        )
+    assert isinstance(payload, list), (
+        f"freeze list --json must emit a JSON array\nstdout:\n{result.stdout}"
+    )
+
+
 def test_ci_git_refs_fallback(
     cli: typing.Callable[..., typing.Any],
 ) -> None:
