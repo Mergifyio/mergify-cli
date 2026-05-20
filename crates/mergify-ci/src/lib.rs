@@ -13,3 +13,6 @@ pub mod github_event;
 pub mod queue_info;
 pub mod queue_metadata;
 pub mod scopes_send;
+
+#[cfg(test)]
+mod testing;

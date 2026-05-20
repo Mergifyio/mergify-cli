@@ -156,58 +156,8 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-
-    /// Clear every CI-provider env var the resolver inspects, then
-    /// apply the test-specific overrides on top. Without this, a test
-    /// running on a real CI host (Buildkite, Actions, …) inherits
-    /// provider env vars and the new provider-aware resolver picks
-    /// the wrong branch.
-    fn with_ci_env<F: FnOnce() -> R, R>(extra: &[(&str, Option<&str>)], f: F) -> R {
-        let mut vars: Vec<(String, Option<String>)> = [
-            "JENKINS_URL",
-            "GITHUB_ACTIONS",
-            "GITHUB_REPOSITORY",
-            "GITHUB_EVENT_PATH",
-            "CIRCLECI",
-            "CIRCLE_REPOSITORY_URL",
-            "BUILDKITE",
-            "BUILDKITE_REPO",
-            "BUILDKITE_PULL_REQUEST",
-            "GIT_URL",
-        ]
-        .into_iter()
-        .map(|k| (k.to_string(), None))
-        .collect();
-        for (k, v) in extra {
-            vars.push((k.to_string(), v.map(ToString::to_string)));
-        }
-        temp_env::with_vars(vars, f)
-    }
-
-    async fn with_ci_env_async<F: std::future::Future<Output = R>, R>(
-        extra: &[(&str, Option<&str>)],
-        f: F,
-    ) -> R {
-        let mut vars: Vec<(String, Option<String>)> = [
-            "JENKINS_URL",
-            "GITHUB_ACTIONS",
-            "GITHUB_REPOSITORY",
-            "GITHUB_EVENT_PATH",
-            "CIRCLECI",
-            "CIRCLE_REPOSITORY_URL",
-            "BUILDKITE",
-            "BUILDKITE_REPO",
-            "BUILDKITE_PULL_REQUEST",
-            "GIT_URL",
-        ]
-        .into_iter()
-        .map(|k| (k.to_string(), None))
-        .collect();
-        for (k, v) in extra {
-            vars.push((k.to_string(), v.map(ToString::to_string)));
-        }
-        temp_env::async_with_vars(vars, f).await
-    }
+    use crate::testing::with_ci_env;
+    use crate::testing::with_ci_env_async;
 
     #[test]
     fn resolve_repository_prefers_flag_over_env() {
