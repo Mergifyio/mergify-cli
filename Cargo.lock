@@ -1083,6 +1083,8 @@ dependencies = [
  "mergify-core",
  "mergify-py-shim",
  "mergify-queue",
+ "regex",
+ "serde_yaml_ng",
  "tokio",
 ]
 
