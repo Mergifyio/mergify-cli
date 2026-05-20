@@ -9,11 +9,9 @@
 
 use std::io::Write;
 
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
-use mergify_core::HttpClient;
+use mergify_core::CommandContext;
 use mergify_core::Output;
-use mergify_core::auth;
 use serde::Serialize;
 
 pub struct DeleteOptions<'a> {
@@ -36,22 +34,22 @@ struct DeletePayload<'a> {
 
 /// Run the `freeze delete` command.
 pub async fn run(opts: DeleteOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
 
     output.status(&format!(
-        "Deleting scheduled freeze {id} on {repository}…",
+        "Deleting scheduled freeze {id} on {repo}…",
         id = opts.freeze_id,
+        repo = ctx.repository,
     ))?;
 
     let payload = DeletePayload {
         delete_reason: opts.delete_reason,
     };
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
+    let client = ctx.mergify_client()?;
     let path = format!(
-        "/v1/repos/{repository}/scheduled_freeze/{id}/delete",
+        "/v1/repos/{repo}/scheduled_freeze/{id}/delete",
+        repo = ctx.repository,
         id = opts.freeze_id,
     );
     client.post_no_response(&path, &payload).await?;

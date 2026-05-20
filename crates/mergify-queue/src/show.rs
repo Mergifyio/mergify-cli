@@ -30,11 +30,9 @@ use anstyle::AnsiColor;
 use anstyle::Style;
 use chrono::DateTime;
 use chrono::Utc;
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
-use mergify_core::HttpClient;
+use mergify_core::CommandContext;
 use mergify_core::Output;
-use mergify_core::auth;
 use mergify_tui::Theme;
 use mergify_tui::relative_time;
 use mergify_tui::tree;
@@ -105,13 +103,12 @@ const fn default_match_true() -> bool {
 
 /// Run the `queue show` command.
 pub async fn run(opts: ShowOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
+    let client = ctx.mergify_client()?;
     let path = format!(
-        "/v1/repos/{repository}/merge-queue/pull/{pr_number}",
+        "/v1/repos/{repo}/merge-queue/pull/{pr_number}",
+        repo = ctx.repository,
         pr_number = opts.pr_number,
     );
 
