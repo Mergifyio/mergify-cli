@@ -432,6 +432,45 @@ def test_scopes_send(
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
+def test_tests_show_no_match(
+    live_token: str,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`GET /v1/ci/{owner}/repositories/{repo}/search/tests` round-trip.
+
+    Queries a guaranteed-nonexistent name so the test is independent
+    of whatever live test data the canary repository currently holds.
+    A green run proves auth, URL routing, and JSON deserialization for
+    the search endpoint — the empty-match path returns exit 0 with a
+    `{"tests": []}` payload on stdout.
+    """
+    import json
+
+    result = cli(
+        "tests",
+        "show",
+        "--api-url",
+        API_URL,
+        "--token",
+        live_token,
+        "--repository",
+        REPOSITORY,
+        "--json",
+        "__mergify_cli_smoke_no_such_test__",
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"tests show --json emitted non-JSON output\n"
+            f"error: {exc}\nstdout:\n{result.stdout}",
+        )
+    assert payload == {"tests": []}, (
+        f"expected empty `tests` list for nonexistent test name, got:\n{result.stdout}"
+    )
+
+
 def test_junit_process(
     live_token: str,
     cli: typing.Callable[..., typing.Any],

@@ -146,6 +146,25 @@ impl Client {
         }
     }
 
+    /// GET `path` with query-string pairs appended in caller order.
+    ///
+    /// Repeating the same key is supported (each entry produces its
+    /// own `key=value`), and values are percent-encoded so callers can
+    /// pass arbitrary strings (`*`, `&`, `?`, spaces, unicode).
+    /// An empty `query` slice produces no `?`.
+    pub async fn get_with_query<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T, CliError> {
+        let mut url = self.join(path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query.iter().copied());
+        }
+        let resp = self.execute_request(self.inner.get(url)).await?;
+        self.decode_json(resp).await
+    }
+
     /// POST `body` as JSON to `path` and deserialize the JSON
     /// response as `T`.
     pub async fn post<B: Serialize + ?Sized, T: DeserializeOwned>(
@@ -700,6 +719,66 @@ mod tests {
         assert!(
             msg.contains("could not reach Mergify"),
             "expected connect message, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_with_query_appends_repeated_keys_and_percent_encodes_values() {
+        let server = MockServer::start().await;
+        let client = fast_client(&server, ApiFlavor::Mergify);
+
+        Mock::given(method("GET"))
+            .and(path("/lookup"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Foo { bar: 1 }))
+            .mount(&server)
+            .await;
+
+        let _: Foo = client
+            .get_with_query(
+                "/lookup",
+                &[
+                    ("test_name", "*test login*"),
+                    ("test_name", "a&b?c"),
+                    ("limit", "5"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        let raw_query = received[0].url.query().expect("expected a query string");
+        // Repeated keys must preserve caller order; query-reserved
+        // characters (`&`, `?`) must be percent-encoded so the server
+        // doesn't mistake them for separators. Spaces become `+` (the
+        // application/x-www-form-urlencoded convention `url` follows).
+        // `*` is a sub-delim that servers parse literally, so it
+        // passes through unencoded.
+        assert_eq!(
+            raw_query,
+            "test_name=*test+login*&test_name=a%26b%3Fc&limit=5",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_with_query_omits_question_mark_when_no_pairs() {
+        let server = MockServer::start().await;
+        let client = fast_client(&server, ApiFlavor::Mergify);
+
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Foo { bar: 0 }))
+            .mount(&server)
+            .await;
+
+        let _: Foo = client.get_with_query("/foo", &[]).await.unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert!(
+            received[0].url.query().is_none(),
+            "no pairs must produce no `?`, got {:?}",
+            received[0].url.query(),
         );
     }
 
