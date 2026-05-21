@@ -1,17 +1,24 @@
 //! `mergify` binary entry point.
 //!
 //! Dispatch logic: every invocation is speculatively parsed with
-//! clap, which knows about the native commands
-//! ([`ConfigSubcommand::Validate`], [`ConfigSubcommand::Simulate`]).
-//! If clap succeeds with a known native variant the binary runs
-//! that code path natively. Any parse failure — including
-//! subcommands clap doesn't know about (``stack push``, ``ci
-//! junit-process``, …) — falls through to [`mergify_py_shim::run`],
-//! which hands the original argv to ``python3 -m mergify_cli``.
+//! clap. The clap tree covers both worlds:
 //!
-//! As each command ports (Phase 1.4+), new variants land on the
-//! clap enum and the shim fallback shrinks. Phase 6 deletes the
-//! shim entirely.
+//! - **Natively-ported commands** ([`NATIVE_COMMANDS`]) — clap
+//!   parses the full flag set and the binary runs them in process.
+//! - **Python-shimmed commands** (`stack`, `ci scopes`, `ci
+//!   junit-process`, `ci junit-upload`) — clap registers them as
+//!   stub variants with a catch-all `args: Vec<String>`. That way
+//!   `mergify --help` and `mergify <group> --help` list the entire
+//!   CLI surface, but the captured argv is forwarded verbatim to
+//!   the Python implementation by [`mergify_py_shim::run`].
+//!
+//! Invocations clap can't parse at all (typos, unknown groups)
+//! still fall through to the Python shim with the original argv,
+//! so its "no such command" message reaches the user.
+//!
+//! As each Python command is ported to Rust, its stub variant is
+//! promoted to a real clap definition, a matching entry lands in
+//! [`NATIVE_COMMANDS`], and the shim fallback shrinks accordingly.
 
 use std::env;
 use std::path::PathBuf;
@@ -63,17 +70,47 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if let Some(cmd) = detect_native(&argv) {
-        return run_native(cmd);
+    match detect_dispatch(&argv) {
+        Some(Dispatch::Native(cmd)) => run_native(cmd),
+        Some(Dispatch::Shim(forwarded)) => run_py_shim(&forwarded),
+        None => run_py_shim(&argv),
     }
+}
 
-    match mergify_py_shim::run(&argv) {
+fn run_py_shim(argv: &[String]) -> ExitCode {
+    match mergify_py_shim::run(argv) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(err) => {
             eprintln!("mergify: {err}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Outcome of speculatively parsing the argv with clap.
+enum Dispatch {
+    /// argv resolved to a natively-ported command — run it in-process.
+    Native(NativeCommand),
+    /// argv resolved to a clap *stub* for a Python-shimmed command.
+    /// The captured argv (with the group/subcommand restored at the
+    /// front) is forwarded to Python verbatim — including `--help`,
+    /// which our stubs deliberately let pass through.
+    Shim(Vec<String>),
+}
+
+fn prepend_one(head: &str, tail: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(tail.len() + 1);
+    out.push(head.to_string());
+    out.extend(tail);
+    out
+}
+
+fn prepend_two(first: &str, second: &str, tail: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(tail.len() + 2);
+    out.push(first.to_string());
+    out.push(second.to_string());
+    out.extend(tail);
+    out
 }
 
 /// Single source of truth for the `(group, subcommand)` pairs the
@@ -216,7 +253,7 @@ fn is_help_or_version(err: &clap::Error) -> bool {
 /// implementation (typically [`mergify_core::ExitCode::Configuration`]
 /// = 8), not 2.
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
-fn detect_native(argv: &[String]) -> Option<NativeCommand> {
+fn detect_dispatch(argv: &[String]) -> Option<Dispatch> {
     let looks_native = looks_native(argv);
 
     let parsed = match CliRoot::try_parse_from(
@@ -224,12 +261,14 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
     ) {
         Ok(parsed) => parsed,
         Err(err) if is_help_or_version(&err) => {
-            // ``--help`` (or implicit help on a subcommand group)
-            // is always handled natively by clap — even when
-            // ``looks_native`` is false. Otherwise we'd fall
-            // through to the Python shim's help, which no longer
-            // lists Rust-native subcommands. ``err.exit()`` prints
-            // to stdout and calls ``process::exit(0)``.
+            // ``--help`` at the binary's root or for any natively
+            // dispatched (sub)command is handled by clap. The
+            // top-level help now lists `stack` and the shimmed
+            // `ci` subcommands too, because they're registered as
+            // clap stub variants — that's how a single
+            // `mergify --help` covers the full CLI surface.
+            // ``err.exit()`` prints to stdout and calls
+            // ``process::exit(0)``.
             err.exit()
         }
         Err(err) if looks_native => {
@@ -241,11 +280,26 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
         Err(_) => return None,
     };
 
+    Some(dispatch_from_parsed(parsed))
+}
+
+#[allow(clippy::too_many_lines)] // mostly mechanical match arms
+fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
     match parsed.command {
+        Subcommands::Stack(ShimmedArgs { args }) => Dispatch::Shim(prepend_one("stack", args)),
+        Subcommands::Ci(CiArgs {
+            command: CiSubcommand::Scopes(ShimmedArgs { args }),
+        }) => Dispatch::Shim(prepend_two("ci", "scopes", args)),
+        Subcommands::Ci(CiArgs {
+            command: CiSubcommand::JunitProcess(ShimmedArgs { args }),
+        }) => Dispatch::Shim(prepend_two("ci", "junit-process", args)),
+        Subcommands::Ci(CiArgs {
+            command: CiSubcommand::JunitUpload(ShimmedArgs { args }),
+        }) => Dispatch::Shim(prepend_two("ci", "junit-upload", args)),
         Subcommands::Config(ConfigArgs {
             config_file,
             command: ConfigSubcommand::Validate(_),
-        }) => Some(NativeCommand::ConfigValidate { config_file }),
+        }) => Dispatch::Native(NativeCommand::ConfigValidate { config_file }),
         Subcommands::Config(ConfigArgs {
             config_file,
             command:
@@ -254,7 +308,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
                     token,
                     api_url,
                 }),
-        }) => Some(NativeCommand::ConfigSimulate(ConfigSimulateOpts {
+        }) => Dispatch::Native(NativeCommand::ConfigSimulate(ConfigSimulateOpts {
             config_file,
             pull_request,
             token,
@@ -272,7 +326,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
                     scopes_file,
                     file_deprecated,
                 }),
-        }) => Some(NativeCommand::CiScopesSend(CiScopesSendOpts {
+        }) => Dispatch::Native(NativeCommand::CiScopesSend(CiScopesSendOpts {
             repository,
             pull_request,
             token,
@@ -284,10 +338,10 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
         })),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::GitRefs(GitRefsCliArgs { format }),
-        }) => Some(NativeCommand::CiGitRefs { format }),
+        }) => Dispatch::Native(NativeCommand::CiGitRefs { format }),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::QueueInfo,
-        }) => Some(NativeCommand::CiQueueInfo),
+        }) => Dispatch::Native(NativeCommand::CiQueueInfo),
         Subcommands::Queue(QueueArgs {
             repository,
             token,
@@ -297,7 +351,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
                     reason,
                     yes_i_am_sure,
                 }),
-        }) => Some(NativeCommand::QueuePause(QueuePauseOpts {
+        }) => Dispatch::Native(NativeCommand::QueuePause(QueuePauseOpts {
             repository,
             token,
             api_url,
@@ -309,7 +363,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             token,
             api_url,
             command: QueueSubcommand::Unpause,
-        }) => Some(NativeCommand::QueueUnpause(QueueUnpauseOpts {
+        }) => Dispatch::Native(NativeCommand::QueueUnpause(QueueUnpauseOpts {
             repository,
             token,
             api_url,
@@ -319,7 +373,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             token,
             api_url,
             command: QueueSubcommand::Status(StatusCliArgs { branch, json }),
-        }) => Some(NativeCommand::QueueStatus(QueueStatusOpts {
+        }) => Dispatch::Native(NativeCommand::QueueStatus(QueueStatusOpts {
             repository,
             token,
             api_url,
@@ -336,7 +390,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
                     verbose,
                     json,
                 }),
-        }) => Some(NativeCommand::QueueShow(QueueShowOpts {
+        }) => Dispatch::Native(NativeCommand::QueueShow(QueueShowOpts {
             repository,
             token,
             api_url,
@@ -349,7 +403,7 @@ fn detect_native(argv: &[String]) -> Option<NativeCommand> {
             token,
             api_url,
             command: FreezeSubcommand::List(FreezeListCliArgs { json }),
-        }) => Some(NativeCommand::FreezeList(FreezeListOpts {
+        }) => Dispatch::Native(NativeCommand::FreezeList(FreezeListOpts {
             repository,
             token,
             api_url,
@@ -504,6 +558,23 @@ enum Subcommands {
     Queue(QueueArgs),
     /// Manage scheduled freezes.
     Freeze(FreezeArgs),
+    /// Manage stacked pull requests.
+    Stack(ShimmedArgs),
+}
+
+/// Catch-all positional args for a shimmed subcommand. We surface
+/// the command natively through clap (so `--help` listings are
+/// complete) but the execution still has to reach the Python
+/// implementation. `disable_help_flag` keeps clap from rendering
+/// its own placeholder help when the user does
+/// `mergify <group> <shimmed> --help`; the `--help` falls into
+/// `args` and we forward it to Python, which prints the real help.
+#[derive(clap::Args)]
+#[command(disable_help_flag = true)]
+struct ShimmedArgs {
+    /// All arguments forwarded verbatim to the Python implementation.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    args: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -563,6 +634,15 @@ enum CiSubcommand {
     /// Print the merge queue batch metadata for the current draft PR.
     #[command(name = "queue-info")]
     QueueInfo,
+    /// Give the list of scopes impacted by changed files.
+    Scopes(ShimmedArgs),
+    /// Upload `JUnit` XML reports and ignore failed tests with
+    /// Mergify's CI Insights Quarantine.
+    #[command(name = "junit-process")]
+    JunitProcess(ShimmedArgs),
+    /// Upload `JUnit` XML reports (deprecated: use `junit-process`).
+    #[command(name = "junit-upload")]
+    JunitUpload(ShimmedArgs),
 }
 
 #[derive(clap::Args)]
