@@ -18,6 +18,7 @@ mergify ci git-refs                       # Detect base/head git references for 
 mergify ci scopes --config PATH           # Detect scopes impacted by changed files
 mergify ci scopes-send -s SCOPE           # Send scopes tied to a pull request to Mergify
 mergify ci queue-info                     # Output merge queue batch metadata from the current PR event
+mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
 ```
 
 ## JUnit Processing (`junit-process`)
@@ -141,6 +142,39 @@ mergify ci scopes-send --scopes-file scopes.txt -p 123
 - `--scope` / `-s` -- Scope name (repeatable)
 - `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
 - `--scopes-file` -- Plain-text file with one scope per line
+
+## Tests Show (`tests show`)
+
+Looks up tests by name on the repository's default branch and prints their
+health, success/failure ratios, and last failure context. The search is a
+batch API: pass one or more names (globs supported) and one block per match
+is rendered. Exit code reflects the worst health observed.
+
+```bash
+# Single test.
+mergify tests show -r owner/repo \
+  'ApplicationKeys.spec.ts.Permissions › Should not see keys table if not admin'
+
+# Batch with glob, narrowed to one pipeline, JSON for jq.
+mergify tests show -r owner/repo \
+  --pipeline-name e2e --json \
+  '*test_login*' '*test_logout*' \
+  | jq '.tests[] | {test_name, health_status}'
+```
+
+**Key options:**
+- `--repository` / `-r` -- Repository full name (`owner/repo`); required.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
+- `--pipeline-name`, `--pipeline-name-exclude` -- Restrict / exclude by pipeline.
+- `--job-name`, `--job-name-exclude` -- Restrict / exclude by job.
+- `--per-page` -- Cap the search result count (1–100, server default 10).
+- `--json` -- Emit a single JSON document `{"tests": [...]}` to stdout.
+
+**Exit codes:**
+- `0` -- All matched tests are `healthy` or unknown (or no match at all).
+- `1` -- At least one test is `flaky`.
+- `6` -- At least one test is `broken` (consistently failing).
 
 ## Queue Info (`queue-info`)
 
