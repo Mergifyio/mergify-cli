@@ -129,23 +129,23 @@ fn emit_result(
     config_path: &Path,
     errors: &[ValidationError],
 ) -> std::io::Result<()> {
-    let path_display = config_path.display().to_string();
-    let errors_copy: Vec<(String, String)> = errors
-        .iter()
-        .map(|e| (e.path.clone(), e.message.clone()))
-        .collect();
     output.emit(&(), &mut |w: &mut dyn Write| {
-        if errors_copy.is_empty() {
+        let path_display = config_path.display();
+        if errors.is_empty() {
             writeln!(w, "Configuration file '{path_display}' is valid.")?;
         } else {
             writeln!(
                 w,
-                "configuration file '{}' has {} error(s):",
-                path_display,
-                errors_copy.len(),
+                "configuration file '{path_display}' has {n} error(s):",
+                n = errors.len(),
             )?;
-            for (path, message) in &errors_copy {
-                writeln!(w, "  - {path}: {message}")?;
+            for err in errors {
+                writeln!(
+                    w,
+                    "  - {path}: {message}",
+                    path = err.path,
+                    message = err.message,
+                )?;
             }
         }
         Ok(())
