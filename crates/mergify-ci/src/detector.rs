@@ -345,6 +345,16 @@ fn non_empty_env(name: &str) -> Option<String> {
     env::var(name).ok().filter(|s| !s.is_empty())
 }
 
+/// Branch the quarantine API should look up tests for. Mirrors
+/// Python's `get_tests_target_branch`: the PR base branch when
+/// available, otherwise the head branch — i.e. "the branch the
+/// tests *will* land on" so quarantine decisions match where
+/// the merge will go.
+#[must_use]
+pub fn get_tests_target_branch() -> Option<String> {
+    get_base_ref_name().or_else(get_head_ref_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

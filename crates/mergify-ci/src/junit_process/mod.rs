@@ -7,23 +7,24 @@
 //! - **Phase A** (landed) — [`junit`]: `JUnit` XML parser
 //!   producing semantically-tagged [`TestCase`] values.
 //!   Hermetic, no network.
-//! - **Phase B** (this commit) — [`spans`] turns parser output
-//!   into an OTLP `ExportTraceServiceRequest`; [`upload`] gzips
-//!   that protobuf payload and POSTs it to
+//! - **Phase B** (landed) — [`spans`] turns parser output into an
+//!   OTLP `ExportTraceServiceRequest`; [`upload`] gzips that
+//!   protobuf payload and POSTs it to
 //!   `/v1/repos/<owner>/<repo>/ci/traces`.
-//! - **Phase C** (next) — quarantine API client, CLI dispatch,
-//!   and `Subcommands::Ci(CiSubcommand::JunitProcess)` promotion
-//!   from shim to native.
-//!
-//! Until Phase C lands, the binary keeps shimming
-//! `ci junit-process` to Python — but the parser and uploader
-//! already live here so the dispatch layer just needs to wire
-//! them together.
+//! - **Phase C** (this commit) — [`quarantine`] queries the
+//!   quarantine API; [`command::run`] orchestrates everything and
+//!   renders the human report so the binary can promote
+//!   `Subcommands::Ci(CiSubcommand::JunitProcess)` from shim to
+//!   native.
 
+pub mod command;
 pub mod junit;
+pub mod quarantine;
 pub mod spans;
 pub mod upload;
 
+pub use command::{JunitProcessOptions, run};
 pub use junit::{Failure, InvalidJunitXml, ParseResult, TestCase, TestStatus};
+pub use quarantine::{QuarantineFailed, QuarantineResult, QuarantinedTests};
 pub use spans::{BuiltTraces, UploadMetadata, build_traces};
 pub use upload::{UploadError, default_client, upload};

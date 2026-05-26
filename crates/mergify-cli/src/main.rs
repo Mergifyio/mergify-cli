@@ -28,6 +28,7 @@ use clap::Parser;
 use clap::Subcommand;
 use mergify_ci::git_refs::Format as GitRefsFormat;
 use mergify_ci::git_refs::GitRefsOptions;
+use mergify_ci::junit_process::JunitProcessOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
 use mergify_ci::tests_show::TestsShowOptions;
 use mergify_config::simulate::PullRequestRef;
@@ -146,6 +147,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("ci", "scopes-send"),
     ("ci", "git-refs"),
     ("ci", "queue-info"),
+    ("ci", "junit-process"),
     ("tests", "show"),
     ("queue", "pause"),
     ("queue", "unpause"),
@@ -166,6 +168,7 @@ enum NativeCommand {
     CiScopesSend(CiScopesSendOpts),
     CiGitRefs { format: GitRefsFormat },
     CiQueueInfo,
+    CiJunitProcess(CiJunitProcessOpts),
     TestsShow(TestsShowOpts),
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
@@ -200,6 +203,17 @@ struct CiScopesSendOpts {
     scopes_json: Option<PathBuf>,
     scopes_file: Option<PathBuf>,
     file_deprecated: Option<PathBuf>,
+}
+
+struct CiJunitProcessOpts {
+    api_url: Option<String>,
+    token: Option<String>,
+    repository: Option<String>,
+    test_framework: Option<String>,
+    test_language: Option<String>,
+    tests_target_branch: Option<String>,
+    test_exit_code: Option<i32>,
+    files: Vec<String>,
 }
 
 struct QueuePauseOpts {
@@ -388,11 +402,27 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             write,
         })),
         Subcommands::Ci(CiArgs {
-            command: CiSubcommand::JunitProcess(ShimmedArgs { args }),
-        }) => Dispatch::Shim(inject_global_flags(
-            debug,
-            prepend_two("ci", "junit-process", args),
-        )),
+            command:
+                CiSubcommand::JunitProcess(JunitProcessCliArgs {
+                    api_url,
+                    token,
+                    repository,
+                    test_framework,
+                    test_language,
+                    tests_target_branch,
+                    test_exit_code,
+                    files,
+                }),
+        }) => Dispatch::Native(NativeCommand::CiJunitProcess(CiJunitProcessOpts {
+            api_url,
+            token,
+            repository,
+            test_framework,
+            test_language,
+            tests_target_branch,
+            test_exit_code,
+            files,
+        })),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::JunitUpload(ShimmedArgs { args }),
         }) => Dispatch::Shim(inject_global_flags(
@@ -683,6 +713,22 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::CiQueueInfo => {
                 mergify_ci::queue_info::run(&mut output).map(|()| mergify_core::ExitCode::Success)
             }
+            NativeCommand::CiJunitProcess(opts) => {
+                mergify_ci::junit_process::run(
+                    JunitProcessOptions {
+                        api_url: opts.api_url.as_deref(),
+                        token: opts.token.as_deref(),
+                        repository: opts.repository.as_deref(),
+                        test_framework: opts.test_framework.as_deref(),
+                        test_language: opts.test_language.as_deref(),
+                        tests_target_branch: opts.tests_target_branch.as_deref(),
+                        test_exit_code: opts.test_exit_code,
+                        files: &opts.files,
+                    },
+                    &mut output,
+                )
+                .await
+            }
             NativeCommand::CiScopes(opts) => mergify_ci::scopes_detect::run(
                 mergify_ci::scopes_detect::ScopesOptions {
                     config: opts.config.as_deref(),
@@ -921,6 +967,11 @@ struct CiArgs {
 }
 
 #[derive(Subcommand)]
+// CiSubcommand variant docstrings double as `mergify ci --help`
+// entries — clap renders them verbatim, so backticks would surface
+// as literal characters to the user. Suppress doc_markdown here
+// so the help text reads naturally.
+#[allow(clippy::doc_markdown)]
 enum CiSubcommand {
     /// Send scopes tied to a pull request to Mergify.
     #[command(name = "scopes-send")]
@@ -933,11 +984,11 @@ enum CiSubcommand {
     QueueInfo,
     /// Give the list of scopes impacted by changed files.
     Scopes(ScopesCliArgs),
-    /// Upload `JUnit` XML reports and ignore failed tests with
+    /// Upload JUnit XML reports and ignore failed tests with
     /// Mergify's CI Insights Quarantine.
     #[command(name = "junit-process")]
-    JunitProcess(ShimmedArgs),
-    /// Upload `JUnit` XML reports (deprecated: use `junit-process`).
+    JunitProcess(JunitProcessCliArgs),
+    /// Upload JUnit XML reports (deprecated: use `junit-process`).
     #[command(name = "junit-upload")]
     JunitUpload(ShimmedArgs),
 }
@@ -1017,6 +1068,54 @@ struct ScopesSendCliArgs {
     /// Deprecated alias for ``--scopes-json``.
     #[arg(long = "file", short = 'f', hide = true)]
     file_deprecated: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+// Help text is rendered verbatim by clap; backticks would surface
+// as literal characters to the user. Suppress the doc_markdown
+// lint just for this struct so the docstrings read naturally in
+// `--help` output.
+#[allow(clippy::doc_markdown)]
+struct JunitProcessCliArgs {
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default (`https://api.mergify.com`).
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+
+    /// CI Issues application key. Falls back to ``MERGIFY_TOKEN``.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Repository full name (owner/repo). Auto-detected from the
+    /// CI environment when omitted.
+    #[arg(long, short = 'r')]
+    repository: Option<String>,
+
+    /// Test framework label (e.g. `pytest`). Optional; passed as a
+    /// span attribute.
+    #[arg(long = "test-framework")]
+    test_framework: Option<String>,
+
+    /// Test language label (e.g. `python`). Optional; passed as a
+    /// span attribute.
+    #[arg(long = "test-language")]
+    test_language: Option<String>,
+
+    /// Branch the quarantine API should look up tests on. Defaults
+    /// to the PR base branch, or the head branch as a fallback.
+    #[arg(long = "tests-target-branch", short = 'b')]
+    tests_target_branch: Option<String>,
+
+    /// Exit code of the test runner. When this is non-zero but no
+    /// failures appear in the JUnit report, the run is flagged
+    /// as a silent failure. Falls back to ``MERGIFY_TEST_EXIT_CODE``.
+    #[arg(long = "test-exit-code", short = 'e', env = "MERGIFY_TEST_EXIT_CODE")]
+    test_exit_code: Option<i32>,
+
+    /// JUnit XML files or glob patterns (e.g.
+    /// `reports/**/*.xml`). At least one path or pattern is required.
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    files: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -1338,28 +1437,19 @@ mod tests {
 
     #[test]
     fn shimmed_dispatch_reinjects_debug_for_ci_subcommand() {
-        // The remaining two-token shim paths (`ci junit-process`,
-        // `ci junit-upload`) need the same treatment as the
-        // single-token `stack` shim — every shim arm must re-inject
-        // `--debug` so the Python side honors it. `ci scopes` is now
-        // native and follows the native dispatch path.
-        for (group, sub, tail) in &[
-            ("ci", "junit-process", vec!["--files", "a.xml"]),
-            ("ci", "junit-upload", vec!["--files", "a.xml"]),
-        ] {
-            let mut argv_in = vec!["--debug", group, sub];
-            argv_in.extend(tail.iter().copied());
-            let parsed = parse(&argv_in);
-            let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
-                panic!("ci {sub} must dispatch to the Python shim");
-            };
-            let mut expected = vec![
-                "--debug".to_string(),
-                (*group).to_string(),
-                (*sub).to_string(),
-            ];
-            expected.extend(tail.iter().map(|s| (*s).to_string()));
-            assert_eq!(argv, expected, "ci {sub} dispatch dropped --debug");
-        }
+        // The remaining two-token shim path (`ci junit-upload`)
+        // needs the same treatment as the single-token `stack`
+        // shim. `ci scopes` and `ci junit-process` are now native
+        // and follow the native dispatch path — they're verified
+        // through `dispatch_from_parsed` returning a `Native`
+        // variant elsewhere, not through this shim-loop test.
+        let parsed = parse(&["--debug", "ci", "junit-upload", "--files", "a.xml"]);
+        let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
+            panic!("ci junit-upload must dispatch to the Python shim");
+        };
+        assert_eq!(
+            argv,
+            vec!["--debug", "ci", "junit-upload", "--files", "a.xml"]
+        );
     }
 }

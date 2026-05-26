@@ -15,6 +15,7 @@
 //! caller-supplied per-upload metadata — get folded into every
 //! span on top of its scope-specific attributes.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -38,6 +39,14 @@ pub struct UploadMetadata {
     /// Optional `mergify.test.job.name` attribute set when the
     /// `MERGIFY_TEST_JOB_NAME` env var is present at parse time.
     pub mergify_test_job_name: Option<String>,
+    /// Set of test names the quarantine API confirmed are
+    /// currently quarantined. Each case span whose name is in this
+    /// set gets `cicd.test.quarantined = true`; everything else
+    /// defaults to `false`. Pass an empty set when the quarantine
+    /// check was skipped (no failures) or failed (network/API
+    /// error) — the spans then upload with everything marked
+    /// non-quarantined, which is the conservative default.
+    pub quarantined: BTreeSet<String>,
 }
 
 /// Result of converting a [`ParseResult`] (one or more `JUnit`
@@ -104,7 +113,10 @@ fn build_traces_with(
             attrs.push(kv_string("test.scope", "case"));
             attrs.push(kv_string("test.case.name", &case.name));
             attrs.push(kv_string("code.function.name", &case.name));
-            attrs.push(kv_bool("cicd.test.quarantined", false));
+            attrs.push(kv_bool(
+                "cicd.test.quarantined",
+                metadata.quarantined.contains(&case.name),
+            ));
             if let Some(file) = &case.file {
                 attrs.push(kv_string("code.filepath", file));
             }
@@ -650,6 +662,7 @@ mod tests {
             test_framework: Some("pytest".to_string()),
             test_language: Some("python".to_string()),
             mergify_test_job_name: None,
+            quarantined: BTreeSet::new(),
         };
         let built = with_ci_env(&[], || {
             build_traces_with(&sample_parsed(), &metadata, 0, &mut rng)
