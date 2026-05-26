@@ -1,11 +1,29 @@
+"""Parse JUnit XML and build OTLP spans for the CI Insights upload.
+
+The XML parsing step shells out to the native Rust binary's hidden
+`_internal junit-parse` subcommand — it returns a list of typed
+test cases with the same fields the inline `xml.etree` walk used
+to read off ET nodes (suite name, classname-qualified test name,
+duration, file/line, status, exception kind/message/stacktrace).
+
+This module is the Python→Rust migration bridge for `junit-process`.
+When `ci junit-process` is fully ported to Rust (Phase C, planned
+later in the same stack), this module, its callers, and the
+`_internal junit-parse` Rust subcommand all go away.
+"""
+
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
 import typing
-from xml.etree import ElementTree as ET  # noqa: S405
 
 from opentelemetry.sdk import resources
 from opentelemetry.sdk.trace import ReadableSpan
@@ -60,23 +78,17 @@ async def junit_to_spans(
     test_language: str | None = None,
     test_framework: str | None = None,
 ) -> list[ReadableSpan]:
-    try:
-        root = ET.fromstring(xml_content)  # noqa: S314
-    except ET.ParseError as e:
-        raise InvalidJunitXMLError(e.msg) from e
+    parsed = _parse_with_rust(xml_content)
+    suite_names = parsed["suite_names"]
+    cases = parsed["cases"]
 
-    # NOTE(sileht): We do the bare minimum for checking it's a valid Junit XML, without being super
-    # strict on the format, as there is no official standard and at least 3 versions
-    # in Junit itself, most implementations never implement 100% of the original format.
-
-    if root.tag == "testsuites":
-        testsuites = root.findall(".//{*}testsuite")
-    elif root.tag == "testsuite":
-        testsuites = [root, *root.findall(".//{*}testsuite")]
-    else:
-        testsuites = []
-
-    if not testsuites:
+    # The native parser raises on an unknown root tag and on a
+    # `<testsuites>` / `<testsuite>` root with zero descendants, so
+    # by the time we get here `suite_names` is non-empty in every
+    # valid parse. Keep the explicit check anyway — a future parser
+    # change that emits an empty list shouldn't silently produce
+    # an OTLP request with no spans.
+    if not suite_names:
         raise InvalidJunitXMLError("no testsuites or testsuite tag found")
 
     now = time.time_ns()
@@ -174,11 +186,22 @@ async def junit_to_spans(
 
     session_start_time = now
 
-    spans = [session_span]
+    spans: list[ReadableSpan] = [session_span]
 
-    for testsuite in testsuites:
+    # Index cases by suite name. The Rust parser tagged each case
+    # with the closest enclosing suite, so cases land in the right
+    # bucket even when suites nest. Order of iteration over the
+    # buckets is driven by `suite_names` (document order from the
+    # parser), not by first-seen case — a nested suite's cases
+    # appear in the case stream before the parent suite's *direct*
+    # cases, but the parent's span has to come first.
+    grouped_cases: dict[str, list[dict[str, typing.Any]]] = {}
+    for case in cases:
+        grouped_cases.setdefault(case["suite_name"], []).append(case)
+
+    for suite_name in suite_names:
+        suite_cases = grouped_cases.get(suite_name, [])
         min_start_time = now
-        suite_name = testsuite.get("name", "unnamed testsuite")
 
         testsuite_context = opentelemetry.trace.span.SpanContext(
             trace_id=trace_id,
@@ -202,13 +225,12 @@ async def junit_to_spans(
 
         spans.append(testsuite_span)
 
-        for testcase in testsuite.findall("testcase"):
-            classname = testcase.get("classname")
-            if classname is not None:
-                test_name = classname + "." + testcase.get("name", "unnamed test")
-            else:
-                test_name = testcase.get("name", "unnamed test")
-            start_time = now - int(float(testcase.get("time", 0)) * 10e9)
+        for case in suite_cases:
+            test_name = case["name"]
+            duration_secs = case["duration"]
+            start_time = (
+                now if duration_secs is None else now - int(float(duration_secs) * 10e9)
+            )
             min_start_time = min(min_start_time, start_time)
 
             attributes: dict[str, str | bool] = {
@@ -218,41 +240,32 @@ async def junit_to_spans(
                 "cicd.test.quarantined": False,
             }
 
-            if (filename := testcase.get("file")) is not None:
-                attributes[SpanAttributes.CODE_FILEPATH] = filename
+            if case["file"] is not None:
+                attributes[SpanAttributes.CODE_FILEPATH] = case["file"]
+            if case["line"] is not None:
+                attributes[SpanAttributes.CODE_LINENO] = case["line"]
 
-            if (lineno := testcase.get("line")) is not None:
-                attributes[SpanAttributes.CODE_LINENO] = lineno
-
-            if testcase.find("skipped") is not None:
+            status = case["status"]
+            if status == "skipped":
                 attributes["test.case.result.status"] = "skipped"
                 span_status = opentelemetry.trace.Status(
                     status_code=opentelemetry.trace.StatusCode.OK,
                 )
-            elif (
-                testcase.find("failure") is not None
-                or testcase.find("error") is not None
-            ):
+            elif status in {"failed", "errored"}:
                 attributes["test.case.result.status"] = "failed"
                 span_status = opentelemetry.trace.Status(
                     status_code=opentelemetry.trace.StatusCode.ERROR,
                 )
-
-                for failed_conclusion in ("failure", "error"):
-                    for failure in testcase.findall(failed_conclusion):
-                        if (failure_type := failure.get("type")) is not None:
-                            attributes[SpanAttributes.EXCEPTION_TYPE] = failure_type
-                        if (failure_message := failure.get("message")) is not None:
-                            attributes[SpanAttributes.EXCEPTION_MESSAGE] = (
-                                failure_message
-                            )
-                        if failure.text is not None:
-                            attributes[SpanAttributes.EXCEPTION_STACKTRACE] = (
-                                failure.text.strip()
-                            )
-                        # We only care about the first failure/error
-                        break
-            else:
+                failure = case["failure"]
+                if failure["kind"]:
+                    attributes[SpanAttributes.EXCEPTION_TYPE] = failure["kind"]
+                if failure["message"]:
+                    attributes[SpanAttributes.EXCEPTION_MESSAGE] = failure["message"]
+                if failure["stacktrace"]:
+                    attributes[SpanAttributes.EXCEPTION_STACKTRACE] = failure[
+                        "stacktrace"
+                    ]
+            else:  # "passed"
                 attributes["test.case.result.status"] = "passed"
                 span_status = opentelemetry.trace.Status(
                     status_code=opentelemetry.trace.StatusCode.OK,
@@ -281,3 +294,73 @@ async def junit_to_spans(
     session_span._start_time = session_start_time
 
     return spans
+
+
+def _parse_with_rust(xml_content: bytes) -> dict[str, typing.Any]:
+    """Shell out to `mergify _internal junit-parse` for XML parsing.
+
+    The native parser handles the loose JUnit dialect (nested
+    `<testsuites>`, bare `<testsuite>`, namespaces) and emits a
+    JSON object `{"suite_names": [...], "cases": [...]}` where
+    `suite_names` lists suites in document order and `cases` is a
+    flat array of typed test cases each tagged with the closest
+    enclosing suite name. Errors from the subprocess (invalid XML,
+    binary not found, unreadable file) surface as
+    `InvalidJunitXMLError` so callers can fail the same way they
+    used to when `ET.fromstring` raised.
+    """
+    binary = _resolve_mergify_binary()
+    # The subcommand takes a path rather than reading stdin so the
+    # CLI surface stays minimal. Write the bytes to a temp file
+    # and pass the path.
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
+        tmp.write(xml_content)
+        tmp_path = tmp.name
+    try:
+        result = subprocess.run(  # noqa: S603
+            [binary, "_internal", "junit-parse", tmp_path],
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        pathlib.Path(tmp_path).unlink(missing_ok=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        # The Rust binary's generic error wrapper prefixes every
+        # error with `mergify: `, and `InvalidJunitXml`'s Display
+        # impl prefixes the parse-specific details with
+        # `Failed to parse JUnit XML: `. Strip both so callers
+        # (notably `process_junit_files`, which re-wraps with
+        # `f"Failed to parse JUnit XML: {e.details}"`) don't end
+        # up double-prefixing the user-facing message.
+        details = stderr.removeprefix("mergify: ").removeprefix(
+            "Failed to parse JUnit XML: ",
+        )
+        raise InvalidJunitXMLError(details or "junit-parse failed")
+    return typing.cast("dict[str, typing.Any]", json.loads(result.stdout))
+
+
+def _resolve_mergify_binary() -> str:
+    """Locate the `mergify` Rust binary the Python side calls into.
+
+    Lookup order:
+    1. `$MERGIFY_CLI_BIN` override (used by tests against a freshly
+       built `target/debug/mergify`).
+    2. The venv's `bin/mergify` next to `sys.executable` — this is
+       the production case once the wheel is installed.
+    3. `$PATH` fallback via `shutil.which`.
+    """
+    if override := os.environ.get("MERGIFY_CLI_BIN"):
+        return override
+    venv_bin = pathlib.Path(sys.executable).parent
+    for name in ("mergify", "mergify.exe"):
+        candidate = venv_bin / name
+        if candidate.is_file():
+            return str(candidate)
+    if found := shutil.which("mergify"):
+        return found
+    msg = (
+        "could not locate the `mergify` binary "
+        f"(checked $MERGIFY_CLI_BIN, {venv_bin}/mergify, and $PATH)"
+    )
+    raise RuntimeError(msg)
