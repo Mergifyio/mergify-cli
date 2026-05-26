@@ -206,6 +206,22 @@ impl Client {
         self.decode_json(resp).await
     }
 
+    /// PATCH `body` as JSON to `path` and deserialize the JSON
+    /// response as `T`. Mirrors [`Self::put`] but for endpoints that
+    /// use the more permissive PATCH semantics (partial update) —
+    /// `freeze update` is the first caller.
+    pub async fn patch<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, CliError> {
+        let url = self.join(path)?;
+        let resp = self
+            .execute_request(self.inner.patch(url).json(body))
+            .await?;
+        self.decode_json(resp).await
+    }
+
     /// DELETE `path`, returning whether the resource existed.
     ///
     /// Returns `Ok(DeleteOutcome::Deleted)` on 2xx responses and
@@ -544,6 +560,22 @@ mod tests {
         let client = fast_client(&server, ApiFlavor::Mergify);
         let got: Foo = client.post("/simulate", &Foo { bar: 7 }).await.unwrap();
         assert_eq!(got, Foo { bar: 14 });
+    }
+
+    #[tokio::test]
+    async fn patch_sends_json_body_and_returns_deserialized_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path("/freeze/abc"))
+            .and(body_json(Foo { bar: 1 }))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Foo { bar: 2 }))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let got: Foo = client.patch("/freeze/abc", &Foo { bar: 1 }).await.unwrap();
+        assert_eq!(got, Foo { bar: 2 });
     }
 
     struct Flaky {
