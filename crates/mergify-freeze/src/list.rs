@@ -59,7 +59,7 @@ pub async fn run(opts: ListOptions<'_>, output: &mut dyn Output) -> Result<(), C
         .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
 
     if opts.output_json {
-        emit_json(output, &freezes)?;
+        output.emit_json_value(&freezes)?;
         return Ok(());
     }
 
@@ -67,14 +67,6 @@ pub async fn run(opts: ListOptions<'_>, output: &mut dyn Output) -> Result<(), C
         .map_err(|e| CliError::Generic(format!("decode scheduled freezes response: {e}")))?;
     emit_human(output, &views, Utc::now())?;
     Ok(())
-}
-
-fn emit_json(output: &mut dyn Output, value: &serde_json::Value) -> std::io::Result<()> {
-    output.emit(value, &mut |w: &mut dyn Write| {
-        let rendered = serde_json::to_string_pretty(value)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        writeln!(w, "{rendered}")
-    })
 }
 
 fn emit_human(
