@@ -142,6 +142,7 @@ fn inject_global_flags(debug: bool, argv: Vec<String>) -> Vec<String> {
 const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("config", "validate"),
     ("config", "simulate"),
+    ("ci", "scopes"),
     ("ci", "scopes-send"),
     ("ci", "git-refs"),
     ("ci", "queue-info"),
@@ -161,6 +162,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
 enum NativeCommand {
     ConfigValidate { config_file: Option<PathBuf> },
     ConfigSimulate(ConfigSimulateOpts),
+    CiScopes(CiScopesOpts),
     CiScopesSend(CiScopesSendOpts),
     CiGitRefs { format: GitRefsFormat },
     CiQueueInfo,
@@ -180,6 +182,13 @@ struct ConfigSimulateOpts {
     pull_request: PullRequestRef,
     token: Option<String>,
     api_url: Option<String>,
+}
+
+struct CiScopesOpts {
+    config: Option<PathBuf>,
+    base: Option<String>,
+    head: Option<String>,
+    write: Option<PathBuf>,
 }
 
 struct CiScopesSendOpts {
@@ -365,11 +374,19 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
         }
         Subcommands::Ci(CiArgs {
-            command: CiSubcommand::Scopes(ShimmedArgs { args }),
-        }) => Dispatch::Shim(inject_global_flags(
-            debug,
-            prepend_two("ci", "scopes", args),
-        )),
+            command:
+                CiSubcommand::Scopes(ScopesCliArgs {
+                    config,
+                    base,
+                    head,
+                    write,
+                }),
+        }) => Dispatch::Native(NativeCommand::CiScopes(CiScopesOpts {
+            config,
+            base,
+            head,
+            write,
+        })),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::JunitProcess(ShimmedArgs { args }),
         }) => Dispatch::Shim(inject_global_flags(
@@ -666,6 +683,16 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::CiQueueInfo => {
                 mergify_ci::queue_info::run(&mut output).map(|()| mergify_core::ExitCode::Success)
             }
+            NativeCommand::CiScopes(opts) => mergify_ci::scopes_detect::run(
+                mergify_ci::scopes_detect::ScopesOptions {
+                    config: opts.config.as_deref(),
+                    base: opts.base.as_deref(),
+                    head: opts.head.as_deref(),
+                    write: opts.write.as_deref(),
+                },
+                &mut output,
+            )
+            .map(|()| mergify_core::ExitCode::Success),
             NativeCommand::TestsShow(opts) => {
                 mergify_ci::tests_show::run(
                     TestsShowOptions {
@@ -905,7 +932,7 @@ enum CiSubcommand {
     #[command(name = "queue-info")]
     QueueInfo,
     /// Give the list of scopes impacted by changed files.
-    Scopes(ShimmedArgs),
+    Scopes(ScopesCliArgs),
     /// Upload `JUnit` XML reports and ignore failed tests with
     /// Mergify's CI Insights Quarantine.
     #[command(name = "junit-process")]
@@ -926,6 +953,29 @@ struct GitRefsCliArgs {
         value_parser = mergify_ci::git_refs::Format::parse,
     )]
     format: GitRefsFormat,
+}
+
+#[derive(clap::Args)]
+struct ScopesCliArgs {
+    /// Path to YAML config file. Falls back to
+    /// ``MERGIFY_CONFIG_PATH`` env var, then auto-detects
+    /// `.mergify.yml`, `.mergify/config.yml`, or
+    /// `.github/mergify.yml`.
+    #[arg(long, env = "MERGIFY_CONFIG_PATH")]
+    config: Option<PathBuf>,
+
+    /// Base git reference to use to look for changed files.
+    #[arg(long)]
+    base: Option<String>,
+
+    /// Head git reference to use to look for changed files.
+    #[arg(long)]
+    head: Option<String>,
+
+    /// Write the detected scopes to a file (JSON, consumed by
+    /// `ci scopes-send --scopes-json`).
+    #[arg(long = "write", short = 'w')]
+    write: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -1288,12 +1338,12 @@ mod tests {
 
     #[test]
     fn shimmed_dispatch_reinjects_debug_for_ci_subcommand() {
-        // The two-token shim paths (`ci scopes`, `ci junit-process`,
+        // The remaining two-token shim paths (`ci junit-process`,
         // `ci junit-upload`) need the same treatment as the
         // single-token `stack` shim — every shim arm must re-inject
-        // `--debug` so the Python side honors it.
+        // `--debug` so the Python side honors it. `ci scopes` is now
+        // native and follows the native dispatch path.
         for (group, sub, tail) in &[
-            ("ci", "scopes", vec!["--base", "main"]),
             ("ci", "junit-process", vec!["--files", "a.xml"]),
             ("ci", "junit-upload", vec!["--files", "a.xml"]),
         ] {

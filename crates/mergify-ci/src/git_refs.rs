@@ -59,7 +59,12 @@ pub enum ReferencesSource {
 }
 
 impl ReferencesSource {
-    fn as_str(self) -> &'static str {
+    /// Wire-format string for the source provenance. Used in
+    /// emitted JSON / shell / markdown across `git-refs` and
+    /// `scopes`, so the names are part of the CLI's public
+    /// contract.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Manual => "manual",
             Self::MergeQueue => "merge_queue",
