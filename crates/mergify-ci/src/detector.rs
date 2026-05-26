@@ -19,6 +19,22 @@ pub enum CIProvider {
     Buildkite,
 }
 
+impl CIProvider {
+    /// String identifier Python emits as the `cicd.provider.name`
+    /// span attribute. Must match `mergify_cli.ci.detector.CIProviderT`
+    /// (`snake_case`, no underscore for the multi-word ones except
+    /// `github_actions`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GithubActions => "github_actions",
+            Self::CircleCi => "circleci",
+            Self::Jenkins => "jenkins",
+            Self::Buildkite => "buildkite",
+        }
+    }
+}
+
 #[must_use]
 pub fn get_ci_provider() -> Option<CIProvider> {
     if env::var("JENKINS_URL").ok().is_some_and(|v| !v.is_empty()) {
@@ -155,15 +171,15 @@ pub fn get_github_pull_request_number() -> Result<Option<u64>, CliError> {
 }
 
 fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
-    let Ok(event_path) = env::var("GITHUB_EVENT_PATH") else {
+    // The PR-number lookup is strict about JSON failures because
+    // it's the only signal that decides whether `scopes-send` runs
+    // at all — silently swallowing a parse error there would hide
+    // a misconfigured workflow. The head-SHA lookup (see
+    // [`read_github_event_pull_request_head_sha`]) has a sane
+    // fallback (`GITHUB_SHA`), so it stays lenient.
+    let Some(event_path) = env::var("GITHUB_EVENT_PATH").ok().filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
-    if event_path.is_empty() {
-        return Ok(None);
-    }
-    // A missing event file means "this isn't a GitHub Actions
-    // pull-request event" — match the Python CLI and treat it as
-    // "no PR detected", not a Configuration error.
     let content = match std::fs::read_to_string(&event_path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -179,6 +195,191 @@ fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
     Ok(event
         .pointer("/pull_request/number")
         .and_then(serde_json::Value::as_u64))
+}
+
+/// `cicd.pipeline.name` resource attribute. None when the
+/// provider can't be detected or its env var isn't set.
+#[must_use]
+pub fn get_pipeline_name() -> Option<String> {
+    let var = match get_ci_provider()? {
+        CIProvider::GithubActions => "GITHUB_WORKFLOW",
+        CIProvider::Jenkins => "JOB_NAME",
+        CIProvider::Buildkite => "BUILDKITE_PIPELINE_SLUG",
+        CIProvider::CircleCi => return None,
+    };
+    non_empty_env(var)
+}
+
+/// `cicd.pipeline.task.name` — the job within a pipeline.
+#[must_use]
+pub fn get_job_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_JOB"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_JOB"),
+        CIProvider::Jenkins => non_empty_env("JOB_NAME"),
+        CIProvider::Buildkite => {
+            non_empty_env("BUILDKITE_LABEL").or_else(|| non_empty_env("BUILDKITE_STEP_KEY"))
+        }
+    }
+}
+
+/// `vcs.ref.head.name` — name of the branch the test ran on.
+#[must_use]
+pub fn get_head_ref_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => {
+            // GitHub Actions sets `GITHUB_HEAD_REF` only on PR
+            // events. Fall back to `GITHUB_REF_NAME` everywhere
+            // else (the bare branch name, not `<pr#>/merge`).
+            non_empty_env("GITHUB_HEAD_REF").or_else(|| non_empty_env("GITHUB_REF_NAME"))
+        }
+        CIProvider::CircleCi => non_empty_env("CIRCLE_BRANCH"),
+        CIProvider::Jenkins => non_empty_env("GIT_BRANCH").map(|raw| {
+            // Jenkins' Git plugin sets `GIT_BRANCH` to
+            // `<remote>/<branch>` (or `refs/heads/<branch>` when
+            // the job's configured for a refspec). Strip the
+            // common prefixes so the wire value matches what
+            // GitHub Actions reports.
+            for prefix in ["origin/", "refs/heads/"] {
+                if let Some(stripped) = raw.strip_prefix(prefix) {
+                    return stripped.to_string();
+                }
+            }
+            raw
+        }),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_BRANCH"),
+    }
+}
+
+/// `vcs.ref.base.name` — PR target branch, when running for a PR.
+#[must_use]
+pub fn get_base_ref_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_BASE_REF"),
+        CIProvider::Jenkins => non_empty_env("CHANGE_TARGET"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_PULL_REQUEST_BASE_BRANCH"),
+        CIProvider::CircleCi => None,
+    }
+}
+
+/// `cicd.pipeline.runner.name` — host / agent identity.
+#[must_use]
+pub fn get_cicd_pipeline_runner_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("RUNNER_NAME"),
+        CIProvider::Jenkins => non_empty_env("NODE_NAME"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_AGENT_NAME"),
+        CIProvider::CircleCi => None,
+    }
+}
+
+/// `cicd.pipeline.run.id` — the workflow / build identifier.
+/// Returned as a string because GitHub uses an integer-like ID
+/// while Jenkins and Buildkite emit free-form strings.
+#[must_use]
+pub fn get_cicd_pipeline_run_id() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_RUN_ID"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_WORKFLOW_ID"),
+        CIProvider::Jenkins => non_empty_env("BUILD_ID"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_BUILD_ID"),
+    }
+}
+
+/// `cicd.pipeline.run.attempt` — 1-indexed retry counter.
+#[must_use]
+pub fn get_cicd_pipeline_run_attempt() -> Option<u64> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_RUN_ATTEMPT")?.parse().ok(),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_BUILD_NUM")?.parse().ok(),
+        // Buildkite uses 0-indexed retries; add 1 so a fresh run
+        // reads as attempt 1 (matching the GHA/CircleCI semantics).
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_RETRY_COUNT")?
+            .parse::<u64>()
+            .ok()
+            .map(|n| n + 1),
+        CIProvider::Jenkins => None,
+    }
+}
+
+/// `cicd.pipeline.run.url` — direct link to the running build.
+#[must_use]
+pub fn get_cicd_pipeline_run_url() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_BUILD_URL"),
+        _ => None,
+    }
+}
+
+/// `vcs.repository.url.full` — clone URL of the repository under
+/// test. GitHub Actions has no equivalent env (the repo is implicit
+/// from `GITHUB_REPOSITORY`); we report `None` there.
+#[must_use]
+pub fn get_repository_url() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_REPO"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_REPOSITORY_URL"),
+        CIProvider::Jenkins => non_empty_env("GIT_URL"),
+        CIProvider::GithubActions => None,
+    }
+}
+
+/// `vcs.ref.head.revision` — the commit SHA the tests ran against.
+///
+/// For GitHub Actions PR builds, `GITHUB_SHA` is the *synthetic
+/// merge commit* GitHub creates by merging the PR head into the
+/// base — not the actual code under test. The event payload at
+/// `GITHUB_EVENT_PATH` carries the real `pull_request.head.sha`,
+/// which is what dashboards correlate with the contributor's
+/// commit. We prefer the event-payload value when present and
+/// fall back to `GITHUB_SHA` otherwise.
+///
+/// For other providers we only have the bare env var today; the
+/// `CircleCI` PR-build API fallback Python implements stays
+/// Python-side until a Rust HTTP shim for GitHub's REST API lands.
+#[must_use]
+pub fn get_head_sha() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => get_github_actions_head_sha(),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_SHA1"),
+        CIProvider::Jenkins => non_empty_env("GIT_COMMIT"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_COMMIT"),
+    }
+}
+
+fn get_github_actions_head_sha() -> Option<String> {
+    if env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request") {
+        if let Some(sha) = read_github_event_pull_request_head_sha() {
+            return Some(sha);
+        }
+    }
+    non_empty_env("GITHUB_SHA")
+}
+
+/// Read `GITHUB_EVENT_PATH` and pluck the
+/// `pull_request.head.sha` out of the JSON. Returns `None` for
+/// every "not applicable" case — env unset, file missing, file
+/// not JSON, key not present — so the caller can quietly fall
+/// back to `GITHUB_SHA` without surfacing an error to the user.
+fn read_github_event_pull_request_head_sha() -> Option<String> {
+    let event = read_github_event_json()?;
+    event
+        .pointer("/pull_request/head/sha")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn read_github_event_json() -> Option<serde_json::Value> {
+    let event_path = env::var("GITHUB_EVENT_PATH").ok()?;
+    if event_path.is_empty() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&event_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
@@ -429,5 +630,84 @@ mod tests {
                 "parse_repository_url({input:?}) mismatch"
             );
         }
+    }
+
+    #[test]
+    fn head_sha_prefers_pr_event_payload_over_github_sha() {
+        // PR events: `GITHUB_SHA` is the synthetic merge commit
+        // GitHub creates by pre-merging the PR; the contributor's
+        // actual head sha lives in the event payload at
+        // `pull_request.head.sha`. Dashboards correlate with the
+        // payload value, so we must prefer it.
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = tmp.path().join("event.json");
+        std::fs::write(
+            &event_path,
+            serde_json::json!({
+                "pull_request": {
+                    "number": 7,
+                    "head": { "sha": "feedface00000000000000000000000000000000" }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                (
+                    "GITHUB_SHA",
+                    Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+                ),
+            ],
+            || {
+                assert_eq!(
+                    get_head_sha().as_deref(),
+                    Some("feedface00000000000000000000000000000000"),
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn head_sha_falls_back_to_github_sha_when_event_lacks_pr_head() {
+        // push events still leave `GITHUB_EVENT_PATH` pointing at a
+        // payload, but it has no `pull_request` field. Fall back to
+        // `GITHUB_SHA` rather than returning None.
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = tmp.path().join("event.json");
+        std::fs::write(&event_path, serde_json::json!({}).to_string()).unwrap();
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("push")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                ("GITHUB_SHA", Some("deadbeef")),
+            ],
+            || {
+                assert_eq!(get_head_sha().as_deref(), Some("deadbeef"));
+            },
+        );
+    }
+
+    #[test]
+    fn head_sha_uses_github_sha_when_event_path_missing() {
+        // Workflows without an event file (e.g. local
+        // `act` runs) still set GITHUB_SHA — we must not regress
+        // to `None` just because the JSON file isn't there.
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some("/this/path/does/not/exist")),
+                ("GITHUB_SHA", Some("cafef00d")),
+            ],
+            || {
+                assert_eq!(get_head_sha().as_deref(), Some("cafef00d"));
+            },
+        );
     }
 }
