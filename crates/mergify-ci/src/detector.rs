@@ -19,6 +19,22 @@ pub enum CIProvider {
     Buildkite,
 }
 
+impl CIProvider {
+    /// String identifier Python emits as the `cicd.provider.name`
+    /// span attribute. Must match `mergify_cli.ci.detector.CIProviderT`
+    /// (`snake_case`, no underscore for the multi-word ones except
+    /// `github_actions`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GithubActions => "github_actions",
+            Self::CircleCi => "circleci",
+            Self::Jenkins => "jenkins",
+            Self::Buildkite => "buildkite",
+        }
+    }
+}
+
 #[must_use]
 pub fn get_ci_provider() -> Option<CIProvider> {
     if env::var("JENKINS_URL").ok().is_some_and(|v| !v.is_empty()) {
@@ -179,6 +195,154 @@ fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
     Ok(event
         .pointer("/pull_request/number")
         .and_then(serde_json::Value::as_u64))
+}
+
+/// `cicd.pipeline.name` resource attribute. None when the
+/// provider can't be detected or its env var isn't set.
+#[must_use]
+pub fn get_pipeline_name() -> Option<String> {
+    let var = match get_ci_provider()? {
+        CIProvider::GithubActions => "GITHUB_WORKFLOW",
+        CIProvider::Jenkins => "JOB_NAME",
+        CIProvider::Buildkite => "BUILDKITE_PIPELINE_SLUG",
+        CIProvider::CircleCi => return None,
+    };
+    non_empty_env(var)
+}
+
+/// `cicd.pipeline.task.name` — the job within a pipeline.
+#[must_use]
+pub fn get_job_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_JOB"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_JOB"),
+        CIProvider::Jenkins => non_empty_env("JOB_NAME"),
+        CIProvider::Buildkite => {
+            non_empty_env("BUILDKITE_LABEL").or_else(|| non_empty_env("BUILDKITE_STEP_KEY"))
+        }
+    }
+}
+
+/// `vcs.ref.head.name` — name of the branch the test ran on.
+#[must_use]
+pub fn get_head_ref_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => {
+            // GitHub Actions sets `GITHUB_HEAD_REF` only on PR
+            // events. Fall back to `GITHUB_REF_NAME` everywhere
+            // else (the bare branch name, not `<pr#>/merge`).
+            non_empty_env("GITHUB_HEAD_REF").or_else(|| non_empty_env("GITHUB_REF_NAME"))
+        }
+        CIProvider::CircleCi => non_empty_env("CIRCLE_BRANCH"),
+        CIProvider::Jenkins => non_empty_env("GIT_BRANCH").map(|raw| {
+            // Jenkins' Git plugin sets `GIT_BRANCH` to
+            // `<remote>/<branch>` (or `refs/heads/<branch>` when
+            // the job's configured for a refspec). Strip the
+            // common prefixes so the wire value matches what
+            // GitHub Actions reports.
+            for prefix in ["origin/", "refs/heads/"] {
+                if let Some(stripped) = raw.strip_prefix(prefix) {
+                    return stripped.to_string();
+                }
+            }
+            raw
+        }),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_BRANCH"),
+    }
+}
+
+/// `vcs.ref.base.name` — PR target branch, when running for a PR.
+#[must_use]
+pub fn get_base_ref_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_BASE_REF"),
+        CIProvider::Jenkins => non_empty_env("CHANGE_TARGET"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_PULL_REQUEST_BASE_BRANCH"),
+        CIProvider::CircleCi => None,
+    }
+}
+
+/// `cicd.pipeline.runner.name` — host / agent identity.
+#[must_use]
+pub fn get_cicd_pipeline_runner_name() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("RUNNER_NAME"),
+        CIProvider::Jenkins => non_empty_env("NODE_NAME"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_AGENT_NAME"),
+        CIProvider::CircleCi => None,
+    }
+}
+
+/// `cicd.pipeline.run.id` — the workflow / build identifier.
+/// Returned as a string because GitHub uses an integer-like ID
+/// while Jenkins and Buildkite emit free-form strings.
+#[must_use]
+pub fn get_cicd_pipeline_run_id() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_RUN_ID"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_WORKFLOW_ID"),
+        CIProvider::Jenkins => non_empty_env("BUILD_ID"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_BUILD_ID"),
+    }
+}
+
+/// `cicd.pipeline.run.attempt` — 1-indexed retry counter.
+#[must_use]
+pub fn get_cicd_pipeline_run_attempt() -> Option<u64> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_RUN_ATTEMPT")?.parse().ok(),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_BUILD_NUM")?.parse().ok(),
+        // Buildkite uses 0-indexed retries; add 1 so a fresh run
+        // reads as attempt 1 (matching the GHA/CircleCI semantics).
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_RETRY_COUNT")?
+            .parse::<u64>()
+            .ok()
+            .map(|n| n + 1),
+        CIProvider::Jenkins => None,
+    }
+}
+
+/// `cicd.pipeline.run.url` — direct link to the running build.
+#[must_use]
+pub fn get_cicd_pipeline_run_url() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_BUILD_URL"),
+        _ => None,
+    }
+}
+
+/// `vcs.repository.url.full` — clone URL of the repository under
+/// test. GitHub Actions has no equivalent env (the repo is implicit
+/// from `GITHUB_REPOSITORY`); we report `None` there.
+#[must_use]
+pub fn get_repository_url() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_REPO"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_REPOSITORY_URL"),
+        CIProvider::Jenkins => non_empty_env("GIT_URL"),
+        CIProvider::GithubActions => None,
+    }
+}
+
+/// `vcs.ref.head.revision` — the commit SHA the tests ran against.
+/// This is the synchronous best-effort version: it reads
+/// `GITHUB_SHA` / `CIRCLE_SHA1` / `GIT_COMMIT` / `BUILDKITE_COMMIT`.
+/// GitHub's `pull_request` event payload may carry a more accurate
+/// SHA (the unmerged head, not the synthetic merge commit) — that
+/// path stays in Python until we port the event parser, which is
+/// expected to land alongside the CLI dispatch in Phase C.
+#[must_use]
+pub fn get_head_sha() -> Option<String> {
+    match get_ci_provider()? {
+        CIProvider::GithubActions => non_empty_env("GITHUB_SHA"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_SHA1"),
+        CIProvider::Jenkins => non_empty_env("GIT_COMMIT"),
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_COMMIT"),
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
