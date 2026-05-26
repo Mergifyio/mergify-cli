@@ -171,15 +171,15 @@ pub fn get_github_pull_request_number() -> Result<Option<u64>, CliError> {
 }
 
 fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
-    let Ok(event_path) = env::var("GITHUB_EVENT_PATH") else {
+    // The PR-number lookup is strict about JSON failures because
+    // it's the only signal that decides whether `scopes-send` runs
+    // at all — silently swallowing a parse error there would hide
+    // a misconfigured workflow. The head-SHA lookup (see
+    // [`read_github_event_pull_request_head_sha`]) has a sane
+    // fallback (`GITHUB_SHA`), so it stays lenient.
+    let Some(event_path) = env::var("GITHUB_EVENT_PATH").ok().filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
-    if event_path.is_empty() {
-        return Ok(None);
-    }
-    // A missing event file means "this isn't a GitHub Actions
-    // pull-request event" — match the Python CLI and treat it as
-    // "no PR detected", not a Configuration error.
     let content = match std::fs::read_to_string(&event_path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -325,20 +325,57 @@ pub fn get_repository_url() -> Option<String> {
 }
 
 /// `vcs.ref.head.revision` — the commit SHA the tests ran against.
-/// This is the synchronous best-effort version: it reads
-/// `GITHUB_SHA` / `CIRCLE_SHA1` / `GIT_COMMIT` / `BUILDKITE_COMMIT`.
-/// GitHub's `pull_request` event payload may carry a more accurate
-/// SHA (the unmerged head, not the synthetic merge commit) — that
-/// path stays in Python until we port the event parser, which is
-/// expected to land alongside the CLI dispatch in Phase C.
+///
+/// For GitHub Actions PR builds, `GITHUB_SHA` is the *synthetic
+/// merge commit* GitHub creates by merging the PR head into the
+/// base — not the actual code under test. The event payload at
+/// `GITHUB_EVENT_PATH` carries the real `pull_request.head.sha`,
+/// which is what dashboards correlate with the contributor's
+/// commit. We prefer the event-payload value when present and
+/// fall back to `GITHUB_SHA` otherwise.
+///
+/// For other providers we only have the bare env var today; the
+/// `CircleCI` PR-build API fallback Python implements stays
+/// Python-side until a Rust HTTP shim for GitHub's REST API lands.
 #[must_use]
 pub fn get_head_sha() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => non_empty_env("GITHUB_SHA"),
+        CIProvider::GithubActions => get_github_actions_head_sha(),
         CIProvider::CircleCi => non_empty_env("CIRCLE_SHA1"),
         CIProvider::Jenkins => non_empty_env("GIT_COMMIT"),
         CIProvider::Buildkite => non_empty_env("BUILDKITE_COMMIT"),
     }
+}
+
+fn get_github_actions_head_sha() -> Option<String> {
+    if env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request") {
+        if let Some(sha) = read_github_event_pull_request_head_sha() {
+            return Some(sha);
+        }
+    }
+    non_empty_env("GITHUB_SHA")
+}
+
+/// Read `GITHUB_EVENT_PATH` and pluck the
+/// `pull_request.head.sha` out of the JSON. Returns `None` for
+/// every "not applicable" case — env unset, file missing, file
+/// not JSON, key not present — so the caller can quietly fall
+/// back to `GITHUB_SHA` without surfacing an error to the user.
+fn read_github_event_pull_request_head_sha() -> Option<String> {
+    let event = read_github_event_json()?;
+    event
+        .pointer("/pull_request/head/sha")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn read_github_event_json() -> Option<serde_json::Value> {
+    let event_path = env::var("GITHUB_EVENT_PATH").ok()?;
+    if event_path.is_empty() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&event_path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -603,5 +640,84 @@ mod tests {
                 "parse_repository_url({input:?}) mismatch"
             );
         }
+    }
+
+    #[test]
+    fn head_sha_prefers_pr_event_payload_over_github_sha() {
+        // PR events: `GITHUB_SHA` is the synthetic merge commit
+        // GitHub creates by pre-merging the PR; the contributor's
+        // actual head sha lives in the event payload at
+        // `pull_request.head.sha`. Dashboards correlate with the
+        // payload value, so we must prefer it.
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = tmp.path().join("event.json");
+        std::fs::write(
+            &event_path,
+            serde_json::json!({
+                "pull_request": {
+                    "number": 7,
+                    "head": { "sha": "feedface00000000000000000000000000000000" }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                (
+                    "GITHUB_SHA",
+                    Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+                ),
+            ],
+            || {
+                assert_eq!(
+                    get_head_sha().as_deref(),
+                    Some("feedface00000000000000000000000000000000"),
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn head_sha_falls_back_to_github_sha_when_event_lacks_pr_head() {
+        // push events still leave `GITHUB_EVENT_PATH` pointing at a
+        // payload, but it has no `pull_request` field. Fall back to
+        // `GITHUB_SHA` rather than returning None.
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = tmp.path().join("event.json");
+        std::fs::write(&event_path, serde_json::json!({}).to_string()).unwrap();
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("push")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                ("GITHUB_SHA", Some("deadbeef")),
+            ],
+            || {
+                assert_eq!(get_head_sha().as_deref(), Some("deadbeef"));
+            },
+        );
+    }
+
+    #[test]
+    fn head_sha_uses_github_sha_when_event_path_missing() {
+        // Workflows without an event file (e.g. local
+        // `act` runs) still set GITHUB_SHA — we must not regress
+        // to `None` just because the JSON file isn't there.
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some("/this/path/does/not/exist")),
+                ("GITHUB_SHA", Some("cafef00d")),
+            ],
+            || {
+                assert_eq!(get_head_sha().as_deref(), Some("cafef00d"));
+            },
+        );
     }
 }
