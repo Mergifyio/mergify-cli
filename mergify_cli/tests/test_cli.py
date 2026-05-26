@@ -40,6 +40,24 @@ def test_cli_shows_help_by_default() -> None:
     assert "stack" in result.output
 
 
+def test_cli_debug_flag_toggles_is_debug() -> None:
+    """`mergify --debug` must flip `utils.is_debug()` so the 6+
+    `if is_debug():` sites in `utils.py` and `stack/*` actually
+    fire. Pinned with an explicit pre/post check because the flag
+    was parsed-but-silently-ignored for a long time before the
+    `set_debug(...)` call was wired into the root group."""
+    runner = testing.CliRunner()
+    # Sanity: default state. We restore it in `finally` regardless
+    # so a stray module-level flag doesn't leak into sibling tests.
+    assert not utils.is_debug()
+    try:
+        result = runner.invoke(cli_mod.cli, ["--debug"])
+        assert result.exit_code == 0, result.output
+        assert utils.is_debug(), "expected --debug to flip is_debug() on"
+    finally:
+        utils.set_debug(debug=False)
+
+
 def test_clirunner_translates_mergify_error_to_exit_code() -> None:
     """CliRunner must see the typed exit code when MergifyError is raised."""
     import click
