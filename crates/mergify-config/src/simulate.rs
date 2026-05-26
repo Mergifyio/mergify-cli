@@ -119,16 +119,14 @@ pub async fn run(opts: SimulateOptions<'_>, output: &mut dyn Output) -> Result<(
 }
 
 fn emit_result(output: &mut dyn Output, response: &SimulatorResponse) -> std::io::Result<()> {
-    let title = response.title.clone();
-    let summary = response.summary.clone();
     output.emit(&(), &mut |w: &mut dyn Write| {
-        writeln!(w, "{title}")?;
+        writeln!(w, "{title}", title = response.title)?;
         writeln!(w)?;
         // Intentional drift from Python: we print raw Markdown
         // instead of rich-rendering it. Machine-readable output is
         // still locked; human rendering is flexible per the compat
         // contract.
-        writeln!(w, "{summary}")
+        writeln!(w, "{summary}", summary = response.summary)
     })
 }
 
