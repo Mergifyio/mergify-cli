@@ -4,7 +4,6 @@ import dataclasses
 import pathlib
 from unittest import mock
 
-import anys
 import httpx
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace import id_generator
@@ -647,11 +646,21 @@ async def test_upload_failure(
 
     assert result.exit_code == 0
     assert result.upload_mock.call_count == 1
+    # Phase B migration: the Python `upload.upload` now wraps a
+    # subprocess to `mergify _internal junit-upload`. The new
+    # signature takes `files` (original tuple) + `run_id` +
+    # `quarantined_names` (the union the Rust span builder bakes
+    # into `cicd.test.quarantined`) instead of the pre-built
+    # `spans` list.
     assert result.upload_mock.call_args.kwargs == {
         "api_url": "https://api.mergify.com",
         "token": "foobar",
         "repository": "foo/bar",
-        "spans": anys.ANY_LIST,
+        "files": (str(REPORT_ALL_PASS_XML),),
+        "run_id": "00000002dfdc1c3e",
+        "quarantined_names": [],
+        "test_framework": None,
+        "test_language": None,
     }
     assert result.stdout == (
         "══════════════════════════════════════════\n"

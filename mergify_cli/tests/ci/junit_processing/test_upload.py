@@ -1,13 +1,22 @@
+"""Tests for the `upload` bridge that shells out to
+`mergify _internal junit-upload`.
+
+The actual HTTP upload behavior is covered by the Rust-side
+wiremock tests in `crates/mergify-ci/src/junit_process/upload.rs`
+(happy path, empty request short-circuit, 401 error surface).
+These Python tests focus on the subprocess wiring: that the right
+binary gets invoked with the right flag set, and that non-zero
+exit codes surface as `UploadError` with the prefix stripped.
+"""
+
 from __future__ import annotations
 
 import pathlib
+import subprocess
+from unittest import mock
 
-from opentelemetry.sdk.trace import ReadableSpan
-import opentelemetry.trace.span
 import pytest
-import responses
 
-from mergify_cli.ci.junit_processing import junit
 from mergify_cli.ci.junit_processing import upload
 
 
@@ -15,97 +24,135 @@ FIXTURES_DIR = pathlib.Path(__file__).parent.parent / "fixtures"
 REPORT_XML = FIXTURES_DIR / "report.xml"
 
 
-@responses.activate(assert_all_requests_are_fired=True)
-@pytest.mark.parametrize(
-    "env",
-    [
-        pytest.param(
-            {
-                "GITHUB_EVENT_NAME": "push",
-                "GITHUB_ACTIONS": "true",
-                "MERGIFY_API_URL": "https://api.mergify.com",
-                "MERGIFY_TOKEN": "abc",
-                "GITHUB_REPOSITORY": "user/repo",
-                "GITHUB_SHA": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                "GITHUB_WORKFLOW": "JOB",
-            },
-            id="GitHub",
+def _completed(
+    returncode: int = 0,
+    stderr: bytes = b"",
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.CompletedProcess(
+        args=[],
+        returncode=returncode,
+        stdout=b"",
+        stderr=stderr,
+    )
+
+
+def test_upload_invokes_subcommand_with_all_metadata() -> None:
+    with (
+        mock.patch.object(
+            upload.junit, "_resolve_mergify_binary", return_value="/bin/mergify"
         ),
-        pytest.param(
-            {
-                "GITHUB_ACTIONS": "",
-                "CIRCLECI": "true",
-                "MERGIFY_API_URL": "https://api.mergify.com",
-                "MERGIFY_TOKEN": "abc",
-                "CIRCLE_REPOSITORY_URL": "https://github.com/user/repo",
-                "CIRCLE_SHA1": "3af96aa24f1d32fcfbb7067793cacc6dc0c6b199",
-                "CIRCLE_JOB": "JOB",
-            },
-            id="CircleCI",
-        ),
-    ],
-)
-async def test_junit_upload(
-    env: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_id, spans = await junit.files_to_spans(files=(str(REPORT_XML),))
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-
-    responses.post(
-        "https://api.mergify.com/v1/repos/user/repo/ci/traces",
-    )
-
-    upload.upload(
-        "https://api.mergify.com",
-        "token",
-        "user/repo",
-        spans,
-    )
-
-    assert len(bytes.fromhex(run_id)) == 8
-
-
-@responses.activate(assert_all_requests_are_fired=True)
-def test_junit_upload_http_error() -> None:
-    responses.post(
-        "https://api.mergify.com/v1/repos/user/repo/ci/traces",
-        status=422,
-        json={"detail": "Not enabled on this repository"},
-    )
-
-    with pytest.raises(upload.UploadError):
-        upload.upload_spans(
-            "https://api.mergify.com",
-            "token",
-            "user/repo",
-            [
-                ReadableSpan(
-                    name="hello",
-                    context=opentelemetry.trace.span.SpanContext(
-                        trace_id=1234,
-                        span_id=324,
-                        is_remote=False,
-                    ),
-                ),
-            ],
+        mock.patch.object(
+            upload.subprocess,
+            "run",
+            return_value=_completed(),
+        ) as run_mock,
+    ):
+        upload.upload(
+            api_url="https://api.mergify.com",
+            token="secret",
+            repository="user/repo",
+            files=(str(REPORT_XML), "other.xml"),
+            run_id="0011223344556677",
+            quarantined_names=["test_a", "test_b"],
+            test_framework="pytest",
+            test_language="python",
+            mergify_test_job_name="ci-job",
         )
 
+    run_mock.assert_called_once()
+    cmd = run_mock.call_args.args[0]
+    assert cmd == [
+        "/bin/mergify",
+        "_internal",
+        "junit-upload",
+        "--api-url",
+        "https://api.mergify.com",
+        "--token",
+        "secret",
+        "--repository",
+        "user/repo",
+        "--run-id",
+        "0011223344556677",
+        "--test-framework",
+        "pytest",
+        "--test-language",
+        "python",
+        "--mergify-test-job-name",
+        "ci-job",
+        "--quarantined",
+        "test_a",
+        "--quarantined",
+        "test_b",
+        str(REPORT_XML),
+        "other.xml",
+    ]
 
-@responses.activate(assert_all_requests_are_fired=True)
-async def test_junit_upload_http_error_raises() -> None:
-    responses.post(
-        "https://api.mergify.com/v1/repos/user/repo/ci/traces",
-        status=422,
-        json={"detail": "Not enabled on this repository"},
-    )
 
-    _run_id, spans = await junit.files_to_spans(files=(str(REPORT_XML),))
-    with pytest.raises(upload.UploadError, match="422"):
+def test_upload_omits_optional_flags_when_unset() -> None:
+    with (
+        mock.patch.object(
+            upload.junit, "_resolve_mergify_binary", return_value="/bin/mergify"
+        ),
+        mock.patch.object(
+            upload.subprocess,
+            "run",
+            return_value=_completed(),
+        ) as run_mock,
+    ):
         upload.upload(
-            "https://api.mergify.com",
-            "token",
-            "user/repo",
-            spans,
+            api_url="https://api.mergify.com",
+            token="secret",
+            repository="user/repo",
+            files=(str(REPORT_XML),),
+            run_id="0011223344556677",
+        )
+
+    cmd = run_mock.call_args.args[0]
+    # No --test-framework / --test-language / --mergify-test-job-name
+    # / --quarantined flags when the caller didn't supply them.
+    for flag in (
+        "--test-framework",
+        "--test-language",
+        "--mergify-test-job-name",
+        "--quarantined",
+    ):
+        assert flag not in cmd, f"{flag!r} should not appear in cmd: {cmd!r}"
+
+
+def test_upload_short_circuits_on_empty_files() -> None:
+    # No files → no subprocess. Mirrors the Python pre-Rust
+    # behavior where `upload.upload` returned early on empty
+    # spans, saving a no-op round trip.
+    with mock.patch.object(upload.subprocess, "run") as run_mock:
+        upload.upload(
+            api_url="https://api.mergify.com",
+            token="secret",
+            repository="user/repo",
+            files=(),
+            run_id="0011223344556677",
+        )
+    run_mock.assert_not_called()
+
+
+def test_upload_surfaces_subprocess_failure_with_prefix_stripped() -> None:
+    with (
+        mock.patch.object(
+            upload.junit, "_resolve_mergify_binary", return_value="/bin/mergify"
+        ),
+        mock.patch.object(
+            upload.subprocess,
+            "run",
+            return_value=_completed(
+                returncode=1,
+                stderr=b"mergify: HTTP 422: Not enabled on this repository\n",
+            ),
+        ),
+        pytest.raises(upload.UploadError, match="HTTP 422"),
+    ):
+        upload.upload(
+            api_url="https://api.mergify.com",
+            token="secret",
+            repository="user/repo",
+            files=(str(REPORT_XML),),
+            run_id="0011223344556677",
         )

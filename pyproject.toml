@@ -32,7 +32,13 @@ dependencies = [
     "rich==15.0.0",
     "aiofiles==25.1.0",
     "click==8.4.1",
-    "opentelemetry-exporter-otlp-proto-http==1.42.1",
+    # `opentelemetry-exporter-otlp-proto-http` is gone — the OTLP
+    # encode-and-upload step now shells out to the native Rust
+    # binary (`mergify _internal junit-upload`) instead. The SDK
+    # stays because the Python `junit_to_spans` bridge still
+    # builds `ReadableSpan` objects so the quarantine + report
+    # paths can keep using span attributes; that goes away too
+    # in Phase C when the orchestrator is fully native.
     "opentelemetry-sdk==1.42.1",
     "tenacity==9.1.4",
     "pyyaml==6.0.3",

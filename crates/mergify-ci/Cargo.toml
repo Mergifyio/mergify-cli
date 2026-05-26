@@ -11,11 +11,15 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+flate2 = "1"
 getrandom = "0.3"
 globset = "0.4"
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
 quick-xml = "0.40"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
