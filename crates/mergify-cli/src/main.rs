@@ -5,9 +5,9 @@
 //!
 //! - **Natively-ported commands** ([`NATIVE_COMMANDS`]) — clap
 //!   parses the full flag set and the binary runs them in process.
-//! - **Python-shimmed commands** (`stack`, `ci scopes`, `ci
-//!   junit-process`, `ci junit-upload`) — clap registers them as
-//!   stub variants with a catch-all `args: Vec<String>`. That way
+//! - **Python-shimmed commands** (`stack` is the last one left)
+//!   — clap registers them as stub variants with a catch-all
+//!   `args: Vec<String>`. That way
 //!   `mergify --help` and `mergify <group> --help` list the entire
 //!   CLI surface, but the captured argv is forwarded verbatim to
 //!   the Python implementation by [`mergify_py_shim::run`].
@@ -111,14 +111,6 @@ fn prepend_one(head: &str, tail: Vec<String>) -> Vec<String> {
     out
 }
 
-fn prepend_two(first: &str, second: &str, tail: Vec<String>) -> Vec<String> {
-    let mut out = Vec::with_capacity(tail.len() + 2);
-    out.push(first.to_string());
-    out.push(second.to_string());
-    out.extend(tail);
-    out
-}
-
 /// Re-inject the global `--debug` flag at the front of the forwarded
 /// argv so Python's root group sees it. Clap consumed the flag when
 /// parsing the Rust-side argv, but the Python CLI declares it at
@@ -148,6 +140,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("ci", "git-refs"),
     ("ci", "queue-info"),
     ("ci", "junit-process"),
+    ("ci", "junit-upload"),
     ("tests", "show"),
     ("queue", "pause"),
     ("queue", "unpause"),
@@ -162,13 +155,22 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
 /// Native commands the Rust binary handles without delegating to
 /// the Python shim.
 enum NativeCommand {
-    ConfigValidate { config_file: Option<PathBuf> },
+    ConfigValidate {
+        config_file: Option<PathBuf>,
+    },
     ConfigSimulate(ConfigSimulateOpts),
     CiScopes(CiScopesOpts),
     CiScopesSend(CiScopesSendOpts),
-    CiGitRefs { format: GitRefsFormat },
+    CiGitRefs {
+        format: GitRefsFormat,
+    },
     CiQueueInfo,
     CiJunitProcess(CiJunitProcessOpts),
+    /// Deprecated alias for `CiJunitProcess`. Same orchestrator,
+    /// same args; the dispatcher prints a deprecation warning to
+    /// stderr before running. Matches Python's `deprecated=...`
+    /// click decorator on `ci junit-upload`.
+    CiJunitUpload(CiJunitProcessOpts),
     TestsShow(TestsShowOpts),
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
@@ -424,11 +426,27 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             files,
         })),
         Subcommands::Ci(CiArgs {
-            command: CiSubcommand::JunitUpload(ShimmedArgs { args }),
-        }) => Dispatch::Shim(inject_global_flags(
-            debug,
-            prepend_two("ci", "junit-upload", args),
-        )),
+            command:
+                CiSubcommand::JunitUpload(JunitProcessCliArgs {
+                    api_url,
+                    token,
+                    repository,
+                    test_framework,
+                    test_language,
+                    tests_target_branch,
+                    test_exit_code,
+                    files,
+                }),
+        }) => Dispatch::Native(NativeCommand::CiJunitUpload(CiJunitProcessOpts {
+            api_url,
+            token,
+            repository,
+            test_framework,
+            test_language,
+            tests_target_branch,
+            test_exit_code,
+            files,
+        })),
         Subcommands::Config(ConfigArgs {
             config_file,
             command: ConfigSubcommand::Validate(_),
@@ -729,6 +747,30 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 )
                 .await
             }
+            NativeCommand::CiJunitUpload(opts) => {
+                // Match Python's `@ci.command(deprecated="...")`
+                // behavior: click prints a warning to stderr on
+                // first invocation before running the command body.
+                // The orchestrator is identical to junit-process,
+                // so we just forward.
+                eprintln!(
+                    "DeprecationWarning: 'junit-upload' is deprecated, use `junit-process` instead.",
+                );
+                mergify_ci::junit_process::run(
+                    JunitProcessOptions {
+                        api_url: opts.api_url.as_deref(),
+                        token: opts.token.as_deref(),
+                        repository: opts.repository.as_deref(),
+                        test_framework: opts.test_framework.as_deref(),
+                        test_language: opts.test_language.as_deref(),
+                        tests_target_branch: opts.tests_target_branch.as_deref(),
+                        test_exit_code: opts.test_exit_code,
+                        files: &opts.files,
+                    },
+                    &mut output,
+                )
+                .await
+            }
             NativeCommand::CiScopes(opts) => mergify_ci::scopes_detect::run(
                 mergify_ci::scopes_detect::ScopesOptions {
                     config: opts.config.as_deref(),
@@ -990,7 +1032,7 @@ enum CiSubcommand {
     JunitProcess(JunitProcessCliArgs),
     /// Upload JUnit XML reports (deprecated: use `junit-process`).
     #[command(name = "junit-upload")]
-    JunitUpload(ShimmedArgs),
+    JunitUpload(JunitProcessCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -1436,20 +1478,30 @@ mod tests {
     }
 
     #[test]
-    fn shimmed_dispatch_reinjects_debug_for_ci_subcommand() {
-        // The remaining two-token shim path (`ci junit-upload`)
-        // needs the same treatment as the single-token `stack`
-        // shim. `ci scopes` and `ci junit-process` are now native
-        // and follow the native dispatch path — they're verified
-        // through `dispatch_from_parsed` returning a `Native`
-        // variant elsewhere, not through this shim-loop test.
-        let parsed = parse(&["--debug", "ci", "junit-upload", "--files", "a.xml"]);
-        let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
-            panic!("ci junit-upload must dispatch to the Python shim");
+    fn ci_junit_upload_dispatches_natively_via_deprecated_alias() {
+        // `ci junit-upload` is the deprecated alias for
+        // `junit-process`. Both must dispatch to the native
+        // orchestrator; the alias gets its own
+        // `NativeCommand::CiJunitUpload` variant so `run_native`
+        // can print the deprecation warning before forwarding.
+        let parsed = parse(&[
+            "ci",
+            "junit-upload",
+            "-r",
+            "owner/repo",
+            "-t",
+            "tok",
+            "-b",
+            "main",
+            "report.xml",
+        ]);
+        let Dispatch::Native(NativeCommand::CiJunitUpload(opts)) = dispatch_from_parsed(parsed)
+        else {
+            panic!("ci junit-upload must dispatch to the native CiJunitUpload variant");
         };
-        assert_eq!(
-            argv,
-            vec!["--debug", "ci", "junit-upload", "--files", "a.xml"]
-        );
+        assert_eq!(opts.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(opts.token.as_deref(), Some("tok"));
+        assert_eq!(opts.tests_target_branch.as_deref(), Some("main"));
+        assert_eq!(opts.files, vec!["report.xml"]);
     }
 }
