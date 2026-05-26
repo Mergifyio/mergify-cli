@@ -155,16 +155,25 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
+    // Internal Python migration helper. Listed so `looks_native`
+    // routes `mergify _internal junit-parse …` past the shim
+    // fallback when clap rejects it, but it stays hidden from
+    // `--help` (see the `Subcommands::Internal` variant).
+    ("_internal", "junit-parse"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
 /// the Python shim.
 enum NativeCommand {
-    ConfigValidate { config_file: Option<PathBuf> },
+    ConfigValidate {
+        config_file: Option<PathBuf>,
+    },
     ConfigSimulate(ConfigSimulateOpts),
     CiScopes(CiScopesOpts),
     CiScopesSend(CiScopesSendOpts),
-    CiGitRefs { format: GitRefsFormat },
+    CiGitRefs {
+        format: GitRefsFormat,
+    },
     CiQueueInfo,
     TestsShow(TestsShowOpts),
     QueuePause(QueuePauseOpts),
@@ -175,6 +184,14 @@ enum NativeCommand {
     FreezeCreate(FreezeCreateOpts),
     FreezeUpdate(FreezeUpdateOpts),
     FreezeDelete(FreezeDeleteOpts),
+    /// `_internal junit-parse <FILE>` — Python migration helper.
+    /// Reads the `JUnit` XML file, parses it with the native Rust
+    /// parser, prints the resulting cases as a JSON array. Wire
+    /// format is not stable; only the Python code shipped in this
+    /// wheel may consume it.
+    InternalJunitParse {
+        file: PathBuf,
+    },
 }
 
 struct ConfigSimulateOpts {
@@ -373,6 +390,9 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
         Subcommands::Stack(ShimmedArgs { args }) => {
             Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
         }
+        Subcommands::Internal(InternalArgs {
+            command: InternalSubcommand::JunitParse(InternalJunitParseArgs { file }),
+        }) => Dispatch::Native(NativeCommand::InternalJunitParse { file }),
         Subcommands::Ci(CiArgs {
             command:
                 CiSubcommand::Scopes(ScopesCliArgs {
@@ -813,6 +833,25 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             )
             .await
             .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::InternalJunitParse { file } => {
+                // Read the JUnit XML, parse it with the native
+                // parser, emit the full `ParseResult` as JSON on
+                // stdout — `{"suite_names": [...], "cases": [...]}`.
+                // The Python `junit_to_spans` consumer in this same
+                // wheel pipes the bytes back into the existing span
+                // builder. Failures surface as a `CliError::Generic`
+                // and exit non-zero — Python wraps that into
+                // `InvalidJunitXMLError(stderr)`.
+                let bytes = std::fs::read(&file).map_err(|e| {
+                    mergify_core::CliError::Generic(format!("cannot read {}: {e}", file.display()))
+                })?;
+                let parsed = mergify_ci::junit_process::junit::parse(&bytes)?;
+                let json = serde_json::to_string(&parsed).map_err(|e| {
+                    mergify_core::CliError::Generic(format!("serialize junit-parse output: {e}"))
+                })?;
+                println!("{json}");
+                Ok(mergify_core::ExitCode::Success)
+            }
         }
     });
 
@@ -857,6 +896,14 @@ enum Subcommands {
     Freeze(FreezeArgs),
     /// Manage stacked pull requests.
     Stack(ShimmedArgs),
+    /// Internal helpers the Python side of the wheel calls during
+    /// the Python→Rust migration. Hidden from `--help` because it
+    /// is not part of the user-facing CLI; the wire format is not
+    /// stable and may change without notice. Do not depend on it
+    /// from anywhere outside the Python code shipped in this same
+    /// wheel.
+    #[command(name = "_internal", hide = true)]
+    Internal(InternalArgs),
 }
 
 /// Catch-all positional args for a shimmed subcommand. We surface
@@ -872,6 +919,29 @@ struct ShimmedArgs {
     /// All arguments forwarded verbatim to the Python implementation.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
     args: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct InternalArgs {
+    #[command(subcommand)]
+    command: InternalSubcommand,
+}
+
+#[derive(Subcommand)]
+enum InternalSubcommand {
+    /// Parse a `JUnit` XML file and print the parsed test cases
+    /// as a JSON array to stdout. Used by the Python side of the
+    /// `junit-process` command during migration; not a stable
+    /// user-facing surface.
+    #[command(name = "junit-parse")]
+    JunitParse(InternalJunitParseArgs),
+}
+
+#[derive(clap::Args)]
+struct InternalJunitParseArgs {
+    /// Path to the `JUnit` XML file to parse.
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
 }
 
 #[derive(clap::Args)]

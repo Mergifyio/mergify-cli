@@ -22,6 +22,10 @@ mergify-core = { path = "../mergify-core" }
 mergify-freeze = { path = "../mergify-freeze" }
 mergify-py-shim = { path = "../mergify-py-shim" }
 mergify-queue = { path = "../mergify-queue" }
+# Only used by the `_internal junit-parse` Python migration helper.
+# Remove this dep when the Python side of `junit-process` goes away
+# and the `InternalJunitParse` native arm is deleted.
+serde_json = "1.0"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
 
 [dev-dependencies]
