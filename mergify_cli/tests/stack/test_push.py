@@ -2640,8 +2640,60 @@ async def test_push_branches_skips_notes_when_local_ref_absent(
 async def test_push_branches_retries_on_stale_notes_ref(
     git_mock: test_utils.GitMock,
 ) -> None:
-    """When push fails and a notes lease was included, retry after merging
-    the remote notes ref."""
+    """When push fails due to a stale notes lease, retry with the merged SHA."""
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
+            pull=None,
+            commit_sha="commit1_sha",
+            title="Title",
+            message="Message",
+            base_branch="main",
+            dest_branch="stack/title--29617d37",
+            action="create",
+        ),
+    ]
+    git_mock.mock(
+        "rev-parse",
+        "--verify",
+        "refs/notes/mergify/stack",
+        output="stale_sha",
+    )
+
+    # First push fails (stale notes ref)
+    git_mock.mock_error(
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "--force-with-lease=refs/notes/mergify/stack:stale_sha",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
+
+    # Retry push with merged SHA succeeds
+    retry_push_args = (
+        "push",
+        "--atomic",
+        "--force-with-lease=refs/heads/stack/title--29617d37:",
+        "--force-with-lease=refs/notes/mergify/stack:merged_sha",
+        "origin",
+        "commit1_sha:refs/heads/stack/title--29617d37",
+        "+refs/notes/mergify/stack:refs/notes/mergify/stack",
+    )
+    git_mock.mock(*retry_push_args, output="")
+
+    with mock.patch.object(push, "_merge_remote_notes", return_value="merged_sha"):
+        await push.push_branches("origin", local_changes, notes_ref_fetched=True)
+
+    assert git_mock.has_been_called_with(*retry_push_args)
+
+
+async def test_push_branches_no_retry_when_notes_unchanged(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """When notes merge doesn't change the SHA, the push failure wasn't
+    caused by a stale notes lease — re-raise without retrying."""
     local_changes = [
         changes.LocalChange(
             id=changes.ChangeId("I29617d37762fd69809c255d7e7073cb11f8fbf50"),
@@ -2660,8 +2712,7 @@ async def test_push_branches_retries_on_stale_notes_ref(
         "refs/notes/mergify/stack",
         output="notes_sha",
     )
-
-    push_args = (
+    git_mock.mock_error(
         "push",
         "--atomic",
         "--force-with-lease=refs/heads/stack/title--29617d37:",
@@ -2671,45 +2722,11 @@ async def test_push_branches_retries_on_stale_notes_ref(
         "+refs/notes/mergify/stack:refs/notes/mergify/stack",
     )
 
-    # First push fails (stale notes ref)
-    git_mock.mock_error(*push_args)
-
-    # Merge remote notes: fetch into temp ref, merge, cleanup
-    git_mock.mock(
-        "fetch",
-        "origin",
-        "--no-write-fetch-head",
-        "+refs/notes/mergify/stack:refs/notes/mergify/stack-incoming",
-        output="",
-    )
-    git_mock.mock(
-        "notes",
-        "--ref=refs/notes/mergify/stack",
-        "merge",
-        "--strategy=union",
-        "refs/notes/mergify/stack-incoming",
-        output="",
-    )
-    git_mock.mock(
-        "update-ref",
-        "-d",
-        "refs/notes/mergify/stack-incoming",
-        output="",
-    )
-
-    # Retry push succeeds (same args since mock returns same SHA)
-    git_mock.mock(*push_args, output="")
-
-    await push.push_branches("origin", local_changes, notes_ref_fetched=True)
-
-    assert git_mock.has_been_called_with(
-        "notes",
-        "--ref=refs/notes/mergify/stack",
-        "merge",
-        "--strategy=union",
-        "refs/notes/mergify/stack-incoming",
-    )
-    assert git_mock._called.count(push_args) == 2
+    with (
+        mock.patch.object(push, "_merge_remote_notes", return_value="notes_sha"),
+        pytest.raises(utils.CommandError),
+    ):
+        await push.push_branches("origin", local_changes, notes_ref_fetched=True)
 
 
 async def test_push_branches_no_retry_without_notes_lease(
@@ -2750,15 +2767,6 @@ async def test_push_branches_no_retry_without_notes_lease(
             notes_ref_fetched=False,
         )
 
-    # No merge attempted
-    assert not git_mock.has_been_called_with(
-        "notes",
-        "--ref=refs/notes/mergify/stack",
-        "merge",
-        "--strategy=union",
-        "refs/notes/mergify/stack-incoming",
-    )
-
 
 async def test_push_branches_retry_raises_original_error_on_merge_failure(
     git_mock: test_utils.GitMock,
@@ -2782,8 +2790,7 @@ async def test_push_branches_retry_raises_original_error_on_merge_failure(
         "refs/notes/mergify/stack",
         output="notes_sha",
     )
-
-    push_args = (
+    git_mock.mock_error(
         "push",
         "--atomic",
         "--force-with-lease=refs/heads/stack/title--29617d37:",
@@ -2792,21 +2799,18 @@ async def test_push_branches_retry_raises_original_error_on_merge_failure(
         "commit1_sha:refs/heads/stack/title--29617d37",
         "+refs/notes/mergify/stack:refs/notes/mergify/stack",
     )
-    git_mock.mock_error(*push_args)
 
-    # Fetch for merge fails (e.g. network error)
-    git_mock.mock_error(
-        "fetch",
-        "origin",
-        "--no-write-fetch-head",
-        "+refs/notes/mergify/stack:refs/notes/mergify/stack-incoming",
-    )
-
-    with pytest.raises(utils.CommandError) as exc_info:
+    with (
+        mock.patch.object(
+            push,
+            "_merge_remote_notes",
+            side_effect=utils.CommandError(("notes", "merge"), 1, b""),
+        ),
+        pytest.raises(utils.CommandError) as exc_info,
+    ):
         await push.push_branches("origin", local_changes, notes_ref_fetched=True)
 
-    # The raised error is the original push error, not the fetch error
-    assert "push" in str(exc_info.value.command_args)
+    assert exc_info.value.command_args[0] == "push"
 
 
 def _make_local_change(

@@ -131,8 +131,11 @@ async def fetch_notes_ref(remote: str) -> bool:
     return True
 
 
-async def _merge_remote_notes(remote: str) -> None:
-    """Fetch and merge the remote notes ref into the local one."""
+async def _merge_remote_notes(remote: str) -> str:
+    """Fetch and merge the remote notes ref into the local one.
+
+    Returns the new local SHA of the notes ref after the merge.
+    """
     tmp_ref = "refs/notes/mergify/stack-incoming"
     await utils.git(
         "fetch",
@@ -153,6 +156,7 @@ async def _merge_remote_notes(remote: str) -> None:
             await utils.git("update-ref", "-d", tmp_ref)
         except utils.CommandError:
             pass
+    return await utils.git("rev-parse", "--verify", NOTES_REF)
 
 
 async def push_branches(
@@ -205,18 +209,12 @@ async def push_branches(
                 raise
 
             try:
-                await _merge_remote_notes(remote)
+                new_notes_sha = await _merge_remote_notes(remote)
             except utils.CommandError:
                 raise push_err from None
 
-            try:
-                new_notes_sha = await utils.git(
-                    "rev-parse",
-                    "--verify",
-                    NOTES_REF,
-                )
-            except utils.CommandError:
-                raise push_err from None
+            if new_notes_sha == notes_local_sha:
+                raise
 
             new_lease_args = [
                 a
