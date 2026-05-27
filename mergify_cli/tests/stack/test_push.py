@@ -2487,21 +2487,33 @@ async def test_stack_push_fetches_notes_ref(
     )
 
 
-async def test_fetch_notes_ref_skips_fetch_when_local_ref_exists(
+async def test_fetch_notes_ref_merges_when_local_ref_exists(
     git_mock: test_utils.GitMock,
 ) -> None:
-    """fetch_notes_ref returns True without fetching when the local ref already exists."""
+    """fetch_notes_ref merges remote notes when the local ref already exists."""
     git_mock.mock("rev-parse", "--verify", "refs/notes/mergify/stack", output="abc123")
 
-    result = await push.fetch_notes_ref("origin")
+    with mock.patch.object(push, "_merge_remote_notes") as merge_mock:
+        result = await push.fetch_notes_ref("origin")
 
     assert result is True
-    assert not git_mock.has_been_called_with(
-        "fetch",
-        "origin",
-        "--no-write-fetch-head",
-        "refs/notes/mergify/stack:refs/notes/mergify/stack",
-    )
+    merge_mock.assert_awaited_once_with("origin")
+
+
+async def test_fetch_notes_ref_merge_failure_is_non_fatal(
+    git_mock: test_utils.GitMock,
+) -> None:
+    """fetch_notes_ref returns True even when the remote merge fails."""
+    git_mock.mock("rev-parse", "--verify", "refs/notes/mergify/stack", output="abc123")
+
+    with mock.patch.object(
+        push,
+        "_merge_remote_notes",
+        side_effect=utils.CommandError(("fetch",), 1, b"network error"),
+    ):
+        result = await push.fetch_notes_ref("origin")
+
+    assert result is True
 
 
 async def test_push_branches_pushes_notes_ref_atomically(
