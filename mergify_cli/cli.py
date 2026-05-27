@@ -46,6 +46,11 @@ def cli(
     debug: bool,
 ) -> None:
     ctx.obj = {"debug": debug}
+    # Propagate the flag to the module-level toggle utils consults
+    # via `is_debug()`. Without this call the `--debug` flag is
+    # parsed but ignored — the 6+ `if is_debug():` sites in
+    # `utils.py` / `stack/*` never fire.
+    utils.set_debug(debug=debug)
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 

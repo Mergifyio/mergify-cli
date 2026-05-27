@@ -118,6 +118,21 @@ fn prepend_two(first: &str, second: &str, tail: Vec<String>) -> Vec<String> {
     out
 }
 
+/// Re-inject the global `--debug` flag at the front of the forwarded
+/// argv so Python's root group sees it. Clap consumed the flag when
+/// parsing the Rust-side argv, but the Python CLI declares it at
+/// root too — leaving it off would silently drop the user's intent
+/// for shimmed commands.
+fn inject_global_flags(debug: bool, argv: Vec<String>) -> Vec<String> {
+    if !debug {
+        return argv;
+    }
+    let mut out = Vec::with_capacity(argv.len() + 1);
+    out.push("--debug".to_string());
+    out.extend(argv);
+    out
+}
+
 /// Single source of truth for the `(group, subcommand)` pairs the
 /// Rust binary handles natively. Used by [`looks_native`] for argv
 /// recognition and by the `--list-native-commands` hidden flag so
@@ -344,17 +359,29 @@ fn detect_dispatch(argv: &[String]) -> Option<Dispatch> {
 
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
+    let debug = parsed.debug;
     match parsed.command {
-        Subcommands::Stack(ShimmedArgs { args }) => Dispatch::Shim(prepend_one("stack", args)),
+        Subcommands::Stack(ShimmedArgs { args }) => {
+            Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
+        }
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::Scopes(ShimmedArgs { args }),
-        }) => Dispatch::Shim(prepend_two("ci", "scopes", args)),
+        }) => Dispatch::Shim(inject_global_flags(
+            debug,
+            prepend_two("ci", "scopes", args),
+        )),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::JunitProcess(ShimmedArgs { args }),
-        }) => Dispatch::Shim(prepend_two("ci", "junit-process", args)),
+        }) => Dispatch::Shim(inject_global_flags(
+            debug,
+            prepend_two("ci", "junit-process", args),
+        )),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::JunitUpload(ShimmedArgs { args }),
-        }) => Dispatch::Shim(prepend_two("ci", "junit-upload", args)),
+        }) => Dispatch::Shim(inject_global_flags(
+            debug,
+            prepend_two("ci", "junit-upload", args),
+        )),
         Subcommands::Config(ConfigArgs {
             config_file,
             command: ConfigSubcommand::Validate(_),
@@ -776,6 +803,15 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 #[command(name = "mergify", disable_help_subcommand = true)]
 #[command(disable_version_flag = true)]
 struct CliRoot {
+    /// Enable verbose debug logging. Mirrors the Python CLI's
+    /// top-level `--debug` flag so the same invocations work
+    /// against either binary; native commands accept it as a no-op
+    /// today (no native code path consults it yet), shimmed ones
+    /// re-inject it into the forwarded argv so the Python side can
+    /// honor it.
+    #[arg(long, global = true)]
+    debug: bool,
+
     #[command(subcommand)]
     command: Subcommands,
 }
@@ -1190,4 +1226,90 @@ struct FreezeDeleteCliArgs {
 /// argument error.
 fn parse_naive_datetime_arg(value: &str) -> Result<chrono::NaiveDateTime, String> {
     parse_naive_datetime(value).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(argv: &[&str]) -> CliRoot {
+        CliRoot::try_parse_from(
+            std::iter::once("mergify".to_string()).chain(argv.iter().map(|s| (*s).to_string())),
+        )
+        .expect("argv parses")
+    }
+
+    #[test]
+    fn root_debug_flag_accepted_before_native_command() {
+        // Without this, clap would reject `--debug` and exit before
+        // any dispatch — the regression we just fixed.
+        let parsed = parse(&["--debug", "ci", "git-refs"]);
+        assert!(parsed.debug, "--debug should be parsed as true");
+        assert!(matches!(
+            parsed.command,
+            Subcommands::Ci(CiArgs {
+                command: CiSubcommand::GitRefs(_)
+            })
+        ));
+    }
+
+    #[test]
+    fn root_debug_flag_accepted_after_native_group() {
+        // `--debug` is declared `global = true`, so it's recognised
+        // at any point along the subcommand chain. clap's
+        // hand-off prefers root, but users sometimes type it after
+        // the group name — both must work.
+        let parsed = parse(&["queue", "--debug", "status"]);
+        assert!(parsed.debug);
+    }
+
+    #[test]
+    fn shimmed_dispatch_reinjects_debug_at_argv_head() {
+        // Clap consumes the root `--debug`; without re-injection,
+        // the Python side (which declares its own root `--debug`)
+        // would never see the flag.
+        let parsed = parse(&["--debug", "stack", "push"]);
+        let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
+            panic!("stack must dispatch to the Python shim");
+        };
+        assert_eq!(argv, vec!["--debug", "stack", "push"]);
+    }
+
+    #[test]
+    fn shimmed_dispatch_omits_debug_when_not_set() {
+        let parsed = parse(&["stack", "push"]);
+        let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
+            panic!("stack must dispatch to the Python shim");
+        };
+        // No `--debug` prefix when the user didn't pass one — we
+        // don't want to silently flip Python into verbose mode.
+        assert_eq!(argv, vec!["stack", "push"]);
+    }
+
+    #[test]
+    fn shimmed_dispatch_reinjects_debug_for_ci_subcommand() {
+        // The two-token shim paths (`ci scopes`, `ci junit-process`,
+        // `ci junit-upload`) need the same treatment as the
+        // single-token `stack` shim — every shim arm must re-inject
+        // `--debug` so the Python side honors it.
+        for (group, sub, tail) in &[
+            ("ci", "scopes", vec!["--base", "main"]),
+            ("ci", "junit-process", vec!["--files", "a.xml"]),
+            ("ci", "junit-upload", vec!["--files", "a.xml"]),
+        ] {
+            let mut argv_in = vec!["--debug", group, sub];
+            argv_in.extend(tail.iter().copied());
+            let parsed = parse(&argv_in);
+            let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
+                panic!("ci {sub} must dispatch to the Python shim");
+            };
+            let mut expected = vec![
+                "--debug".to_string(),
+                (*group).to_string(),
+                (*sub).to_string(),
+            ];
+            expected.extend(tail.iter().map(|s| (*s).to_string()));
+            assert_eq!(argv, expected, "ci {sub} dispatch dropped --debug");
+        }
+    }
 }
