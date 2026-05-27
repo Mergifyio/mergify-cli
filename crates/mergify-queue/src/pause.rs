@@ -16,11 +16,9 @@
 use std::io::IsTerminal;
 use std::io::Write;
 
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
-use mergify_core::HttpClient;
+use mergify_core::CommandContext;
 use mergify_core::Output;
-use mergify_core::auth;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -74,20 +72,21 @@ pub async fn run(opts: PauseOptions<'_>, output: &mut dyn Output) -> Result<(), 
     // Resolve auth/repo first so the prompt names the *actual* repo
     // (including the `GITHUB_REPOSITORY` fallback) and so a missing
     // repo or token fails loudly *before* we ask for confirmation.
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
 
     confirm(
         opts.yes_i_am_sure,
         std::io::stdin().is_terminal(),
-        &repository,
+        &ctx.repository,
     )?;
 
-    output.status(&format!("Pausing merge queue for {repository}…"))?;
+    output.status(&format!(
+        "Pausing merge queue for {repo}…",
+        repo = ctx.repository,
+    ))?;
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
-    let path = format!("/v1/repos/{repository}/merge-queue/pause");
+    let client = ctx.mergify_client()?;
+    let path = format!("/v1/repos/{}/merge-queue/pause", ctx.repository);
     let resp: PauseResponse = client
         .put(
             &path,
