@@ -48,8 +48,7 @@ fn emit_resumed(output: &mut dyn Output) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -58,24 +57,6 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-    }
-
-    fn make_output() -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            OutputMode::Human,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stdout }
-    }
 
     #[tokio::test]
     async fn run_unpauses_on_2xx() {
@@ -88,7 +69,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             UnpauseOptions {
@@ -101,7 +82,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(stdout.contains("Queue resumed"), "got: {stdout:?}");
     }
 
@@ -115,7 +96,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let api_url = server.uri();
         let err = run(
             UnpauseOptions {
@@ -130,16 +111,5 @@ mod tests {
         assert!(matches!(err, CliError::MergifyApi(_)));
         assert!(err.to_string().contains("not currently paused"));
         assert_eq!(err.exit_code(), mergify_core::ExitCode::MergifyApiError);
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 }

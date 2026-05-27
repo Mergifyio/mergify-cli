@@ -100,10 +100,7 @@ pub async fn run(opts: CreateOptions<'_>, output: &mut dyn Output) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -115,35 +112,6 @@ mod tests {
 
     use super::*;
     use crate::common::parse_naive_datetime;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-    }
-
-    fn make_output() -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            OutputMode::Human,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stdout }
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn run_posts_payload_with_optional_conditions_when_provided() {
@@ -179,7 +147,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let api_url = server.uri();
         let matching = ["base=main".to_string()];
         let exclude = ["label=hotfix".to_string()];
@@ -200,7 +168,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+        let stdout = cap.stdout();
         assert!(
             stdout.contains("Freeze created successfully"),
             "got: {stdout}"
@@ -238,7 +206,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut cap = make_output();
+        let mut cap = Captured::human();
         let api_url = server.uri();
         let empty: [String; 0] = [];
         run(

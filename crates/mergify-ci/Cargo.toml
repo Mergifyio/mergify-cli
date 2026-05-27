@@ -20,6 +20,7 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+mergify-test-support = { path = "../mergify-test-support" }
 tempfile = "3.14"
 temp-env = { version = "0.3", features = ["async_closure"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }

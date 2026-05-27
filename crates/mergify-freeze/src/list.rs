@@ -227,7 +227,7 @@ fn write_separator(w: &mut dyn Write, widths: &[usize; 6]) -> std::io::Result<()
 #[cfg(test)]
 mod tests {
     use mergify_core::OutputMode;
-    use mergify_core::StdioOutput;
+    use mergify_test_support::Captured;
     use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -237,39 +237,6 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-
-    type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
-
-    struct Captured {
-        output: StdioOutput,
-        stdout: SharedBytes,
-    }
-
-    fn make_output(mode: OutputMode) -> Captured {
-        let stdout: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr: SharedBytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let output = StdioOutput::with_sinks(
-            mode,
-            SharedWriter(std::sync::Arc::clone(&stdout)),
-            SharedWriter(std::sync::Arc::clone(&stderr)),
-        );
-        Captured { output, stdout }
-    }
-
-    fn stdout_string(cap: &Captured) -> String {
-        String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap()
-    }
-
-    struct SharedWriter(SharedBytes);
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
 
     fn freeze_sample() -> serde_json::Value {
         json!({
@@ -306,7 +273,7 @@ mod tests {
         let body = json!({"scheduled_freezes": [freeze.clone()]});
         arrange(&server, body).await;
 
-        let mut cap = make_output(OutputMode::Json);
+        let mut cap = Captured::new(OutputMode::Json);
         let api_url = server.uri();
         run(
             ListOptions {
@@ -320,7 +287,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
         assert_eq!(parsed, json!([freeze]));
     }
@@ -332,7 +299,7 @@ mod tests {
         let server = MockServer::start().await;
         arrange(&server, json!({"scheduled_freezes": []})).await;
 
-        let mut cap = make_output(OutputMode::Json);
+        let mut cap = Captured::new(OutputMode::Json);
         let api_url = server.uri();
         run(
             ListOptions {
@@ -346,7 +313,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
         assert_eq!(parsed, json!([]));
     }
@@ -356,7 +323,7 @@ mod tests {
         let server = MockServer::start().await;
         arrange(&server, json!({"scheduled_freezes": []})).await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             ListOptions {
@@ -370,7 +337,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         assert!(
             stdout.contains("No scheduled freezes found"),
             "got: {stdout:?}"
@@ -382,7 +349,7 @@ mod tests {
         let server = MockServer::start().await;
         arrange(&server, json!({"scheduled_freezes": [freeze_sample()]})).await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             ListOptions {
@@ -396,7 +363,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         assert!(stdout.contains("Scheduled Freezes"), "got: {stdout}");
         assert!(stdout.contains("emergency-fix"), "got: {stdout}");
         assert!(
@@ -435,7 +402,7 @@ mod tests {
         )
         .await;
 
-        let mut cap = make_output(OutputMode::Human);
+        let mut cap = Captured::human();
         let api_url = server.uri();
         run(
             ListOptions {
@@ -449,7 +416,7 @@ mod tests {
         .await
         .unwrap();
 
-        let stdout = stdout_string(&cap);
+        let stdout = cap.stdout();
         // The end column should render as a bare `-` (we don't pin
         // the surrounding whitespace because the table's column
         // widths depend on the row content).
