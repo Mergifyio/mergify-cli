@@ -131,6 +131,30 @@ async def fetch_notes_ref(remote: str) -> bool:
     return True
 
 
+async def _merge_remote_notes(remote: str) -> None:
+    """Fetch and merge the remote notes ref into the local one."""
+    tmp_ref = "refs/notes/mergify/stack-incoming"
+    await utils.git(
+        "fetch",
+        remote,
+        "--no-write-fetch-head",
+        f"+{NOTES_REF}:{tmp_ref}",
+    )
+    try:
+        await utils.git(
+            "notes",
+            f"--ref={NOTES_REF}",
+            "merge",
+            "--strategy=union",
+            tmp_ref,
+        )
+    finally:
+        try:
+            await utils.git("update-ref", "-d", tmp_ref)
+        except utils.CommandError:
+            pass
+
+
 async def push_branches(
     remote: str,
     local_changes: list[changes.LocalChange],
@@ -167,14 +191,54 @@ async def push_branches(
     no_verify_args = ("--no-verify",) if no_verify else ()
     os.environ["MERGIFY_STACK_PUSH"] = "1"
     try:
-        await utils.git(
-            "push",
-            "--atomic",
-            *no_verify_args,
-            *lease_args,
-            remote,
-            *refspecs,
-        )
+        try:
+            await utils.git(
+                "push",
+                "--atomic",
+                *no_verify_args,
+                *lease_args,
+                remote,
+                *refspecs,
+            )
+        except utils.CommandError as push_err:
+            if notes_local_sha is None or not notes_ref_fetched:
+                raise
+
+            try:
+                await _merge_remote_notes(remote)
+            except utils.CommandError:
+                raise push_err from None
+
+            try:
+                new_notes_sha = await utils.git(
+                    "rev-parse",
+                    "--verify",
+                    NOTES_REF,
+                )
+            except utils.CommandError:
+                raise push_err from None
+
+            new_lease_args = [
+                a
+                for a in lease_args
+                if not a.startswith(f"--force-with-lease={NOTES_REF}:")
+            ]
+            new_lease_args.append(
+                f"--force-with-lease={NOTES_REF}:{new_notes_sha}",
+            )
+
+            console.log(
+                "[orange]Notes ref was stale, retrying push after merge…[/]",
+            )
+
+            await utils.git(
+                "push",
+                "--atomic",
+                *no_verify_args,
+                *new_lease_args,
+                remote,
+                *refspecs,
+            )
     finally:
         os.environ.pop("MERGIFY_STACK_PUSH", None)
 
