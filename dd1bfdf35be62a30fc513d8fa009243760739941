@@ -1,0 +1,1 @@
+Move the GITHUB_OUTPUT scrub out of this commit into the scrubber-consolidation commit lower in the stack, so the fix covers every PR (including #1465) instead of only the ones at or above this one.
