@@ -96,25 +96,50 @@ def format_pull_description(
     return message + depends_on_header
 
 
+async def _merge_remote_notes(remote: str) -> None:
+    """Fetch and merge the remote notes ref into the local one."""
+    tmp_ref = "refs/notes/mergify/stack-incoming"
+    await utils.git(
+        "fetch",
+        remote,
+        "--no-write-fetch-head",
+        f"+{NOTES_REF}:{tmp_ref}",
+    )
+    try:
+        await utils.git(
+            "notes",
+            f"--ref={NOTES_REF}",
+            "merge",
+            "--strategy=union",
+            tmp_ref,
+        )
+    finally:
+        try:
+            await utils.git("update-ref", "-d", tmp_ref)
+        except utils.CommandError:
+            pass
+
+
 async def fetch_notes_ref(remote: str) -> bool:
-    """Fetch ``refs/notes/mergify/stack`` from *remote* when the local ref
-    does not already exist.
+    """Fetch ``refs/notes/mergify/stack`` from *remote*.
 
     Returns True when the local ref is present (either pre-existing or
     newly fetched) so a lease SHA is available for the subsequent push.
     Returns False only on first push (ref absent both locally and remotely).
 
-    If the local ref already exists (e.g. from a prior ``stack note`` that
-    hasn't been pushed yet), the fetch is skipped to avoid clobbering
-    unpushed local notes. A divergent remote is then caught by the
-    ``--force-with-lease`` check at push time.
+    When the local ref already exists (e.g. from a prior ``stack note``),
+    the remote notes are merged in so the lease SHA stays current while
+    preserving any unpushed local notes.
     """
     try:
         await utils.git("rev-parse", "--verify", NOTES_REF)
     except utils.CommandError:
         pass
     else:
-        # Local ref exists; don't overwrite.
+        try:
+            await _merge_remote_notes(remote)
+        except utils.CommandError:
+            pass
         return True
 
     try:
