@@ -33,11 +33,9 @@ use anstyle::Style;
 use chrono::DateTime;
 use chrono::Utc;
 use indexmap::IndexMap;
-use mergify_core::ApiFlavor;
 use mergify_core::CliError;
-use mergify_core::HttpClient;
+use mergify_core::CommandContext;
 use mergify_core::Output;
-use mergify_core::auth;
 use mergify_tui::Theme;
 use mergify_tui::relative_time;
 use mergify_tui::tree;
@@ -125,14 +123,15 @@ struct Author {
 
 /// Run the `queue status` command.
 pub async fn run(opts: StatusOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let repository = auth::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let ctx = CommandContext::resolve(opts.repository, opts.token, opts.api_url)?;
 
-    output.status(&format!("Fetching merge queue status for {repository}…"))?;
+    output.status(&format!(
+        "Fetching merge queue status for {repo}…",
+        repo = ctx.repository,
+    ))?;
 
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
-    let path = build_path(&repository, opts.branch);
+    let client = ctx.mergify_client()?;
+    let path = build_path(&ctx.repository, opts.branch);
 
     let raw: serde_json::Value = client.get(&path).await?;
 
@@ -141,7 +140,7 @@ pub async fn run(opts: StatusOptions<'_>, output: &mut dyn Output) -> Result<(),
     } else {
         let view: StatusView = serde_json::from_value(raw)
             .map_err(|e| CliError::Generic(format!("decode merge queue status response: {e}")))?;
-        emit_human(output, &repository, &view)?;
+        emit_human(output, &ctx.repository, &view)?;
     }
     Ok(())
 }

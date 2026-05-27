@@ -16,11 +16,13 @@
 //! in subsequent sub-phases.
 
 pub mod auth;
+pub mod command_context;
 pub mod error;
 pub mod exit_code;
 pub mod http;
 pub mod output;
 
+pub use command_context::CommandContext;
 pub use error::CliError;
 pub use exit_code::ExitCode;
 pub use http::{ApiFlavor, Client as HttpClient, DeleteOutcome, RetryPolicy};
