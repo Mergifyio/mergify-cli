@@ -29,13 +29,13 @@ use std::collections::HashSet;
 use std::io::Write;
 
 use anstyle::AnsiColor;
-use anstyle::Style;
 use chrono::DateTime;
 use chrono::Utc;
 use indexmap::IndexMap;
 use mergify_core::CliError;
 use mergify_core::CommandContext;
 use mergify_core::Output;
+use mergify_tui::StyledGlyph;
 use mergify_tui::Theme;
 use mergify_tui::relative_time;
 use mergify_tui::tree;
@@ -194,28 +194,48 @@ fn emit_human(output: &mut dyn Output, repository: &str, view: &StatusView) -> s
     })
 }
 
-/// Map a queue batch status code to a foreground color, honoring
-/// the theme's enabled flag. Mirrors Python's `STATUS_STYLES`;
-/// unknown codes render dim.
-fn batch_status_style(theme: &Theme, code: &str) -> Style {
-    if !theme.enabled {
-        return Style::new();
-    }
-    match code {
-        "running" => theme.fg(AnsiColor::Green),
-        // Python rendered `merged` as `"dim green"` — bold off,
-        // green on, dimmed. anstyle composes the same effect by
-        // setting `dimmed()` on the green style.
-        "merged" => theme.fg(AnsiColor::Green).dimmed(),
-        "failed" => theme.fg(AnsiColor::Red),
-        "bisecting"
-        | "preparing"
-        | "waiting_for_previous_batches"
-        | "waiting_for_requeue"
-        | "waiting_schedule" => theme.fg(AnsiColor::Yellow),
-        "waiting_for_merge" | "frozen" => theme.fg(AnsiColor::Cyan),
-        _ => theme.dim,
-    }
+/// Map a queue batch status code to its [`StyledGlyph`]. Mirrors
+/// Python's `STATUS_STYLES` (icon + color side); unknown codes fall
+/// back to a dim `?`.
+fn batch_glyph(theme: &Theme, code: &str) -> StyledGlyph {
+    // `theme.fg` already collapses to `Style::new()` when colors are
+    // off — except for `merged`, which we compose as `green.dimmed()`.
+    // When colors are off the `dimmed` attribute would still emit a
+    // dim escape, so short-circuit here to keep the plain output
+    // truly plain.
+    let style = if theme.enabled {
+        match code {
+            "running" => theme.fg(AnsiColor::Green),
+            // Python rendered `merged` as `"dim green"` — bold off,
+            // green on, dimmed. anstyle composes the same effect by
+            // setting `dimmed()` on the green style.
+            "merged" => theme.fg(AnsiColor::Green).dimmed(),
+            "failed" => theme.fg(AnsiColor::Red),
+            "bisecting"
+            | "preparing"
+            | "waiting_for_previous_batches"
+            | "waiting_for_requeue"
+            | "waiting_schedule" => theme.fg(AnsiColor::Yellow),
+            "waiting_for_merge" | "frozen" => theme.fg(AnsiColor::Cyan),
+            _ => theme.dim,
+        }
+    } else {
+        anstyle::Style::new()
+    };
+    let icon = match code {
+        "running" => "●",
+        "bisecting" => "◑",
+        "preparing" => "◌",
+        "failed" => "✗",
+        "merged" => "✓",
+        "waiting_for_merge" => "◎",
+        "waiting_for_previous_batches" | "waiting_for_batch" => "⏳",
+        "waiting_for_requeue" => "↻",
+        "waiting_schedule" => "⏰",
+        "frozen" => "❄",
+        _ => "?",
+    };
+    StyledGlyph::new(icon, style)
 }
 
 fn print_pause(
@@ -281,12 +301,12 @@ fn print_batch_line(
     batch: &Batch,
     now: DateTime<Utc>,
 ) -> std::io::Result<()> {
-    let icon = status_icon(&batch.status.code);
-    let icon_style = batch_status_style(theme, &batch.status.code);
+    let glyph = batch_glyph(theme, &batch.status.code);
     write!(
         w,
         "{branch}{S}{icon} {code}{R}",
-        S = icon_style,
+        S = glyph.style,
+        icon = glyph.icon,
         code = batch.status.code,
         R = theme.reset,
     )?;
@@ -377,24 +397,6 @@ fn print_waiting_prs(
         writeln!(w)?;
     }
     Ok(())
-}
-
-/// Map a batch-status code to a compact Unicode icon. Same icons as
-/// the Python implementation; unknown codes fall back to `?`.
-fn status_icon(code: &str) -> &'static str {
-    match code {
-        "running" => "●",
-        "bisecting" => "◑",
-        "preparing" => "◌",
-        "failed" => "✗",
-        "merged" => "✓",
-        "waiting_for_merge" => "◎",
-        "waiting_for_previous_batches" | "waiting_for_batch" => "⏳",
-        "waiting_for_requeue" => "↻",
-        "waiting_schedule" => "⏰",
-        "frozen" => "❄",
-        _ => "?",
-    }
 }
 
 /// Topological sort of batches by `parent_ids`. Roots come first,
@@ -543,22 +545,29 @@ mod tests {
     }
 
     #[test]
-    fn status_icon_known_codes() {
-        assert_eq!(status_icon("running"), "●");
-        assert_eq!(status_icon("merged"), "✓");
-        assert_eq!(status_icon("failed"), "✗");
+    fn batch_glyph_known_codes() {
+        // Pin a no-color theme so we exercise the icon mapping
+        // without coupling the assertions to the ANSI escape format.
+        let theme = Theme::new(false);
+        assert_eq!(batch_glyph(&theme, "running").icon, "●");
+        assert_eq!(batch_glyph(&theme, "merged").icon, "✓");
+        assert_eq!(batch_glyph(&theme, "failed").icon, "✗");
         // Two pairs that share an icon vs. a different icon —
         // mirrors the Python `STATUS_STYLES` table, so a future
         // table edit can't silently swap glyphs without updating
         // this test.
-        assert_eq!(status_icon("waiting_for_previous_batches"), "⏳");
-        assert_eq!(status_icon("waiting_for_batch"), "⏳");
-        assert_eq!(status_icon("waiting_for_requeue"), "↻");
+        assert_eq!(
+            batch_glyph(&theme, "waiting_for_previous_batches").icon,
+            "⏳"
+        );
+        assert_eq!(batch_glyph(&theme, "waiting_for_batch").icon, "⏳");
+        assert_eq!(batch_glyph(&theme, "waiting_for_requeue").icon, "↻");
     }
 
     #[test]
-    fn status_icon_unknown_falls_back() {
-        assert_eq!(status_icon("brand-new-status"), "?");
+    fn batch_glyph_unknown_falls_back() {
+        let theme = Theme::new(false);
+        assert_eq!(batch_glyph(&theme, "brand-new-status").icon, "?");
     }
 
     fn sample_batch(id: &str, parents: &[&str]) -> Batch {
