@@ -188,16 +188,12 @@ fn write_row(
                 spaces = " ".repeat(pad),
             )?;
         } else if HEADERS[i] == "Status" {
+            // `Theme::fg` already collapses to `Style::new()` when
+            // colors are disabled — no need for an extra branch.
             let style = if cell == "active" {
-                if theme.enabled {
-                    theme.fg(AnsiColor::Green)
-                } else {
-                    anstyle::Style::new()
-                }
-            } else if theme.enabled {
-                theme.fg(AnsiColor::Yellow)
+                theme.fg(AnsiColor::Green)
             } else {
-                anstyle::Style::new()
+                theme.fg(AnsiColor::Yellow)
             };
             write!(
                 w,

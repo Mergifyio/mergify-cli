@@ -1,7 +1,5 @@
 //! Shared foundations for the mergify CLI Rust port.
 //!
-//! Phase 1.2 populates this crate with:
-//!
 //! - [`exit_code::ExitCode`] — typed exit codes mirroring the
 //!   Python `exit_codes.py` contract.
 //! - [`error::CliError`] — top-level error enum with deterministic
@@ -11,9 +9,11 @@
 //!   in.
 //! - [`http::Client`] — wraps `reqwest` with bearer auth, retry,
 //!   and typed error mapping for the Mergify and GitHub APIs.
-//!
-//! Git operations, interactive prompts, and config loading arrive
-//! in subsequent sub-phases.
+//! - [`auth`] — resolve `--repository` / `--token` / `--api-url`
+//!   from the same flag → env → fallback chain the Python CLI uses.
+//! - [`command_context::CommandContext`] — bundle the resolved
+//!   trio + a pre-configured Mergify HTTP client for the
+//!   queue/freeze command preludes.
 
 pub mod auth;
 pub mod command_context;
