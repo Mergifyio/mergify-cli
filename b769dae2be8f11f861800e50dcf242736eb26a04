@@ -1,0 +1,1 @@
+rework description (drop codspeed-mirrored 'all-in-one orchestration' framing for product-accurate phrasing) and remove version field (let commit SHA drive updates per docs guidance)
