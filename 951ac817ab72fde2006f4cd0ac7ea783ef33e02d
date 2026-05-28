@@ -1,0 +1,1 @@
+Update parse_all / UploadMetadata construction in command.rs for the new spans.rs API (build_traces returns Result; UploadMetadata gains run_id field). Both came in via the Phase B Python bridge work.
