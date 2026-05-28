@@ -52,7 +52,7 @@ Changelog = "https://github.com/Mergifyio/mergify-cli/releases"
 dev = [
     "mypy==2.1.0",
     "mypy-extensions==1.1.0",
-    "ruff==0.15.13",
+    "ruff==0.15.14",
     "pytest==9.0.3",
     "poethepoet==0.46.0",
     "pytest-asyncio==1.3.0",
@@ -167,6 +167,9 @@ ignore = [
     # NOTE(Greesb): Too many return, branches, arguments, local variables, statements, positional arguments.
     # Interesting but will require a big refactor
     "PLR0911", "PLR0912", "PLR0913", "PLR0914", "PLR0915", "PLR0917",
+    # NOTE: Too many statements in try clause — same "too many X" family as PLR0915,
+    # would require a big refactor for little gain.
+    "PLW0717",
     # NOTE(Greesb): Too many nested blocks
     # interesting but require some refactor
     "PLR1702",
