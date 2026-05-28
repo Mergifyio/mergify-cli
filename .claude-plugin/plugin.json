@@ -1,6 +1,6 @@
 {
   "name": "mergify",
-  "description": "Mergify CLI integration for stacked PRs, merge queues, CI insights, scheduled freezes, and configuration management",
+  "description": "Skills for the Mergify CLI: manage merge queues, stacked pull requests, Test Insights (flaky tests, quarantine), merge protections, and Mergify configuration directly from the terminal.",
   "author": {
     "name": "Mergify"
   },
@@ -10,6 +10,9 @@
     "stacked-prs",
     "merge-queue",
     "ci",
+    "test-insights",
+    "flaky-tests",
+    "quarantine",
     "freeze",
     "config",
     "push",
@@ -20,5 +23,6 @@
     "workflow"
   ],
   "license": "Apache-2.0",
+  "homepage": "https://mergify.com",
   "repository": "https://github.com/Mergifyio/mergify-cli"
 }
