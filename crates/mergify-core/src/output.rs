@@ -5,7 +5,7 @@
 //! directly. This keeps the JSON and human rendering paths
 //! symmetric, lets commands stay test-friendly, and gives a single
 //! place to enforce the "stdout must be a single JSON document
-//! under `--json`" invariant (Phase 0.3).
+//! under `--json`" invariant.
 //!
 //! The trait is deliberately small. Commands emit one "result"
 //! value that knows how to render itself both as JSON (via

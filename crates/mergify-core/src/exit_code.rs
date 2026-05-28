@@ -2,9 +2,9 @@
 //!
 //! Mirrors `mergify_cli.exit_codes.ExitCode` in the Python
 //! implementation. The contract — which (command, failure mode)
-//! maps to which exit code — is locked by Phase 0.1 and enforced by
-//! the compat-test harness. Changing a variant's numeric value is a
-//! breaking change for downstream scripts.
+//! maps to which exit code — is enforced by the compat-test
+//! harness. Changing a variant's numeric value is a breaking change
+//! for downstream scripts.
 
 use std::process::ExitCode as ProcessExitCode;
 

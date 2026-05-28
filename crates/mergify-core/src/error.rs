@@ -5,10 +5,9 @@
 //! the appropriate `ExitCode` and writes a human-readable message
 //! to stderr before exiting.
 //!
-//! This enum grows as new error sources are added. Today it covers
-//! the categories needed to port the `config` pilot (Phase 1.3);
-//! subsequent sub-phases add variants for HTTP failures, git
-//! subprocess failures, and so on.
+//! This enum grows as new error sources are added — add a variant
+//! per error category, never a generic `String` catch-all for new
+//! kinds of failure that have their own exit code.
 
 use std::io;
 

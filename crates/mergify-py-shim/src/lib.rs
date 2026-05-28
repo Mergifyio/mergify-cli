@@ -21,7 +21,8 @@
 //! native impl first and only falls back to [`run`] for un-ported
 //! commands. The plan is for each port PR to delete its Python
 //! implementation in the same change, so the shim's reach shrinks
-//! one command at a time. Phase 6 deletes this crate entirely.
+//! one command at a time; this crate is deleted entirely once
+//! everything is ported.
 
 use std::env;
 use std::io;
