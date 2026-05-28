@@ -10,7 +10,7 @@
     {
       "name": "mergify",
       "source": "./",
-      "description": "Mergify CLI integration for stacked PRs, merge queues, CI insights, scheduled freezes, and configuration management"
+      "description": "Skills for the Mergify CLI: manage merge queues, stacked pull requests, Test Insights (flaky tests, quarantine), merge protections, and Mergify configuration directly from the terminal."
     }
   ]
 }
