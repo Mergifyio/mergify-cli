@@ -1,0 +1,1 @@
+Fold the GitHub Actions PR-event head-SHA fix back into this commit (was previously a separate follow-up #1469). The split was wrong — get_head_sha was introduced here with the incomplete implementation, so the corrected version belongs in the same commit.
