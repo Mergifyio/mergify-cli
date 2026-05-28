@@ -1,0 +1,1 @@
+Fold the deprecated 'ci junit-upload' alias promotion (previously #1468) into this commit. The alias is trivial (one extra clap variant + DeprecationWarning stderr line) and dispatches to the same orchestrator, so splitting added review overhead without delivering staged user value.
