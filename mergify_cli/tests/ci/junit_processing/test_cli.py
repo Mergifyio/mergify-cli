@@ -755,6 +755,12 @@ async def test_invalid_junit_xml(
     )
 
     assert result.exit_code == 1
+    # The error wording comes from the native Rust parser (the
+    # quick-xml-backed `mergify _internal junit-parse` subprocess
+    # Python shells out to). The Rust parser is lenient about
+    # malformed XML — it accepts the surrounding text as long as
+    # there are recognisable elements — and only fails when no
+    # `<testsuites>` / `<testsuite>` tag is found.
     assert result.stdout == (
         "══════════════════════════════════════════\n"
         "  🚀 CI Insights\n"
@@ -764,7 +770,7 @@ async def test_invalid_junit_xml(
         "  final CI status — quarantined failures are ignored.\n"
         "  Learn more: https://docs.mergify.com/ci-insights/quarantine\n"
         "══════════════════════════════════════════\n"
-        "❌ FAIL — Failed to parse JUnit XML: syntax error: line 1, column 0\n"
+        "❌ FAIL — Failed to parse JUnit XML: no testsuites or testsuite tag found\n"
         "  Check that your test framework is generating valid JUnit XML output.\n"
         "  Exit code: 1\n"
         "══════════════════════════════════════════\n"
