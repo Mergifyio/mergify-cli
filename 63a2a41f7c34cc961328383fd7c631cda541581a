@@ -1,0 +1,1 @@
+Switch the test_upload.py mock targets from attribute access (upload.junit / upload.subprocess) to string-form patch paths so mypy's strict attr-defined check doesn't reject them — those modules are imports inside upload.py, not explicit exports.
