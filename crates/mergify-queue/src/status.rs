@@ -31,7 +31,6 @@ use std::io::Write;
 use anstyle::AnsiColor;
 use chrono::DateTime;
 use chrono::Utc;
-use indexmap::IndexMap;
 use mergify_core::CliError;
 use mergify_core::CommandContext;
 use mergify_core::Output;
@@ -432,14 +431,20 @@ fn visit<'a>(
     result.push(batch);
 }
 
-/// Group batches by scope, preserving insertion order for the
+/// Group batches by scope, preserving first-seen order for the
 /// scopes (matches Python dict iteration). A batch with no scopes
 /// is grouped under `"default"` to match the Python fallback. A
 /// batch with multiple scopes appears in every group it claims —
 /// the Python implementation does the same so users see each batch
 /// in every scope it affects.
-fn group_by_scope<'a>(batches: &[&'a Batch]) -> IndexMap<String, Vec<&'a Batch>> {
-    let mut groups: IndexMap<String, Vec<&Batch>> = IndexMap::new();
+///
+/// Returns a `Vec<(scope, batches)>` rather than a hashmap because
+/// (a) we need insertion-order iteration and (b) typical N is
+/// 1–3 scopes per repo — the linear-lookup `entry_or_insert`
+/// below is cheaper than the hashing overhead of `IndexMap` at
+/// this scale.
+fn group_by_scope<'a>(batches: &[&'a Batch]) -> Vec<(String, Vec<&'a Batch>)> {
+    let mut groups: Vec<(String, Vec<&Batch>)> = Vec::new();
     for batch in batches {
         let scopes: Vec<String> = if batch.scopes.is_empty() {
             vec!["default".to_string()]
@@ -447,7 +452,10 @@ fn group_by_scope<'a>(batches: &[&'a Batch]) -> IndexMap<String, Vec<&'a Batch>>
             batch.scopes.clone()
         };
         for scope in scopes {
-            groups.entry(scope).or_default().push(batch);
+            match groups.iter_mut().find(|(s, _)| *s == scope) {
+                Some((_, bs)) => bs.push(batch),
+                None => groups.push((scope, vec![batch])),
+            }
         }
     }
     groups
@@ -521,13 +529,17 @@ mod tests {
         assert_eq!(sorted[0].id, "only");
     }
 
+    fn has_scope(groups: &[(String, Vec<&Batch>)], scope: &str) -> bool {
+        groups.iter().any(|(s, _)| s == scope)
+    }
+
     #[test]
     fn group_by_scope_default_when_empty_scopes() {
         let batches = [sample_batch("a", &[])];
         let refs: Vec<&Batch> = batches.iter().collect();
         let groups = group_by_scope(&refs);
         assert_eq!(groups.len(), 1);
-        assert!(groups.contains_key("default"));
+        assert!(has_scope(&groups, "default"));
     }
 
     #[test]
@@ -540,8 +552,8 @@ mod tests {
         let refs: Vec<&Batch> = batches.iter().collect();
         let groups = group_by_scope(&refs);
         assert_eq!(groups.len(), 2);
-        assert!(groups.contains_key("foo"));
-        assert!(groups.contains_key("bar"));
+        assert!(has_scope(&groups, "foo"));
+        assert!(has_scope(&groups, "bar"));
     }
 
     #[test]
