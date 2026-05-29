@@ -432,6 +432,52 @@ def test_scopes_send(
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
+def test_ci_scopes_select_all_when_no_base(
+    tmp_path: pathlib.Path,
+    cli: typing.Callable[..., typing.Any],
+) -> None:
+    """`mergify ci scopes` with `--head HEAD` and no `--base` lists
+    every configured scope as touched.
+
+    Locally evaluated — no Mergify API, no token, no git
+    operations: the no-base branch is the one path through the
+    command that doesn't shell out to `git diff`, so the test
+    stays hermetic in the tmp dir the `cli` fixture runs in.
+    Passing `--head` (without `--base`) is what forces the
+    "manual" `References` branch with `base=None`; the detector
+    fallback would otherwise pick `HEAD^..HEAD` and try to diff
+    against a non-existent git repo.
+
+    Contract pinned for the upcoming Python → Rust port: both
+    `backend` and `frontend` from the config below must appear in
+    the output so the "selecting all scopes" code path stays
+    intact when the implementation flips.
+    """
+    config = tmp_path / "mergify.yml"
+    config.write_text(
+        "scopes:\n"
+        "  source:\n"
+        "    files:\n"
+        "      backend:\n"
+        "        include: ['mergify_cli/**']\n"
+        "      frontend:\n"
+        "        include: ['web/**']\n",
+        encoding="utf-8",
+    )
+
+    result = cli("ci", "scopes", "--config", str(config), "--head", "HEAD")
+    assert result.returncode == 0, (
+        f"expected 0, got {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    for scope in ("backend", "frontend"):
+        assert scope in combined, (
+            f"expected scope '{scope}' in the 'select all' output\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+
 def test_tests_show_no_match(
     live_token: str,
     cli: typing.Callable[..., typing.Any],
