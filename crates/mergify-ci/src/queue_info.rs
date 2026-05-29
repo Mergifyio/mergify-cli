@@ -48,7 +48,7 @@ fn write_github_output(metadata: &MergeQueueMetadata) -> Result<(), CliError> {
     let Some(path) = env::var("GITHUB_OUTPUT").ok().filter(|s| !s.is_empty()) else {
         return Ok(());
     };
-    let delimiter = format!("ghadelimiter_{}", uuid::Uuid::new_v4());
+    let delimiter = format!("ghadelimiter_{}", random_delimiter_suffix()?);
     let compact = serde_json::to_string(metadata)
         .map_err(|e| CliError::Generic(format!("failed to serialize queue metadata: {e}")))?;
     let mut file = OpenOptions::new()
@@ -59,6 +59,24 @@ fn write_github_output(metadata: &MergeQueueMetadata) -> Result<(), CliError> {
     writeln!(file, "{compact}")?;
     writeln!(file, "{delimiter}")?;
     Ok(())
+}
+
+/// 16 random bytes rendered as 32 lowercase hex chars — enough
+/// entropy to be unguessable inside one GitHub Actions step, which
+/// is all the heredoc delimiter needs (it just has to be absent
+/// from the metadata payload). `getrandom` reads from the OS RNG
+/// directly; we don't need the UUID parsing/formatting plumbing
+/// that `uuid` adds on top.
+fn random_delimiter_suffix() -> Result<String, CliError> {
+    let mut buf = [0u8; 16];
+    getrandom::fill(&mut buf)
+        .map_err(|e| CliError::Generic(format!("OS random source unavailable: {e}")))?;
+    let mut hex = String::with_capacity(buf.len() * 2);
+    for b in buf {
+        use std::fmt::Write as _;
+        write!(hex, "{b:02x}").expect("writing to String is infallible");
+    }
+    Ok(hex)
 }
 
 #[cfg(test)]
