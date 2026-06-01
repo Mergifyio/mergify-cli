@@ -1,0 +1,1 @@
+add command::run() integration tests pinning all-pass, unquarantined-failure, and empty-testsuite verdicts (backfills coverage that lived in the deleted Python orchestrator)
