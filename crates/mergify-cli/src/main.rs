@@ -165,6 +165,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     // the `Subcommands::Internal` variant).
     ("_internal", "junit-parse"),
     ("_internal", "junit-upload"),
+    ("_internal", "stack-local-commits"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -206,6 +207,13 @@ enum NativeCommand {
     /// Wire format is not stable; only the Python code shipped in
     /// this wheel may consume it.
     InternalJunitUpload(InternalJunitUploadOpts),
+    /// `_internal stack-local-commits --base <sha> --head <ref>` —
+    /// Python migration helper. Runs `git log` for the stack
+    /// range, parses each commit's `Change-Id:` trailer, prints
+    /// the result as a JSON array. Used by `mergify_cli/stack/changes.py`
+    /// while the surrounding stack discovery logic is still
+    /// Python. Wire format is not stable.
+    InternalStackLocalCommits(InternalStackLocalCommitsOpts),
 }
 
 struct InternalJunitUploadOpts {
@@ -218,6 +226,12 @@ struct InternalJunitUploadOpts {
     mergify_test_job_name: Option<String>,
     quarantined: Vec<String>,
     files: Vec<PathBuf>,
+}
+
+struct InternalStackLocalCommitsOpts {
+    base: String,
+    head: String,
+    repo_dir: Option<PathBuf>,
 }
 
 struct ConfigSimulateOpts {
@@ -461,6 +475,20 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 mergify_test_job_name,
                 quarantined,
                 files,
+            },
+        )),
+        Subcommands::Internal(InternalArgs {
+            command:
+                InternalSubcommand::StackLocalCommits(InternalStackLocalCommitsArgs {
+                    base,
+                    head,
+                    repo_dir,
+                }),
+        }) => Dispatch::Native(NativeCommand::InternalStackLocalCommits(
+            InternalStackLocalCommitsOpts {
+                base,
+                head,
+                repo_dir,
             },
         )),
         Subcommands::Ci(CiArgs {
@@ -1041,6 +1069,25 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 .map_err(|e| mergify_core::CliError::Generic(e.to_string()))?;
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::InternalStackLocalCommits(opts) => {
+                // Run `git log` for the stack range, parse each
+                // commit's `Change-Id:` trailer, emit a JSON array
+                // on stdout. The Python `stack/changes.py` consumer
+                // deserializes it back into the existing `LocalChange`
+                // pipeline. A missing Change-Id propagates as
+                // `CliError::InvalidState` so Python sees the same
+                // exit code it would have raised inline.
+                let repo_dir = mergify_stack::local_commits::resolve_repo_dir(opts.repo_dir);
+                let commits =
+                    mergify_stack::local_commits::read(&repo_dir, &opts.base, &opts.head)?;
+                let json = serde_json::to_string(&commits).map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "serialize stack-local-commits output: {e}",
+                    ))
+                })?;
+                println!("{json}");
+                Ok(mergify_core::ExitCode::Success)
+            }
         }
     });
 
@@ -1134,6 +1181,13 @@ enum InternalSubcommand {
     /// upload path; not a stable user-facing surface.
     #[command(name = "junit-upload")]
     JunitUpload(InternalJunitUploadArgs),
+    /// Walk the local stack commits in `<base>..<head>` and print
+    /// a JSON array of `{commit_sha, title, message, change_id}`.
+    /// Used by the Python side of `mergify stack <cmd>` during
+    /// migration to centralise the `git log` + `Change-Id:`
+    /// extraction. Not a stable user-facing surface.
+    #[command(name = "stack-local-commits")]
+    StackLocalCommits(InternalStackLocalCommitsArgs),
 }
 
 #[derive(clap::Args)]
@@ -1178,6 +1232,22 @@ struct InternalJunitUploadArgs {
     /// `JUnit` XML files to parse and upload spans for.
     #[arg(value_name = "FILE", required = true, num_args = 1..)]
     files: Vec<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct InternalStackLocalCommitsArgs {
+    /// Base revision — anything `git` accepts (typically a merge-
+    /// base SHA). The range is exclusive of this commit.
+    #[arg(long)]
+    base: String,
+    /// Head revision — typically the local stack branch name.
+    /// The range is inclusive of this commit.
+    #[arg(long)]
+    head: String,
+    /// Repository working tree to run `git` in. Defaults to the
+    /// process CWD.
+    #[arg(long = "repo-dir", value_name = "DIR")]
+    repo_dir: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

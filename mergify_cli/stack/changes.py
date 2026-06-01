@@ -16,14 +16,17 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
+import os
+import pathlib
 import re
+import shutil
 import sys
 import typing
 
 from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import github_types
-from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.slug import slugify_title
 
@@ -297,42 +300,20 @@ async def get_changes(
     only_update_existing_pulls: bool,
     next_only: bool,
 ) -> Changes:
-    raw = await utils.git(
-        "log",
-        "--reverse",
-        "--format=%H%x00%s%x00%b%x1e",
-        f"{base_commit_sha}..{dest_branch}",
+    local_commits = await _read_local_commits_via_rust(
+        base_commit_sha,
+        dest_branch,
     )
-
-    commit_infos: list[tuple[str, str, str]] = []
-    for record in raw.split("\x1e"):
-        stripped = record.strip()
-        if not stripped:
-            continue
-        parts = stripped.split("\x00", 2)
-        if len(parts) != 3:
-            msg = f"Unexpected git log record format: {stripped!r}"
-            raise RuntimeError(msg)
-        commit_infos.append(
-            (parts[0].strip(), parts[1].strip(), parts[2].strip()),
-        )
 
     changes = Changes(stack_prefix)
     remaining_remote_changes = RemoteChanges(remote_changes.copy())
 
-    for idx, (commit, title, message) in enumerate(commit_infos):
-        changeids = CHANGEID_RE.findall(message)
-        if not changeids:
-            console_error(
-                f"`Change-Id:` line is missing on commit {commit}",
-            )
-            console.print(
-                "Did you run `mergify stack setup` for this repository?",
-            )
-            # TODO(sileht): we should raise an Exception and exit in main program
-            sys.exit(ExitCode.INVALID_STATE)
+    for idx, local in enumerate(local_commits):
+        commit = local["commit_sha"]
+        title = local["title"]
+        message = local["message"]
+        changeid = ChangeId(local["change_id"])
 
-        changeid = ChangeId(changeids[-1])
         pull = pop_remote_change(remaining_remote_changes, changeid)
 
         action: ActionT
@@ -376,3 +357,103 @@ async def get_changes(
             changes.orphans.append(OrphanChange(changeid, pull))
 
     return changes
+
+
+# ── Rust bridge ────────────────────────────────────────────────────
+# The walker that produces `local_commits` (run `git log`, parse the
+# NUL/RS-separated records, extract the `Change-Id:` trailer per
+# commit) is now the Rust `mergify _internal stack-local-commits`
+# subcommand. The Python side calls it via subprocess and gets the
+# parsed result back as JSON. Keeps the regex + git invocation in one
+# place so every stack subcommand benefits as it gets ported.
+
+
+async def _read_local_commits_via_rust(
+    base_commit_sha: str,
+    dest_branch: str,
+) -> list[dict[str, str]]:
+    """Walk the stack range via the native Rust subcommand.
+
+    Returns a list of `{commit_sha, title, message, change_id}`
+    dicts, one per commit in `<base_commit_sha>..<dest_branch>`.
+    A missing `Change-Id:` trailer makes the Rust binary exit with
+    `ExitCode.INVALID_STATE`; we mirror the Python exit path so the
+    user sees the same error+hint UX regardless of which side
+    raised it.
+    """
+    binary = _resolve_mergify_binary()
+    proc = await asyncio.create_subprocess_exec(
+        binary,
+        "_internal",
+        "stack-local-commits",
+        "--base",
+        base_commit_sha,
+        "--head",
+        dest_branch,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await proc.communicate()
+    stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+    # `mergify`'s generic error wrapper prefixes every stderr line
+    # with `mergify: ` — strip it so the user-facing message
+    # doesn't double-prefix. Fall back when stderr is empty so the
+    # error never displays as a blank line (e.g. if the subprocess
+    # crashed before writing).
+    details = stderr.removeprefix("mergify: ") or "stack walk failed"
+    if proc.returncode == ExitCode.INVALID_STATE:
+        # Missing Change-Id surfaces the same UX the inline path
+        # used to: error message + setup hint, then non-zero exit.
+        console_error(details)
+        console.print(
+            "Did you run `mergify stack setup` for this repository?",
+        )
+        sys.exit(ExitCode.INVALID_STATE)
+    if proc.returncode != 0:
+        msg = f"`mergify _internal stack-local-commits` failed: {details}"
+        raise RuntimeError(msg)
+    try:
+        return typing.cast(
+            "list[dict[str, str]]",
+            json.loads(stdout_bytes.decode("utf-8")),
+        )
+    except json.JSONDecodeError as exc:
+        # Surface stderr alongside the decode failure — a bare
+        # `JSONDecodeError` is nearly impossible to triage without
+        # the stderr context (e.g. a debug print leaking into
+        # stdout, or the binary panicking after a partial write).
+        msg = (
+            "`mergify _internal stack-local-commits` produced invalid JSON: "
+            f"{exc}; stderr: {stderr!r}"
+        )
+        raise RuntimeError(msg) from exc
+
+
+def _resolve_mergify_binary() -> str:
+    """Locate the `mergify` Rust binary the Python side calls into.
+
+    Duplicated from `mergify_cli/ci/junit_processing/junit.py` —
+    the stack and CI bridges have no shared module yet. Promote
+    to a shared utility once a third bridge appears.
+
+    Lookup order:
+    1. `$MERGIFY_CLI_BIN` override (used by tests against a freshly
+       built `target/debug/mergify`).
+    2. The venv's `bin/mergify` next to `sys.executable` — production
+       case once the wheel is installed.
+    3. `$PATH` fallback via `shutil.which`.
+    """
+    if override := os.environ.get("MERGIFY_CLI_BIN"):
+        return override
+    venv_bin = pathlib.Path(sys.executable).parent
+    for name in ("mergify", "mergify.exe"):
+        candidate = venv_bin / name
+        if candidate.is_file():
+            return str(candidate)
+    if found := shutil.which("mergify"):
+        return found
+    msg = (
+        "could not locate the `mergify` binary "
+        f"(checked $MERGIFY_CLI_BIN, {venv_bin}/mergify, and $PATH)"
+    )
+    raise RuntimeError(msg)

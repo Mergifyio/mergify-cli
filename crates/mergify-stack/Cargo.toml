@@ -1,0 +1,22 @@
+[package]
+name = "mergify-stack"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native implementation of `mergify stack` subcommands."
+publish = false
+
+[dependencies]
+mergify-core = { path = "../mergify-core" }
+regex = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[lints]
+workspace = true

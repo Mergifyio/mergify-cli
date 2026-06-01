@@ -122,6 +122,29 @@ class GitMock:
         # Base commit SHA
         self.mock("merge-base", "--fork-point", "origin/main", output="base_commit_sha")
 
+    def build_local_commits(self) -> list[dict[str, str]]:
+        """Return the JSON-shape the Rust `_internal stack-local-commits`
+        bridge produces for the registered commits.
+
+        Mirrors the per-commit shape emitted by
+        `crates/mergify-stack/src/local_commits.rs::LocalCommit`:
+        `{commit_sha, title, message, change_id}`. Called by the
+        `git_mock` fixture's bridge stub instead of running the
+        real subprocess against a real git repo.
+        """
+        out: list[dict[str, str]] = []
+        for c in self._commits:
+            body = f"{c['message']}\n\nChange-Id: {c['change_id']}"
+            out.append(
+                {
+                    "commit_sha": c["sha"],
+                    "title": c["title"],
+                    "message": body,
+                    "change_id": c["change_id"],
+                },
+            )
+        return out
+
     def finalize(
         self,
         *,
@@ -141,18 +164,12 @@ class GitMock:
             output="",
         )
 
-        # Register batch log mock
-        records = []
-        for c in self._commits:
-            body = f"{c['message']}\n\nChange-Id: {c['change_id']}"
-            records.append(f"{c['sha']}\x00{c['title']}\x00{body}")
-        self.mock(
-            "log",
-            "--reverse",
-            "--format=%H%x00%s%x00%b%x1e",
-            "base_commit_sha..current-branch",
-            output="\x1e".join(records) + "\x1e" if records else "",
-        )
+        # The inline `git log --reverse --format=%H…` invocation
+        # is gone — `_read_local_commits_via_rust` now shells out
+        # to the Rust `_internal stack-local-commits` subcommand,
+        # mocked at the helper level (see the `git_mock` fixture
+        # in tests/conftest.py). `build_local_commits()` returns
+        # the parsed-JSON shape the helper would have produced.
 
         # Register batch note-read mock (empty = "no note")
         for c in self._commits:

@@ -97,7 +97,26 @@ def git_mock(
         output="",
     )
 
-    with mock.patch("mergify_cli.utils.git", git_mock_object):
+    # Bridge: `mergify_cli.stack.changes._read_local_commits_via_rust`
+    # now shells out to the Rust `_internal stack-local-commits`
+    # subcommand instead of running `git log` inline. The Rust path
+    # runs real git, which the GitMock subprocess fixture can't
+    # intercept; mock the helper directly so the stack tests keep
+    # driving everything through `git_mock.commit(...)` /
+    # `git_mock.finalize()`.
+    async def _bridge_local_commits(
+        _base: str,
+        _head: str,
+    ) -> list[dict[str, str]]:
+        return git_mock_object.build_local_commits()
+
+    with (
+        mock.patch("mergify_cli.utils.git", git_mock_object),
+        mock.patch(
+            "mergify_cli.stack.changes._read_local_commits_via_rust",
+            _bridge_local_commits,
+        ),
+    ):
         yield git_mock_object
 
 
