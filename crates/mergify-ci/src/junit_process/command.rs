@@ -32,8 +32,7 @@ use crate::junit_process::upload;
 const SEPARATOR: &str = "══════════════════════════════════════════";
 const SEPARATOR_LIGHT: &str = "──────────────────────────────────────────";
 
-/// CLI options for `mergify ci junit-process`. Mirrors the
-/// Python flag set — see `mergify_cli/ci/cli.py`.
+/// CLI options for `mergify ci junit-process`.
 pub struct JunitProcessOptions<'a> {
     pub api_url: Option<&'a str>,
     pub token: Option<&'a str>,
@@ -43,8 +42,7 @@ pub struct JunitProcessOptions<'a> {
     pub tests_target_branch: Option<&'a str>,
     pub test_exit_code: Option<i32>,
     /// Raw `files` arguments as the user typed them. Globs (`**`,
-    /// `*`, `?`) are expanded here, matching Python's
-    /// `_expand_junit_patterns` callback.
+    /// `*`, `?`) are expanded here.
     pub files: &'a [String],
 }
 
@@ -136,18 +134,13 @@ pub async fn run(
         mergify_test_job_name: env::var("MERGIFY_TEST_JOB_NAME")
             .ok()
             .filter(|s| !s.is_empty()),
-        // Let the span builder generate the run_id from random
-        // bytes — the orchestrator's CLI surface is its own
-        // top-level command, so there is no caller-supplied
-        // run_id to honour the way the Python bridge passes one.
-        run_id: None,
         quarantined: quarantine_result
             .quarantined
             .iter()
             .map(|c| c.name.clone())
             .collect(),
     };
-    let built = spans::build_traces(&parsed, &metadata)?;
+    let built = spans::build_traces(&parsed, &metadata);
 
     let client = upload::default_client();
     let upload_error =

@@ -1,21 +1,18 @@
 //! `mergify ci junit-process` — `JUnit` XML report → OTLP trace
 //! upload + quarantine check.
 //!
-//! The command port lands in three steps so each layer is
-//! reviewable on its own:
+//! Layers:
 //!
-//! - **Phase A** (landed) — [`junit`]: `JUnit` XML parser
-//!   producing semantically-tagged [`TestCase`] values.
-//!   Hermetic, no network.
-//! - **Phase B** (landed) — [`spans`] turns parser output into an
-//!   OTLP `ExportTraceServiceRequest`; [`upload`] gzips that
-//!   protobuf payload and POSTs it to
+//! - [`junit`]: `JUnit` XML parser producing semantically-tagged
+//!   [`TestCase`] values. Hermetic, no network.
+//! - [`spans`]: turns parser output into an OTLP
+//!   `ExportTraceServiceRequest`.
+//! - [`upload`]: gzips that protobuf payload and POSTs it to
 //!   `/v1/repos/<owner>/<repo>/ci/traces`.
-//! - **Phase C** (this commit) — [`quarantine`] queries the
-//!   quarantine API; [`command::run`] orchestrates everything and
-//!   renders the human report so the binary can promote
-//!   `Subcommands::Ci(CiSubcommand::JunitProcess)` from shim to
-//!   native.
+//! - [`quarantine`]: queries the quarantine API to learn which
+//!   failing tests are currently quarantined.
+//! - [`command::run`]: orchestrates everything and renders the
+//!   human-facing report.
 
 pub mod command;
 pub mod junit;

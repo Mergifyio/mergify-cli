@@ -1,13 +1,13 @@
 //! `JUnit` XML → semantically-tagged test cases.
 //!
-//! Mirrors `mergify_cli/ci/junit_processing/junit.py`. The XML
-//! parsing intentionally accepts the loose dialect Python does:
-//! `<testsuites>` root with nested `<testsuite>` children, or a
-//! bare `<testsuite>` root, or a `<testsuite>` root that itself
-//! has nested `<testsuite>` descendants. Within each suite, every
-//! `<testcase>` becomes a [`TestCase`] tagged with its result
-//! (pass / skip / fail / error) plus optional exception
-//! attributes pulled from a `<failure>` or `<error>` child.
+//! The parser accepts the loose dialect every `JUnit` producer in
+//! the wild emits: `<testsuites>` root with nested `<testsuite>`
+//! children, a bare `<testsuite>` root, or a `<testsuite>` root
+//! that itself has nested `<testsuite>` descendants. Within each
+//! suite, every `<testcase>` becomes a [`TestCase`] tagged with
+//! its result (pass / skip / fail / error) plus optional
+//! exception attributes pulled from a `<failure>` or `<error>`
+//! child.
 //!
 //! This module owns the data model only. Converting [`TestCase`]
 //! to OTLP spans + uploading them is `super::upload`'s job.
@@ -20,14 +20,8 @@ use quick_xml::name::QName;
 use quick_xml::reader::Reader;
 use serde::Serialize;
 
-/// The four states a `JUnit` `<testcase>` can be in. Mirrors the
-/// `test.case.result.status` attribute Python sets on each span.
-///
-/// Serializes to `snake_case` strings (`"passed"`, `"skipped"`,
-/// `"failed"`, `"errored"`) so the JSON the `_internal
-/// junit-parse` subcommand emits is stable wire shape the Python
-/// bridge can pattern-match on without knowing about Rust enum
-/// names.
+/// The four states a `JUnit` `<testcase>` can be in. Drives the
+/// `test.case.result.status` attribute on each emitted span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TestStatus {
@@ -38,11 +32,10 @@ pub enum TestStatus {
 }
 
 impl TestStatus {
-    /// Attribute value Python uses for `test.case.result.status`.
-    /// Two of the four collapse: `<error>` is rendered as
-    /// `"failed"` because Python branches them identically and we
-    /// want the wire emission to match. The Rust enum still keeps
-    /// them distinct so the UI layer can show different copy.
+    /// Wire value for `test.case.result.status`. Two of the four
+    /// collapse: `<error>` is rendered as `"failed"` because the
+    /// backend treats them identically. The Rust enum keeps them
+    /// distinct so the UI layer can show different copy.
     #[must_use]
     pub fn status_attr(self) -> &'static str {
         match self {
@@ -225,15 +218,13 @@ pub fn parse(xml: &[u8]) -> Result<ParseResult, InvalidJunitXml> {
                 // happens in the `GeneralRef` arm.
                 //
                 // `xml10_content()` (vs the plainer `decode()`) is
-                // important on Windows: when git checks the
-                // fixture out with `core.autocrlf` enabled the
-                // file's line endings are `\r\n`, and Python's
-                // `xml.etree.ElementTree` normalizes those to `\n`
-                // per the XML 1.0 spec. Without the same
-                // normalization the Rust parser ships `\r\n` in
-                // failure stacktraces and the Python span-builder
-                // tests that diff on the assembled stacktrace fail
-                // only on Windows runners.
+                // important on Windows: when git checks fixtures
+                // out with `core.autocrlf` enabled the file's line
+                // endings are `\r\n`, and the XML 1.0 spec
+                // requires those to be normalized to `\n` before
+                // they reach element text. Without this, failure
+                // stacktraces ship `\r\n` and tests that diff on
+                // the assembled stacktrace fail only on Windows.
                 let s = e.xml10_content().map_err(|err| InvalidJunitXml {
                     details: format!("invalid UTF-8 in element text: {err}"),
                 })?;
