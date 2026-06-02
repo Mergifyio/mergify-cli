@@ -1158,6 +1158,7 @@ dependencies = [
  "mergify-freeze",
  "mergify-py-shim",
  "mergify-queue",
+ "mergify-stack",
  "regex",
  "serde_json",
  "serde_yaml_ng",
@@ -1234,6 +1235,17 @@ dependencies = [
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "mergify-stack"
+version = "0.0.0"
+dependencies = [
+ "mergify-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
