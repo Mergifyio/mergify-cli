@@ -2133,52 +2133,55 @@ def test_local_change_has_reason_default_empty() -> None:
     assert not c.reason
 
 
-async def test_read_reasons_reads_notes_for_updated_changes(
+async def test_local_change_reason_populated_from_walker_note(
     git_mock: test_utils.GitMock,
 ) -> None:
-    """read_reasons() fills LocalChange.reason from refs/notes/mergify/stack."""
-    from mergify_cli.stack.note import NOTES_REF
+    """`LocalChange.reason` is filled by the Rust walker (via the
+    `note` field on its JSON output) rather than by a separate
+    per-commit `git notes show` round-trip.
 
-    local_changes = [
-        changes.LocalChange(
-            id=changes.ChangeId("I1" + "a" * 39),
-            pull=None,
-            commit_sha="new1",
+    Used to be the `read_reasons()` orchestrator step in
+    `stack_push`; the function is gone — the walker reads
+    `refs/notes/mergify/stack` alongside the commit body via
+    `git log --notes=…` in a single subprocess. Pin the
+    walker→`reason` data path so a future refactor can't
+    silently re-introduce the N-round-trip pattern.
+    """
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new1",
             title="T1",
             message="M",
-            base_branch="main",
-            dest_branch="stack/t1--deadbeef",
-            action="update",
+            change_id="I1" + "a" * 39,
+            note="reason one",
         ),
-        changes.LocalChange(
-            id=changes.ChangeId("I2" + "a" * 39),
-            pull=None,
-            commit_sha="new2",
+    )
+    git_mock.commit(
+        test_utils.Commit(
+            sha="new2",
             title="T2",
             message="M",
-            base_branch="main",
-            dest_branch="stack/t2--cafebabe",
-            action="update",
+            change_id="I2" + "a" * 39,
+            # No `note` → defaults to empty, matching git's `%N`
+            # output for commits with no entry on the stack notes ref.
         ),
-    ]
-    git_mock.mock(
-        "notes",
-        f"--ref={NOTES_REF}",
-        "show",
-        "new1",
-        output="reason one",
-    )
-    git_mock.mock(
-        "notes",
-        f"--ref={NOTES_REF}",
-        "show",
-        "new2",
-        output="",
     )
 
-    await push.read_reasons(local_changes)
+    result = await changes.get_changes(
+        base_commit_sha="base_commit_sha",
+        stack_prefix="stack",
+        base_branch="main",
+        dest_branch="current-branch",
+        remote_changes=changes.RemoteChanges({}),
+        only_update_existing_pulls=False,
+        next_only=False,
+    )
 
-    assert local_changes[0].reason == "reason one"
+    assert len(result.locals) == 2
+    assert result.locals[0].commit_sha == "new1"
+    assert result.locals[0].reason == "reason one"
+    assert result.locals[1].commit_sha == "new2"
+    assert not result.locals[1].reason
 
 
 def test_revision_history_comment_renders_reason_column() -> None:
@@ -2347,8 +2350,6 @@ async def test_revision_comment_includes_reason_from_local_change(
     respx_mock: respx.MockRouter,
 ) -> None:
     """When a commit has a reason, it appears in the new revision row."""
-    from mergify_cli.stack.note import NOTES_REF
-
     git_mock.commit(
         test_utils.Commit(
             sha="third_sha",
@@ -2356,18 +2357,16 @@ async def test_revision_comment_includes_reason_from_local_change(
             message="Message",
             change_id="I29617d37762fd69809c255d7e7073cb11f8fbf50",
             head_ref="current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
+            # The Rust walker emits the note alongside the commit
+            # body via `git log --notes=refs/notes/mergify/stack`,
+            # so the note arrives through `local["note"]` on the
+            # walker bridge output rather than via a separate
+            # `git notes show` mock.
+            note="fixed typo in sql",
         ),
     )
     git_mock.finalize(
         remote_shas={"I29617d37762fd69809c255d7e7073cb11f8fbf50": "second_sha"},
-    )
-    # Override the empty-note default with an actual note
-    git_mock.mock(
-        "notes",
-        f"--ref={NOTES_REF}",
-        "show",
-        "third_sha",
-        output="fixed typo in sql",
     )
     git_mock.mock("fetch", "origin", "refs/pull/123/head", output="")
 

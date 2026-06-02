@@ -23,6 +23,13 @@ use serde::Serialize;
 use crate::change_id;
 use crate::slug;
 
+/// `refs/notes/mergify/stack` — the notes ref `mergify stack`
+/// uses to attach amend-reason notes to commits. Read alongside
+/// the commit body in the walker via `git log --notes=…` so the
+/// revision-history rendering doesn't need a per-commit subprocess
+/// round-trip.
+const STACK_NOTES_REF: &str = "refs/notes/mergify/stack";
+
 /// One commit in the local stack range, after parsing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalCommit {
@@ -47,6 +54,15 @@ pub struct LocalCommit {
     /// pre-computing it here keeps the slug algorithm in one place
     /// regardless of how many stack callers need it.
     pub slug: String,
+    /// Amend-reason note attached to the commit on the
+    /// `refs/notes/mergify/stack` ref, or an empty string when
+    /// the commit has no note. The walker reads notes through
+    /// `git log --notes=…` so this is a free piggyback on the
+    /// existing per-stack-op subprocess; before this field, the
+    /// Python orchestrator ran one extra `git notes show <sha>`
+    /// per commit (N round-trips). Consumed by the revision
+    /// history rendering on the PR comment.
+    pub note: String,
 }
 
 /// Run `git log` in `repo_dir` and parse its output into one
@@ -71,6 +87,7 @@ pub fn read(repo_dir: &Path, base: &str, head: &str) -> Result<Vec<LocalCommit>,
 
 fn run_git_log(repo_dir: &Path, base: &str, head: &str) -> Result<String, CliError> {
     let range = format!("{base}..{head}");
+    let notes_arg = format!("--notes={STACK_NOTES_REF}");
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_dir)
@@ -78,8 +95,12 @@ fn run_git_log(repo_dir: &Path, base: &str, head: &str) -> Result<String, CliErr
             "log",
             "--reverse",
             // `%H` SHA, `%x00` NUL, `%s` subject, `%x00` NUL,
-            // `%b` body, `%x1e` ASCII RS terminator.
-            "--format=%H%x00%s%x00%b%x1e",
+            // `%b` body, `%x00` NUL, `%N` note, `%x1e` ASCII RS
+            // terminator. `%N` is empty when the commit has no
+            // note on the configured ref, so the field count is
+            // stable across both cases.
+            "--format=%H%x00%s%x00%b%x00%N%x1e",
+            &notes_arg,
             &range,
         ])
         .output()
@@ -111,7 +132,7 @@ pub fn parse(raw: &str) -> Result<Vec<LocalCommit>, CliError> {
         if stripped.is_empty() {
             continue;
         }
-        let mut parts = stripped.splitn(3, '\x00');
+        let mut parts = stripped.splitn(4, '\x00');
         let commit_sha = parts
             .next()
             .ok_or_else(|| malformed_record(stripped))?
@@ -123,6 +144,15 @@ pub fn parse(raw: &str) -> Result<Vec<LocalCommit>, CliError> {
             .trim()
             .to_string();
         let message = parts
+            .next()
+            .ok_or_else(|| malformed_record(stripped))?
+            .trim()
+            .to_string();
+        // `%N` is empty when no note exists on the configured ref.
+        // The field is still emitted by git so this never returns
+        // `None`; missing it means the record shape drifted, which
+        // is malformed.
+        let note = parts
             .next()
             .ok_or_else(|| malformed_record(stripped))?
             .trim()
@@ -147,6 +177,7 @@ pub fn parse(raw: &str) -> Result<Vec<LocalCommit>, CliError> {
             message,
             change_id,
             slug,
+            note,
         });
     }
     Ok(out)
@@ -174,9 +205,16 @@ mod tests {
     use super::*;
 
     fn record(sha: &str, title: &str, body: &str) -> String {
+        // Most parse tests don't care about the note field; default
+        // to empty (the shape git emits for commits without a note
+        // on the configured ref).
+        record_with_note(sha, title, body, "")
+    }
+
+    fn record_with_note(sha: &str, title: &str, body: &str, note: &str) -> String {
         // Same wire shape git emits with our `--format` spec: NUL
-        // between fields, RS terminator after the body.
-        format!("{sha}\x00{title}\x00{body}\x1e")
+        // between fields, RS terminator after the note.
+        format!("{sha}\x00{title}\x00{body}\x00{note}\x1e")
     }
 
     #[test]
@@ -252,15 +290,52 @@ mod tests {
 
     #[test]
     fn parse_rejects_record_missing_a_field() {
-        // A two-field record (no body) means our format spec
-        // mismatches git's output — surfacing it loudly is more
-        // useful than silently dropping the commit.
-        let raw = "aaaa111111111111111111111111111111111111\x00title\x1e";
+        // A three-field record (missing the note field) means our
+        // format spec drifted from what git emits — surfacing it
+        // loudly is more useful than silently dropping the
+        // commit. We expect 4 NUL-separated fields: SHA, title,
+        // body, note (note may be empty).
+        let raw = "aaaa111111111111111111111111111111111111\x00title\x00body\x1e";
         let err = parse(raw).unwrap_err();
         match err {
             CliError::Generic(msg) => assert!(msg.contains("Unexpected git log record format")),
             other => panic!("expected Generic, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_extracts_note_when_present() {
+        // The walker piggy-backs `git notes --ref=refs/notes/mergify/stack`
+        // onto the same `git log` call by appending `%N` to the
+        // format spec. Confirm a commit with a note surfaces it
+        // verbatim on the `LocalCommit.note` field — that's how
+        // the revision-history rendering will receive it without
+        // a per-commit subprocess round-trip.
+        let raw = record_with_note(
+            "aaaa111111111111111111111111111111111111",
+            "amend",
+            "body\n\nChange-Id: Iaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "address review feedback",
+        );
+        let commits = parse(&raw).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].note, "address review feedback");
+    }
+
+    #[test]
+    fn parse_returns_empty_note_when_absent() {
+        // Commits without a note still need a deterministic shape
+        // (the `%N` field is empty, but git still emits the NUL
+        // separator before the RS terminator). `record` defaults
+        // to empty note, exercising exactly this case.
+        let raw = record(
+            "aaaa111111111111111111111111111111111111",
+            "no-note",
+            "Change-Id: Iaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        let commits = parse(&raw).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].note, "");
     }
 
     #[test]
@@ -323,6 +398,19 @@ mod tests {
             "-m",
             "second\n\nChange-Id: Ibbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ]);
+        // Attach an amend-reason note to the second commit only,
+        // so the assertions below can verify both branches —
+        // `note == "address review feedback"` for the second,
+        // `note == ""` for the first.
+        let second_sha = git(&["rev-parse", "HEAD"]).trim().to_string();
+        git(&[
+            "notes",
+            &format!("--ref={STACK_NOTES_REF}"),
+            "add",
+            "-m",
+            "address review feedback",
+            &second_sha,
+        ]);
 
         let commits = read(path, &base, "HEAD").unwrap();
         assert_eq!(commits.len(), 2);
@@ -332,5 +420,9 @@ mod tests {
             commits[0].change_id,
             "Iaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
+        // First commit has no note on the stack ref → empty
+        // string. Second has the note we just attached.
+        assert_eq!(commits[0].note, "");
+        assert_eq!(commits[1].note, "address review feedback");
     }
 }
