@@ -73,6 +73,7 @@ pub async fn run(
     let token = resolve_token(opts.token)?;
     let repository = resolve_repository(opts.repository)?;
     let tests_target_branch = resolve_tests_target_branch(opts.tests_target_branch)?;
+    let test_exit_code = resolve_test_exit_code(opts.test_exit_code)?;
     let files = expand_files(opts.files)?;
 
     // ── Header (printed regardless of outcome).
@@ -179,7 +180,7 @@ pub async fn run(
     // non-zero but the JUnit report has no failures, the runner
     // probably crashed — fail loudly so the user knows the report
     // is incomplete.
-    if let Some(exit_code) = opts.test_exit_code {
+    if let Some(exit_code) = test_exit_code {
         if exit_code != 0 && nb_failures == 0 {
             write_silent_failure(&mut report, exit_code);
             emit(output, &report)?;
@@ -222,6 +223,28 @@ fn resolve_api_url(explicit: Option<&str>) -> String {
         }
     }
     "https://api.mergify.com".to_string()
+}
+
+/// Resolve `--test-exit-code` / `MERGIFY_TEST_EXIT_CODE`. Empty
+/// env value is treated as "unset" so callers like the
+/// `gha-mergify-ci` action can export `MERGIFY_TEST_EXIT_CODE=""`
+/// to mean "no exit code available" without tripping a clap
+/// parse error — the env-var resolution intentionally does not
+/// go through clap's `env = ...` attribute, see the
+/// `JunitProcessCliArgs::test_exit_code` field for the full
+/// rationale.
+fn resolve_test_exit_code(explicit: Option<i32>) -> Result<Option<i32>, CliError> {
+    if explicit.is_some() {
+        return Ok(explicit);
+    }
+    match env::var("MERGIFY_TEST_EXIT_CODE") {
+        Ok(v) if !v.is_empty() => v.parse::<i32>().map(Some).map_err(|e| {
+            CliError::Configuration(format!(
+                "MERGIFY_TEST_EXIT_CODE={v:?} is not a valid integer: {e}",
+            ))
+        }),
+        _ => Ok(None),
+    }
 }
 
 fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
@@ -604,6 +627,60 @@ mod tests {
             status,
             failure: Failure::default(),
         }
+    }
+
+    #[test]
+    fn resolve_test_exit_code_returns_explicit_value_when_provided() {
+        // Explicit `--test-exit-code 0` must win over whatever the
+        // env var says — including the empty-string sentinel the
+        // `gha-mergify-ci` action uses when no runner exit code is
+        // available. Pin so a future refactor can't accidentally
+        // invert the precedence.
+        let got = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some("42"), || {
+            resolve_test_exit_code(Some(0)).unwrap()
+        });
+        assert_eq!(got, Some(0));
+    }
+
+    #[test]
+    fn resolve_test_exit_code_treats_empty_env_var_as_unset() {
+        // Regression for the downstream `gha-mergify-ci` break
+        // (monorepo#33423, second symptom): the action exports
+        // `MERGIFY_TEST_EXIT_CODE=""` when the previous step
+        // didn't produce a runner exit code. Previously the clap
+        // `env = "MERGIFY_TEST_EXIT_CODE"` attribute on
+        // `--test-exit-code` tried to parse the empty value as
+        // `i32` and aborted parsing with `cannot parse integer
+        // from empty string`, before this function ever ran. The
+        // fix drops the clap `env` hook and routes the env var
+        // through here — empty must collapse to `None`, the
+        // same shape no env var would produce.
+        let got = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some(""), || {
+            resolve_test_exit_code(None).unwrap()
+        });
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn resolve_test_exit_code_parses_non_empty_env_var() {
+        let got = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some("7"), || {
+            resolve_test_exit_code(None).unwrap()
+        });
+        assert_eq!(got, Some(7));
+    }
+
+    #[test]
+    fn resolve_test_exit_code_errors_when_env_var_is_non_empty_garbage() {
+        // A non-empty env var that isn't a valid integer is a
+        // real misconfiguration, not a "no value" sentinel —
+        // error loudly with the offending value in the message so
+        // the user can spot the typo without having to dig.
+        let err = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some("not-an-int"), || {
+            resolve_test_exit_code(None).unwrap_err()
+        });
+        let msg = err.to_string();
+        assert!(msg.contains("MERGIFY_TEST_EXIT_CODE="), "got: {msg}");
+        assert!(msg.contains("not-an-int"), "got: {msg}");
     }
 
     #[test]
