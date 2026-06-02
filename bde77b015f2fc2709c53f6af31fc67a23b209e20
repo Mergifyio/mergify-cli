@@ -1,0 +1,1 @@
+rebase onto main after #1490 and #1493 merged: keep #1489's deletion of _internal junit-parse + junit-upload AND keep stack-local-commits as the sole remaining _internal subcommand; restore Subcommands::Internal variant which #1489 had removed (it expected to be the last _internal arm) so the now-sole stack-local-commits dispatch still wires up
