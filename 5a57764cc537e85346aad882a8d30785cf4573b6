@@ -1,0 +1,1 @@
+rebase onto main after #1499 merged: trivial textual conflict in junit_process/command.rs because main keeps the inline env::var(...).ok().filter(...) pattern that this commit refactors to var_non_empty(...); took the refactor side and dropped a stale run_id: None line that was already removed upstream in the Phase B work merged via #1489
