@@ -139,6 +139,27 @@ jobs:
           # to ensure the utf8 mode is enabled.
           python -c "import test_binary_build; test_binary_build.test_reexec_enables_utf8_and_prints_emoji();"
 
+      - name: Tests uv tool install
+        shell: bash
+        env:
+          PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
+        # Regression guard for the Windows uv-trampoline discovery
+        # path in `crates/mergify-py-shim`. `uv tool install` copies
+        # a standalone trampoline `.exe` into the uv tool bin dir
+        # (Windows requires privileges for symlinks, so unlike
+        # pipx on Unix this is *not* a symlink back into the venv).
+        # The shim has to walk to the uv tool dir via `uv tool dir`
+        # to find the interpreter — exercise that on every PR so the
+        # discovery path can't regress on a future shim rewrite.
+        run: |
+          uv tool install --force dist/*.whl
+          bin_dir="$(uv tool dir --bin)"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            "${bin_dir}/mergify.exe" --help > /dev/null
+          else
+            "${bin_dir}/mergify" --help > /dev/null
+          fi
+
   # Smoke build the full release wheel matrix on every PR so a
   # cross-compile or platform-specific maturin failure is caught
   # here, not on the next `release: published` event. Calls the
