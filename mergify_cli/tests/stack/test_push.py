@@ -2036,6 +2036,79 @@ async def test_get_remote_changes_old_format_branch(
     assert cid in result
 
 
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_get_remote_changes_errors_on_duplicate_open_prs(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """Two open PRs with the same Change-Id is a user-state bug the
+    rest of the orchestration can't reconcile (push would race,
+    lease check would clobber) — surface it loudly.
+
+    Regression: the previous check compared against `state ==
+    "opened"`, which is never GitHub's actual PR state (it's
+    `"open"` / `"closed"`). The error branch was therefore dead
+    and duplicate open PRs were silently kept.
+    """
+    import httpx
+
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/1",
+                    },
+                },
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/2",
+                    },
+                },
+            ],
+        },
+    )
+    same_change_id_ref = "my-stack/feat-a--deadbeef"
+    respx_mock.get("/repos/user/repo/pulls/1").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/1",
+            "number": 1,
+            "title": "First",
+            "head": {"sha": "sha1", "ref": same_change_id_ref},
+            "body": "",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+    respx_mock.get("/repos/user/repo/pulls/2").respond(
+        200,
+        json={
+            "html_url": "https://github.com/user/repo/pull/2",
+            "number": 2,
+            "title": "Second",
+            "head": {"sha": "sha2", "ref": same_change_id_ref},
+            "body": "",
+            "state": "open",
+            "merged_at": None,
+            "draft": False,
+            "node_id": "",
+        },
+    )
+
+    async with httpx.AsyncClient(base_url="https://api.github.com/") as client:
+        with pytest.raises(RuntimeError, match="More than 1 pull found"):
+            await changes.get_remote_changes(
+                client,
+                user="user",
+                repo="repo",
+                stack_prefix="my-stack",
+                author="author",
+            )
+
+
 def test_revision_entry_timestamp_iso_normalises_to_utc() -> None:
     tz_ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     dt = datetime.datetime(2026, 4, 14, 20, 0, 0, tzinfo=tz_ist)  # 14:30:00 UTC

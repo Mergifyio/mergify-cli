@@ -167,8 +167,18 @@ async def get_remote_changes(
                 pass
             elif other_pull["state"] == "closed" and pull["state"] == "open":
                 remote_changes[changeid] = pull
-            elif other_pull["state"] == "opened":
-                msg = f"More than 1 pull found with this head: {pull['head']['ref']}"
+            elif other_pull["state"] == "open" and pull["state"] == "open":
+                # Two open PRs on the same Change-Id is a user-state
+                # bug the rest of the orchestration can't reconcile
+                # (push would race, lease check would clobber).
+                # Surface loudly with both PR URLs + the Change-Id so
+                # the user can close one without a second round trip.
+                msg = (
+                    f"More than 1 pull found for Change-Id {changeid}: "
+                    f"#{other_pull['number']} ({other_pull['html_url']}) and "
+                    f"#{pull['number']} ({pull['html_url']}) "
+                    f"— close one of them and rerun."
+                )
                 raise RuntimeError(msg)
 
         else:
