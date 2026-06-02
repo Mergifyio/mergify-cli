@@ -12,6 +12,21 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+"""Python oracle for the Rust `mergify-stack::slug::slugify_title`
+algorithm.
+
+Test-only: `GitMock` calls this from `tests/utils.py` to mint the
+same `<slug>--<hex8>` branch suffixes the bridge's `_internal
+stack-local-commits` subcommand would produce, without paying a
+subprocess per test commit. The Rust crate's unit tests
+(`crates/mergify-stack/src/slug.rs::tests`) cover the same case
+table this oracle mirrored from, so drift surfaces as a Rust
+test failure rather than silently fooling Python tests.
+
+Do not import from production code — call the Rust binary via
+the bridge instead.
+"""
+
 from __future__ import annotations
 
 import re

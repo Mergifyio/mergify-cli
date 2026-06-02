@@ -21,6 +21,7 @@ use mergify_core::CliError;
 use serde::Serialize;
 
 use crate::change_id;
+use crate::slug;
 
 /// One commit in the local stack range, after parsing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -39,6 +40,13 @@ pub struct LocalCommit {
     /// trailer fails the walk early so partial results never
     /// reach the caller.
     pub change_id: String,
+    /// Deterministic `<slug>--<hex8>` branch suffix derived from
+    /// `title` + `change_id` (see [`crate::slug::slugify_title`]).
+    /// Used by stack commands as the default head-branch name
+    /// when a local commit has no remote PR paired with it yet —
+    /// pre-computing it here keeps the slug algorithm in one place
+    /// regardless of how many stack callers need it.
+    pub slug: String,
 }
 
 /// Run `git log` in `repo_dir` and parse its output into one
@@ -131,12 +139,14 @@ pub fn parse(raw: &str) -> Result<Vec<LocalCommit>, CliError> {
                 ))
             })?
             .to_string();
+        let slug = slug::slugify_title(&title, &change_id);
 
         out.push(LocalCommit {
             commit_sha,
             title,
             message,
             change_id,
+            slug,
         });
     }
     Ok(out)
