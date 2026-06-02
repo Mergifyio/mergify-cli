@@ -138,13 +138,31 @@ async def process_junit_files(
                 f"{quarantined}/{total} failures quarantined"
             )
 
+    # The OTLP encode + upload step is the Rust `_internal
+    # junit-upload` subcommand. It re-parses every file, builds
+    # the spans (mirroring what `junit_to_spans` did Python-side),
+    # bakes in the quarantine set, gzips the protobuf, and POSTs.
+    # We extract the quarantined names from the spans the Python
+    # quarantine pass mutated above — that captures both
+    # quarantined-failing and quarantined-passing cases — so the
+    # Rust span builder reproduces the same wire shape Python used
+    # to emit.
+    quarantined_names = [
+        span.name
+        for span in spans
+        if span.attributes and span.attributes.get("cicd.test.quarantined") is True
+    ]
     upload_error: str | None = None
     try:
         upload.upload(
             api_url=api_url,
             token=token,
             repository=repository,
-            spans=spans,
+            files=files,
+            run_id=run_id,
+            quarantined_names=quarantined_names,
+            test_framework=test_framework,
+            test_language=test_language,
         )
     except Exception as e:
         upload_error = str(e)

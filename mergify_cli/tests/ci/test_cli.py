@@ -83,12 +83,20 @@ def test_cli(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         )
     assert result_process.exit_code == 0, result_process.stdout
     assert result_upload.exit_code == 0, result_upload.stdout
+    # Phase B migration: `upload.upload` now wraps a subprocess
+    # to `mergify _internal junit-upload`. The signature takes
+    # `files` (original tuple) + `run_id` + `quarantined_names`
+    # instead of the pre-built `spans` list.
     assert mocked_upload.call_count == 2
     assert mocked_upload.call_args.kwargs == {
         "api_url": "https://api.mergify.com",
         "token": "abc",
         "repository": "user/repo",
-        "spans": anys.ANY_LIST,
+        "files": (str(REPORT_XML),),
+        "run_id": anys.ANY_STR,
+        "quarantined_names": [],
+        "test_framework": None,
+        "test_language": None,
     }
 
 
