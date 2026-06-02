@@ -28,7 +28,6 @@ from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import github_types
 from mergify_cli.exit_codes import ExitCode
-from mergify_cli.stack.slug import slugify_title
 
 
 if typing.TYPE_CHECKING:
@@ -336,8 +335,11 @@ async def get_changes(
         if pull is not None:
             dest_branch = pull["head"]["ref"]
         else:
-            slug = slugify_title(title, changeid)
-            dest_branch = f"{stack_prefix}/{slug}"
+            # Slug is computed Rust-side by `slug::slugify_title`
+            # and folded into the walker output — see
+            # `_read_local_commits_via_rust`. Keeps the algorithm
+            # in one place across stack callers.
+            dest_branch = f"{stack_prefix}/{local['slug']}"
 
         changes.locals.append(
             LocalChange(
@@ -374,7 +376,7 @@ async def _read_local_commits_via_rust(
 ) -> list[dict[str, str]]:
     """Walk the stack range via the native Rust subcommand.
 
-    Returns a list of `{commit_sha, title, message, change_id}`
+    Returns a list of `{commit_sha, title, message, change_id, slug}`
     dicts, one per commit in `<base_commit_sha>..<dest_branch>`.
     A missing `Change-Id:` trailer makes the Rust binary exit with
     `ExitCode.INVALID_STATE`; we mirror the Python exit path so the

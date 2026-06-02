@@ -128,10 +128,16 @@ class GitMock:
 
         Mirrors the per-commit shape emitted by
         `crates/mergify-stack/src/local_commits.rs::LocalCommit`:
-        `{commit_sha, title, message, change_id}`. Called by the
+        `{commit_sha, title, message, change_id, slug}`. Called by the
         `git_mock` fixture's bridge stub instead of running the
-        real subprocess against a real git repo.
+        real subprocess against a real git repo. The `slug` is
+        computed via the test-only oracle in
+        `mergify_cli/tests/_slug_oracle.py`, which mirrors the
+        Rust `mergify-stack::slug::slugify_title` algorithm; the
+        Rust crate's unit tests pin the parity.
         """
+        from mergify_cli.tests._slug_oracle import slugify_title
+
         out: list[dict[str, str]] = []
         for c in self._commits:
             body = f"{c['message']}\n\nChange-Id: {c['change_id']}"
@@ -141,6 +147,7 @@ class GitMock:
                     "title": c["title"],
                     "message": body,
                     "change_id": c["change_id"],
+                    "slug": slugify_title(c["title"], c["change_id"]),
                 },
             )
         return out
@@ -193,7 +200,7 @@ class GitMock:
         if not self._commits:
             return
 
-        from mergify_cli.stack.slug import slugify_title
+        from mergify_cli.tests._slug_oracle import slugify_title
 
         lease_args: list[str] = []
         refspecs: list[str] = []
