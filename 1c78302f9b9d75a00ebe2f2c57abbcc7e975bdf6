@@ -1,0 +1,1 @@
+include the Cargo.lock entry for the new temp-env dev-dep that the regression test needs (forgot to git add it in the original commit)
