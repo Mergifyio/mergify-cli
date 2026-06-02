@@ -1,0 +1,1 @@
+rewrite the comments that apologised for porting Pythons opened bug; now that the previous commit (#1504) fixes the Python first, the Rust port lands on top of correct behaviour and just describes the duplicate-open detection plainly
