@@ -12,3 +12,4 @@
 
 pub mod change_id;
 pub mod local_commits;
+pub mod slug;
