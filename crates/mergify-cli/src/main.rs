@@ -1538,7 +1538,18 @@ struct JunitProcessCliArgs {
     /// Exit code of the test runner. When this is non-zero but no
     /// failures appear in the JUnit report, the run is flagged
     /// as a silent failure. Falls back to ``MERGIFY_TEST_EXIT_CODE``.
-    #[arg(long = "test-exit-code", short = 'e', env = "MERGIFY_TEST_EXIT_CODE")]
+    //
+    // The env-var fallback is intentionally NOT delegated to
+    // clap's `env = ...` attribute: callers (notably the
+    // `gha-mergify-ci` action) set `MERGIFY_TEST_EXIT_CODE=""`
+    // when no exit code is available, meaning "no value". Clap
+    // would try to parse the empty string as `i32` and exit
+    // parsing with `invalid value '' for '--test-exit-code':
+    // cannot parse integer from empty string`. The env var is
+    // consulted inside `junit_process::command::resolve_test_exit_code`
+    // instead, where empty correctly maps to `None`. Same trap
+    // hit the `--config` flag — see `ScopesCliArgs::config`.
+    #[arg(long = "test-exit-code", short = 'e')]
     test_exit_code: Option<i32>,
 
     /// JUnit XML files or glob patterns (e.g.
@@ -1922,6 +1933,42 @@ mod tests {
         // not surface as a value (which would change the
         // downstream resolver's branch).
         assert!(opts.config.is_none(), "got: {:?}", opts.config);
+    }
+
+    #[test]
+    fn ci_junit_process_parses_when_mergify_test_exit_code_env_var_is_empty() {
+        // Second instance of the same class of regression as
+        // `ci_scopes_parses_when_…`: `gha-mergify-ci` exports
+        // `MERGIFY_TEST_EXIT_CODE=""` when the previous step
+        // didn't produce a runner exit code. Previously the clap
+        // `env = "MERGIFY_TEST_EXIT_CODE"` attribute on
+        // `--test-exit-code` tried to parse `""` as `i32` and
+        // exited parsing with `invalid value '' for
+        // '--test-exit-code': cannot parse integer from empty
+        // string`. The clap env hook has been dropped — env
+        // lookup lives in `junit_process::command::resolve_test_exit_code`
+        // where empty is correctly treated as `None`. Pin that
+        // here so the hook can't sneak back in.
+        let parsed = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some(""), || {
+            CliRoot::try_parse_from([
+                "mergify".to_string(),
+                "ci".to_string(),
+                "junit-process".to_string(),
+                "report.xml".to_string(),
+            ])
+            .expect("argv parses with empty MERGIFY_TEST_EXIT_CODE")
+        });
+        let Dispatch::Native(NativeCommand::CiJunitProcess(opts)) = dispatch_from_parsed(parsed)
+        else {
+            panic!("ci junit-process must dispatch natively");
+        };
+        // `--test-exit-code` was never supplied; the empty env
+        // var must not surface as a value.
+        assert!(
+            opts.test_exit_code.is_none(),
+            "got: {:?}",
+            opts.test_exit_code,
+        );
     }
 
     #[test]

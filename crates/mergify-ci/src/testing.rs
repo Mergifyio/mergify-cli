@@ -84,6 +84,12 @@ const CI_ENV_VARS: &[&str] = &[
     // attributes; explicitly scrubbed so tests that don't set it
     // get a deterministic `mergify.test.job.name` (absent).
     "MERGIFY_TEST_JOB_NAME",
+    // Consumed by `junit_process::command::resolve_test_exit_code`
+    // (silent-failure detection). Scrub so the orchestrator tests
+    // don't pick up a developer's local export or a CI host that
+    // happens to set it, which would change which verdict branch
+    // the assertions land in.
+    "MERGIFY_TEST_EXIT_CODE",
 ];
 
 fn merged_overrides(extra: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
