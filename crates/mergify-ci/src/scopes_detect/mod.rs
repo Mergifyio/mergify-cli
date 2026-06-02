@@ -283,6 +283,51 @@ mod tests {
     }
 
     #[test]
+    fn resolve_config_path_treats_empty_env_var_as_unset() {
+        // Regression for the downstream `gha-mergify-ci` break
+        // (monorepo#33423): the action sets `MERGIFY_CONFIG_PATH=""`
+        // when no path was given, expecting auto-detect. Previously
+        // clap's `env = "MERGIFY_CONFIG_PATH"` attribute on
+        // `ci scopes --config` treated the empty env value as a
+        // present-but-empty `--config` flag and aborted parsing
+        // with "a value is required for '--config'", before this
+        // function ever ran. The fix dropped the clap `env` hook
+        // so this function owns the lookup — and the empty branch
+        // here must fall through to autodetect rather than report
+        // a malformed env var.
+        let result = temp_env::with_var("MERGIFY_CONFIG_PATH", Some(""), || {
+            resolve_config_path(None)
+        });
+        // Either autodetect found a real config (cargo test runs
+        // from a workspace that contains `.mergify.yml`, so this is
+        // the expected branch here) or it didn't — but the
+        // env-var-specific error must not surface either way,
+        // since "empty" means "not set" by contract.
+        if let Err(err) = &result {
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("MERGIFY_CONFIG_PATH="),
+                "empty env var leaked into the error message: {msg}",
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_config_path_errors_with_env_var_specific_message_when_set_but_invalid() {
+        // Counterpart to the empty-env test: when the user (or a
+        // wrapper script) sets `MERGIFY_CONFIG_PATH` to a real
+        // value that doesn't exist, the error must name the env
+        // var + the bogus path so the user can spot the typo
+        // without having to dig.
+        let err = temp_env::with_var("MERGIFY_CONFIG_PATH", Some("/no/such/.mergify.yml"), || {
+            resolve_config_path(None).unwrap_err()
+        });
+        let msg = err.to_string();
+        assert!(msg.contains("MERGIFY_CONFIG_PATH="), "got: {msg}");
+        assert!(msg.contains("/no/such/.mergify.yml"), "got: {msg}");
+    }
+
+    #[test]
     fn write_detected_scopes_emits_sorted_json() {
         let tmp = tempfile::tempdir().unwrap();
         let out = tmp.path().join("scopes.json");
