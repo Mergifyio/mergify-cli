@@ -1,0 +1,1 @@
+apply cargo fmt to satisfy CI rust check (the prior local fmt --check status was mistakenly read as clean because its output was tail-piped together with cargo test output)
