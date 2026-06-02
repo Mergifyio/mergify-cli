@@ -1,9 +1,8 @@
 //! Quarantine API client for `mergify ci junit-process`.
 //!
-//! Mirrors `mergify_cli/ci/junit_processing/quarantine.py`. The
-//! API answers "for these failing tests on this branch, which are
-//! currently quarantined?" — failures of quarantined tests are
-//! ignored by the final CI verdict; failures of non-quarantined
+//! The API answers "for these failing tests on this branch, which
+//! are currently quarantined?" — failures of quarantined tests
+//! are ignored by the final CI verdict; failures of non-quarantined
 //! tests still block.
 //!
 //! Endpoint shape:

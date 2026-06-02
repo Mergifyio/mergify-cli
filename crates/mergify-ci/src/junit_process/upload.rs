@@ -1,9 +1,7 @@
 //! POST an `ExportTraceServiceRequest` to the Mergify CI Insights
 //! traces endpoint as OTLP/HTTP/protobuf with gzip.
 //!
-//! Mirrors `mergify_cli/ci/junit_processing/upload.py`. The Python
-//! version delegates to `opentelemetry-exporter-otlp-proto-http`,
-//! which boils down to a single `POST` with three headers:
+//! A single `POST` with three headers:
 //!
 //! - `Authorization: Bearer <token>`
 //! - `Content-Type: application/x-protobuf`
@@ -11,9 +9,8 @@
 //!
 //! No retries, no streaming, no SDK lifecycle — small enough to do
 //! by hand with `reqwest` so we don't drag in `opentelemetry-otlp`
-//! and its tonic dependency. The endpoint
-//! (`{api_url}/v1/repos/{repository}/ci/traces`) matches the
-//! Python URL byte for byte.
+//! and its tonic dependency. Endpoint:
+//! `{api_url}/v1/repos/{repository}/ci/traces`.
 
 use std::io::Write as _;
 use std::time::Duration;
