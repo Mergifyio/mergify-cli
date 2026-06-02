@@ -33,6 +33,7 @@ tokio = { version = "1", default-features = false, features = ["macros", "rt", "
 [dev-dependencies]
 regex = "1"
 serde_yaml_ng = "0.10"
+temp-env = "0.3"
 
 [lints]
 workspace = true

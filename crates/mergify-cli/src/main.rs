@@ -1422,11 +1422,26 @@ struct GitRefsCliArgs {
 
 #[derive(clap::Args)]
 struct ScopesCliArgs {
-    /// Path to YAML config file. Falls back to
-    /// ``MERGIFY_CONFIG_PATH`` env var, then auto-detects
+    /// Path to YAML config file. Falls back to the
+    /// `MERGIFY_CONFIG_PATH` env var, then auto-detects
     /// `.mergify.yml`, `.mergify/config.yml`, or
     /// `.github/mergify.yml`.
-    #[arg(long, env = "MERGIFY_CONFIG_PATH")]
+    //
+    // The env var lookup is intentionally *not* delegated to
+    // clap's `env = ...` attribute: callers (notably the
+    // `gha-mergify-ci` action) set `MERGIFY_CONFIG_PATH=""` to
+    // mean "auto-detect", and clap's `env` parser treats an
+    // empty env value as a present-but-empty flag value, which
+    // fails the parse with `a value is required for '--config'`.
+    // The env var is consulted inside
+    // `mergify_ci::scopes_detect::resolve_config_path` instead,
+    // where empty correctly falls through to auto-detect. The
+    // matching regression tests are
+    // `ci_scopes_parses_when_mergify_config_path_env_var_is_empty`
+    // (clap parse) and
+    // `resolve_config_path_treats_empty_env_var_as_unset`
+    // (lower-level resolver).
+    #[arg(long)]
     config: Option<PathBuf>,
 
     /// Base git reference to use to look for changed files.
@@ -1874,6 +1889,39 @@ mod tests {
             std::iter::once("mergify".to_string()).chain(argv.iter().map(|s| (*s).to_string())),
         )
         .expect("argv parses")
+    }
+
+    #[test]
+    fn ci_scopes_parses_when_mergify_config_path_env_var_is_empty() {
+        // Regression for monorepo#33423 / gha-mergify-ci:
+        // the action sets `MERGIFY_CONFIG_PATH=""` (empty) when
+        // the caller didn't pin a config path, expecting
+        // auto-detect. The previous `ScopesCliArgs::config`
+        // declaration used `env = "MERGIFY_CONFIG_PATH"` on
+        // clap's side, which interpreted the empty env value as
+        // a present-but-empty `--config` flag and exited parsing
+        // with `a value is required for '--config'`. The clap
+        // env hook has been dropped — env lookup lives inside
+        // `scopes_detect::resolve_config_path` where empty is
+        // correctly treated as unset. Pin that here so the hook
+        // can't sneak back in.
+        let parsed = temp_env::with_var("MERGIFY_CONFIG_PATH", Some(""), || {
+            CliRoot::try_parse_from([
+                "mergify".to_string(),
+                "ci".to_string(),
+                "scopes".to_string(),
+                "--write".to_string(),
+                "scopes.json".to_string(),
+            ])
+            .expect("argv parses with empty MERGIFY_CONFIG_PATH")
+        });
+        let Dispatch::Native(NativeCommand::CiScopes(opts)) = dispatch_from_parsed(parsed) else {
+            panic!("ci scopes must dispatch natively");
+        };
+        // `--config` was never supplied; the empty env var must
+        // not surface as a value (which would change the
+        // downstream resolver's branch).
+        assert!(opts.config.is_none(), "got: {:?}", opts.config);
     }
 
     #[test]
