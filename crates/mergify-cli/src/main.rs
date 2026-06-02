@@ -154,11 +154,12 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
-    // Internal Python migration helper. Listed so `looks_native`
+    // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
-    // clap rejects it, but it stays hidden from `--help` (see
+    // clap rejects it, but they stay hidden from `--help` (see
     // the `Subcommands::Internal` variant).
     ("_internal", "stack-local-commits"),
+    ("_internal", "stack-remote-changes"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -198,12 +199,28 @@ enum NativeCommand {
     /// while the surrounding stack discovery logic is still
     /// Python. Wire format is not stable.
     InternalStackLocalCommits(InternalStackLocalCommitsOpts),
+    /// `_internal stack-remote-changes --github-server URL --token T
+    /// --user U --repo R --stack-prefix P --author A` — Python
+    /// migration helper. Searches GitHub for the open + merged PRs
+    /// belonging to the stack, groups them by Change-Id, prints a
+    /// JSON array of `{change_id, pull}` records. Wire format is
+    /// not stable.
+    InternalStackRemoteChanges(InternalStackRemoteChangesOpts),
 }
 
 struct InternalStackLocalCommitsOpts {
     base: String,
     head: String,
     repo_dir: Option<PathBuf>,
+}
+
+struct InternalStackRemoteChangesOpts {
+    github_server: url::Url,
+    token: Option<String>,
+    user: String,
+    repo: String,
+    stack_prefix: String,
+    author: String,
 }
 
 struct ConfigSimulateOpts {
@@ -443,6 +460,26 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 base,
                 head,
                 repo_dir,
+            },
+        )),
+        Subcommands::Internal(InternalArgs {
+            command:
+                InternalSubcommand::StackRemoteChanges(InternalStackRemoteChangesArgs {
+                    github_server,
+                    token,
+                    user,
+                    repo,
+                    stack_prefix,
+                    author,
+                }),
+        }) => Dispatch::Native(NativeCommand::InternalStackRemoteChanges(
+            InternalStackRemoteChangesOpts {
+                github_server,
+                token,
+                user,
+                repo,
+                stack_prefix,
+                author,
             },
         )),
         Subcommands::Ci(CiArgs {
@@ -1040,6 +1077,39 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 println!("{json}");
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::InternalStackRemoteChanges(opts) => {
+                // Search GitHub for PRs belonging to the stack and
+                // group them by Change-Id. The Python `stack/changes.py`
+                // consumer deserializes the JSON array back into the
+                // `RemoteChanges` dict it always built itself.
+                //
+                // Token comes from `--token` when supplied; otherwise
+                // `auth::resolve_token` reads `MERGIFY_TOKEN` /
+                // `GITHUB_TOKEN` / `gh auth token` so the Python
+                // caller can pass it via the subprocess env and keep
+                // it out of `ps`/process listings.
+                let token =
+                    mergify_core::auth::resolve_token(opts.token.as_deref())?;
+                let client = mergify_stack::remote_changes::default_client(
+                    opts.github_server,
+                    &token,
+                )?;
+                let changes = mergify_stack::remote_changes::get_remote_changes(
+                    &client,
+                    &opts.user,
+                    &opts.repo,
+                    &opts.stack_prefix,
+                    &opts.author,
+                )
+                .await?;
+                let json = serde_json::to_string(&changes).map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "serialize stack-remote-changes output: {e}",
+                    ))
+                })?;
+                println!("{json}");
+                Ok(mergify_core::ExitCode::Success)
+            }
         }
     });
 
@@ -1124,6 +1194,13 @@ enum InternalSubcommand {
     /// extraction. Not a stable user-facing surface.
     #[command(name = "stack-local-commits")]
     StackLocalCommits(InternalStackLocalCommitsArgs),
+    /// Search GitHub for the open + merged PRs belonging to a
+    /// stack and group them by `Change-Id`. Used by the Python
+    /// side of `mergify stack <cmd>` during migration to
+    /// centralise the GitHub search + per-PR fetch + change-id
+    /// regrouping. Not a stable user-facing surface.
+    #[command(name = "stack-remote-changes")]
+    StackRemoteChanges(InternalStackRemoteChangesArgs),
 }
 
 #[derive(clap::Args)]
@@ -1140,6 +1217,35 @@ struct InternalStackLocalCommitsArgs {
     /// process CWD.
     #[arg(long = "repo-dir", value_name = "DIR")]
     repo_dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct InternalStackRemoteChangesArgs {
+    /// GitHub API base URL (e.g. `https://api.github.com`).
+    #[arg(long = "github-server")]
+    github_server: url::Url,
+    /// Bearer token. Optional — when omitted the binary falls
+    /// back to `mergify_core::auth::resolve_token` (which reads
+    /// `MERGIFY_TOKEN` / `GITHUB_TOKEN` / `gh auth token`). The
+    /// Python caller should prefer setting `MERGIFY_TOKEN` in
+    /// the subprocess env over passing `--token` so the value
+    /// doesn't surface in `ps`/process listings.
+    #[arg(long)]
+    token: Option<String>,
+    /// Repository owner.
+    #[arg(long)]
+    user: String,
+    /// Repository name.
+    #[arg(long)]
+    repo: String,
+    /// Stack branch prefix (e.g. `stack/main` — the search query
+    /// becomes `head:<prefix>/`).
+    #[arg(long = "stack-prefix")]
+    stack_prefix: String,
+    /// PR author to filter on. Limits the search to PRs the
+    /// current user owns — `mergify stack` only manages its own.
+    #[arg(long)]
+    author: String,
 }
 
 #[derive(clap::Args)]
