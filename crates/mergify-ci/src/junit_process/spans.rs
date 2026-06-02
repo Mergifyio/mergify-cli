@@ -1,7 +1,6 @@
 //! `TestCase` → OTLP `ExportTraceServiceRequest`.
 //!
-//! Mirrors the span layout `mergify_cli/ci/junit_processing/junit.py`
-//! produces:
+//! Span layout:
 //!
 //! - one root **session** span per upload (parent: optional
 //!   `MERGIFY_TRACEPARENT`),
@@ -18,7 +17,6 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mergify_core::CliError;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueOneof;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
@@ -30,9 +28,7 @@ use crate::detector;
 use crate::junit_process::junit::{ParseResult, TestCase, TestStatus};
 
 /// Caller-supplied per-upload metadata. `test_framework` and
-/// `test_language` get propagated to every span as attributes;
-/// `run_id` is the human-readable identifier surfaced in the CLI
-/// output (e.g. `Run ID: <hex>`).
+/// `test_language` get propagated to every span as attributes.
 #[derive(Debug, Clone, Default)]
 pub struct UploadMetadata {
     pub test_framework: Option<String>,
@@ -40,14 +36,6 @@ pub struct UploadMetadata {
     /// Optional `mergify.test.job.name` attribute set when the
     /// `MERGIFY_TEST_JOB_NAME` env var is present at parse time.
     pub mergify_test_job_name: Option<String>,
-    /// Caller-provided run identifier. When `Some`, used verbatim
-    /// as the human-readable `run_id` *and* (decoded from 16-char
-    /// hex) the session span's 8-byte ID — so the wire spans
-    /// match a `run_id` the caller already printed to its own UI.
-    /// When `None`, both are generated from fresh random bytes.
-    /// Used by the Python migration bridge to pass the `run_id`
-    /// the Python orchestrator generated earlier in the run.
-    pub run_id: Option<String>,
     /// Set of test names the quarantine API confirmed are
     /// currently quarantined. Each case span whose name is in
     /// this set gets `cicd.test.quarantined = true`; everything
@@ -57,29 +45,6 @@ pub struct UploadMetadata {
     /// case marked non-quarantined, which is the conservative
     /// default.
     pub quarantined: BTreeSet<String>,
-}
-
-/// Decode a 16-character lowercase hex string into the 8-byte
-/// session span id. Surface a `Configuration` error for the wrong
-/// length or non-hex characters so the `_internal junit-upload`
-/// bridge can refuse a malformed `--run-id` cleanly instead of
-/// generating a different span id and silently confusing Python's
-/// run_id-keyed report.
-fn decode_run_id(hex: &str) -> Result<[u8; 8], CliError> {
-    if hex.len() != 16 {
-        return Err(CliError::Configuration(format!(
-            "--run-id must be 16 hex characters (got {} chars)",
-            hex.len(),
-        )));
-    }
-    let mut bytes = [0u8; 8];
-    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
-        let s = std::str::from_utf8(chunk)
-            .map_err(|_| CliError::Configuration("--run-id is not ASCII".to_string()))?;
-        bytes[i] = u8::from_str_radix(s, 16)
-            .map_err(|e| CliError::Configuration(format!("--run-id is not hex: {e}")))?;
-    }
-    Ok(bytes)
 }
 
 /// Result of converting a [`ParseResult`] (one or more `JUnit`
@@ -100,10 +65,7 @@ pub struct BuiltTraces {
 /// deterministic clock and randomness source; production callers
 /// use [`build_traces`] which fills them from
 /// `SystemTime::now()` and `getrandom`.
-pub fn build_traces(
-    parsed: &ParseResult,
-    metadata: &UploadMetadata,
-) -> Result<BuiltTraces, CliError> {
+pub fn build_traces(parsed: &ParseResult, metadata: &UploadMetadata) -> BuiltTraces {
     build_traces_with(parsed, metadata, system_now_unix_nanos(), &mut OsRandom)
 }
 
@@ -115,12 +77,9 @@ fn build_traces_with(
     metadata: &UploadMetadata,
     now_unix_nanos: u64,
     rng: &mut dyn RandomBytes,
-) -> Result<BuiltTraces, CliError> {
+) -> BuiltTraces {
     let trace_id = rng.bytes16();
-    let session_span_id = match &metadata.run_id {
-        Some(hex) => decode_run_id(hex)?,
-        None => rng.bytes8(),
-    };
+    let session_span_id = rng.bytes8();
     let run_id = hex_lower(&session_span_id);
 
     let resource = build_resource(&run_id, metadata);
@@ -270,12 +229,12 @@ fn build_traces_with(
         schema_url: String::new(),
     };
 
-    Ok(BuiltTraces {
+    BuiltTraces {
         run_id,
         request: ExportTraceServiceRequest {
             resource_spans: vec![resource_spans],
         },
-    })
+    }
 }
 
 fn group_by_suite(cases: &[TestCase]) -> Vec<(String, Vec<&TestCase>)> {
@@ -527,7 +486,7 @@ mod tests {
         let now: u64 = 1_700_000_000_000_000_000;
         let metadata = UploadMetadata::default();
         let built = with_ci_env(&[], || {
-            build_traces_with(&sample_parsed(), &metadata, now, &mut rng).unwrap()
+            build_traces_with(&sample_parsed(), &metadata, now, &mut rng)
         });
 
         // run_id is the session span id rendered as hex.
@@ -570,7 +529,7 @@ mod tests {
         let now: u64 = 1_700_000_000_000_000_000;
         let metadata = UploadMetadata::default();
         let built = with_ci_env(&[], || {
-            build_traces_with(&sample_parsed(), &metadata, now, &mut rng).unwrap()
+            build_traces_with(&sample_parsed(), &metadata, now, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
 
@@ -605,7 +564,7 @@ mod tests {
         let mut rng = FixedRng::new(vec![0xFF; 256]);
         let metadata = UploadMetadata::default();
         let built = with_ci_env(&[], || {
-            build_traces_with(&sample_parsed(), &metadata, 0, &mut rng).unwrap()
+            build_traces_with(&sample_parsed(), &metadata, 0, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
         let fail = spans
@@ -657,7 +616,7 @@ mod tests {
                 ("GITHUB_REF_NAME", Some("main")),
                 ("RUNNER_NAME", Some("runner-1")),
             ],
-            || build_traces_with(&sample_parsed(), &metadata, 0, &mut rng).unwrap(),
+            || build_traces_with(&sample_parsed(), &metadata, 0, &mut rng),
         );
         let resource = built.request.resource_spans[0].resource.as_ref().unwrap();
         let by_key: std::collections::HashMap<&str, &AnyValue> = resource
@@ -701,11 +660,10 @@ mod tests {
             test_framework: Some("pytest".to_string()),
             test_language: Some("python".to_string()),
             mergify_test_job_name: None,
-            run_id: None,
             quarantined: BTreeSet::new(),
         };
         let built = with_ci_env(&[], || {
-            build_traces_with(&sample_parsed(), &metadata, 0, &mut rng).unwrap()
+            build_traces_with(&sample_parsed(), &metadata, 0, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
         for span in spans {
@@ -732,7 +690,7 @@ mod tests {
         let now: u64 = 1_000_000_000_000_000_000;
         let metadata = UploadMetadata::default();
         let built = with_ci_env(&[], || {
-            build_traces_with(&sample_parsed(), &metadata, now, &mut rng).unwrap()
+            build_traces_with(&sample_parsed(), &metadata, now, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
         let session = spans.iter().find(|s| s.name == "test session").unwrap();

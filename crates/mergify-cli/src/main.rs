@@ -154,12 +154,10 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
-    // Internal Python migration helpers. Listed so `looks_native`
+    // Internal Python migration helper. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
-    // clap rejects it, but they stay hidden from `--help` (see
+    // clap rejects it, but it stays hidden from `--help` (see
     // the `Subcommands::Internal` variant).
-    ("_internal", "junit-parse"),
-    ("_internal", "junit-upload"),
     ("_internal", "stack-local-commits"),
 ];
 
@@ -193,21 +191,6 @@ enum NativeCommand {
     FreezeCreate(FreezeCreateOpts),
     FreezeUpdate(FreezeUpdateOpts),
     FreezeDelete(FreezeDeleteOpts),
-    /// `_internal junit-parse <FILE>` — Python migration helper.
-    /// Reads the `JUnit` XML file, parses it with the native Rust
-    /// parser, prints the resulting cases as a JSON array. Wire
-    /// format is not stable; only the Python code shipped in this
-    /// wheel may consume it.
-    InternalJunitParse {
-        file: PathBuf,
-    },
-    /// `_internal junit-upload <FILE>… --token … --api-url … …`
-    /// — Python migration helper. Parses every file, builds the
-    /// OTLP `ExportTraceServiceRequest` with the quarantined set
-    /// baked in, POSTs gzipped protobuf to the traces endpoint.
-    /// Wire format is not stable; only the Python code shipped in
-    /// this wheel may consume it.
-    InternalJunitUpload(InternalJunitUploadOpts),
     /// `_internal stack-local-commits --base <sha> --head <ref>` —
     /// Python migration helper. Runs `git log` for the stack
     /// range, parses each commit's `Change-Id:` trailer, prints
@@ -215,18 +198,6 @@ enum NativeCommand {
     /// while the surrounding stack discovery logic is still
     /// Python. Wire format is not stable.
     InternalStackLocalCommits(InternalStackLocalCommitsOpts),
-}
-
-struct InternalJunitUploadOpts {
-    api_url: String,
-    token: String,
-    repository: String,
-    run_id: String,
-    test_framework: Option<String>,
-    test_language: Option<String>,
-    mergify_test_job_name: Option<String>,
-    quarantined: Vec<String>,
-    files: Vec<PathBuf>,
 }
 
 struct InternalStackLocalCommitsOpts {
@@ -460,35 +431,6 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
         Subcommands::Stack(ShimmedArgs { args }) => {
             Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
         }
-        Subcommands::Internal(InternalArgs {
-            command: InternalSubcommand::JunitParse(InternalJunitParseArgs { file }),
-        }) => Dispatch::Native(NativeCommand::InternalJunitParse { file }),
-        Subcommands::Internal(InternalArgs {
-            command:
-                InternalSubcommand::JunitUpload(InternalJunitUploadArgs {
-                    api_url,
-                    token,
-                    repository,
-                    run_id,
-                    test_framework,
-                    test_language,
-                    mergify_test_job_name,
-                    quarantined,
-                    files,
-                }),
-        }) => Dispatch::Native(NativeCommand::InternalJunitUpload(
-            InternalJunitUploadOpts {
-                api_url,
-                token,
-                repository,
-                run_id,
-                test_framework,
-                test_language,
-                mergify_test_job_name,
-                quarantined,
-                files,
-            },
-        )),
         Subcommands::Internal(InternalArgs {
             command:
                 InternalSubcommand::StackLocalCommits(InternalStackLocalCommitsArgs {
@@ -1079,80 +1021,6 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             )
             .await
             .map(|()| mergify_core::ExitCode::Success),
-            NativeCommand::InternalJunitParse { file } => {
-                // Read the JUnit XML, parse it with the native
-                // parser, emit the full `ParseResult` as JSON on
-                // stdout — `{"suite_names": [...], "cases": [...]}`.
-                // The Python `junit_to_spans` consumer in this same
-                // wheel pipes the bytes back into the existing span
-                // builder. Failures surface as a `CliError::Generic`
-                // and exit non-zero — Python wraps that into
-                // `InvalidJunitXMLError(stderr)`.
-                let bytes = std::fs::read(&file).map_err(|e| {
-                    mergify_core::CliError::Generic(format!("cannot read {}: {e}", file.display()))
-                })?;
-                let parsed = mergify_ci::junit_process::junit::parse(&bytes)?;
-                let json = serde_json::to_string(&parsed).map_err(|e| {
-                    mergify_core::CliError::Generic(format!("serialize junit-parse output: {e}"))
-                })?;
-                println!("{json}");
-                Ok(mergify_core::ExitCode::Success)
-            }
-            NativeCommand::InternalJunitUpload(opts) => {
-                // Parse every file, concatenate their cases /
-                // suite_names, build OTLP spans with the quarantine
-                // set baked in, POST. The Python orchestrator that
-                // calls this has already done the quarantine check
-                // and passes the names via repeated `--quarantined`.
-                let mut all_cases = Vec::new();
-                let mut all_suite_names = Vec::new();
-                for path in &opts.files {
-                    let bytes = std::fs::read(path).map_err(|e| {
-                        mergify_core::CliError::Generic(format!(
-                            "cannot read {}: {e}",
-                            path.display(),
-                        ))
-                    })?;
-                    let parsed = mergify_ci::junit_process::junit::parse(&bytes)?;
-                    all_suite_names.extend(parsed.suite_names);
-                    all_cases.extend(parsed.cases);
-                }
-                let parsed = mergify_ci::junit_process::junit::ParseResult {
-                    suite_names: all_suite_names,
-                    cases: all_cases,
-                };
-
-                let metadata = mergify_ci::junit_process::spans::UploadMetadata {
-                    test_framework: opts.test_framework,
-                    test_language: opts.test_language,
-                    mergify_test_job_name: opts.mergify_test_job_name.or_else(|| {
-                        env::var("MERGIFY_TEST_JOB_NAME")
-                            .ok()
-                            .filter(|s| !s.is_empty())
-                    }),
-                    run_id: Some(opts.run_id),
-                    quarantined: opts.quarantined.into_iter().collect(),
-                };
-                let built = mergify_ci::junit_process::spans::build_traces(&parsed, &metadata)?;
-
-                // No spans → nothing to send. Matches Python's
-                // existing `if not spans: return` short-circuit.
-                if built.request.resource_spans.is_empty() {
-                    return Ok(mergify_core::ExitCode::Success);
-                }
-
-                let client = mergify_ci::junit_process::upload::default_client();
-                mergify_ci::junit_process::upload::upload(
-                    &client,
-                    &opts.api_url,
-                    &opts.token,
-                    &opts.repository,
-                    &built.request,
-                )
-                .await
-                .map_err(|e| mergify_core::CliError::Generic(e.to_string()))?;
-                Ok(mergify_core::ExitCode::Success)
-            }
             NativeCommand::InternalStackLocalCommits(opts) => {
                 // Run `git log` for the stack range, parse each
                 // commit's `Change-Id:` trailer, emit a JSON array
@@ -1249,73 +1117,13 @@ struct InternalArgs {
 
 #[derive(Subcommand)]
 enum InternalSubcommand {
-    /// Parse a `JUnit` XML file and print the parsed test cases
-    /// as a JSON array to stdout. Used by the Python side of the
-    /// `junit-process` command during migration; not a stable
-    /// user-facing surface.
-    #[command(name = "junit-parse")]
-    JunitParse(InternalJunitParseArgs),
-    /// Parse `JUnit` XML files, build the OTLP `ExportTraceServiceRequest`
-    /// (one session span + one suite span per `<testsuite>` + one
-    /// case span per `<testcase>`, tagged with the caller-supplied
-    /// quarantine set), and POST it as gzipped protobuf to
-    /// `{api_url}/v1/repos/{repository}/ci/traces`. Used by the
-    /// Python side of the `junit-process` command during
-    /// migration to replace the `opentelemetry-exporter-otlp-proto-http`
-    /// upload path; not a stable user-facing surface.
-    #[command(name = "junit-upload")]
-    JunitUpload(InternalJunitUploadArgs),
     /// Walk the local stack commits in `<base>..<head>` and print
-    /// a JSON array of `{commit_sha, title, message, change_id}`.
+    /// a JSON array of `{commit_sha, title, message, change_id, slug}`.
     /// Used by the Python side of `mergify stack <cmd>` during
     /// migration to centralise the `git log` + `Change-Id:`
     /// extraction. Not a stable user-facing surface.
     #[command(name = "stack-local-commits")]
     StackLocalCommits(InternalStackLocalCommitsArgs),
-}
-
-#[derive(clap::Args)]
-struct InternalJunitParseArgs {
-    /// Path to the `JUnit` XML file to parse.
-    #[arg(value_name = "FILE")]
-    file: PathBuf,
-}
-
-#[derive(clap::Args)]
-struct InternalJunitUploadArgs {
-    /// Mergify API base URL (e.g. `https://api.mergify.com`).
-    #[arg(long = "api-url")]
-    api_url: String,
-    /// Mergify CI Insights bearer token.
-    #[arg(long)]
-    token: String,
-    /// Repository the spans belong to, as `owner/repo`.
-    #[arg(long)]
-    repository: String,
-    /// 16-character hex run identifier the Python orchestrator
-    /// already printed to its UI. The session span's 8-byte ID
-    /// decodes from this so wire spans line up with what the
-    /// user sees in the CLI report.
-    #[arg(long = "run-id")]
-    run_id: String,
-    /// Optional `test.framework` attribute applied to every span.
-    #[arg(long = "test-framework")]
-    test_framework: Option<String>,
-    /// Optional `test.language` attribute applied to every span.
-    #[arg(long = "test-language")]
-    test_language: Option<String>,
-    /// Optional `mergify.test.job.name` resource attribute. Falls
-    /// back to `MERGIFY_TEST_JOB_NAME` env var when omitted.
-    #[arg(long = "mergify-test-job-name")]
-    mergify_test_job_name: Option<String>,
-    /// Test names the quarantine API reported as currently
-    /// quarantined. Each case span whose `name` matches gets
-    /// `cicd.test.quarantined = true`. Repeatable.
-    #[arg(long = "quarantined", value_name = "TEST_NAME")]
-    quarantined: Vec<String>,
-    /// `JUnit` XML files to parse and upload spans for.
-    #[arg(value_name = "FILE", required = true, num_args = 1..)]
-    files: Vec<PathBuf>,
 }
 
 #[derive(clap::Args)]
