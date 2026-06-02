@@ -12,4 +12,5 @@
 
 pub mod change_id;
 pub mod local_commits;
+pub mod remote_changes;
 pub mod slug;
