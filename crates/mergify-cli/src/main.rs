@@ -156,6 +156,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
+    ("stack", "checkout"),
     ("stack", "drop"),
     ("stack", "edit"),
     ("stack", "fixup"),
@@ -255,6 +256,10 @@ enum NativeCommand {
     /// [--dry-run]` — fold several commits into a target,
     /// reordering them adjacent first.
     StackSquash(StackSquashOpts),
+    /// `mergify stack checkout <NAME>` — fetch a stack of pull
+    /// requests from GitHub and create a local branch tracking
+    /// the leaf head.
+    StackCheckout(StackCheckoutOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -311,6 +316,21 @@ struct StackSquashOpts {
     target_prefix: String,
     message: Option<String>,
     dry_run: bool,
+}
+
+struct StackCheckoutOpts {
+    name: String,
+    author: Option<String>,
+    repository: Option<String>,
+    branch: Option<String>,
+    branch_prefix: Option<String>,
+    dry_run: bool,
+    /// `Some((remote, branch))` from `--trunk REMOTE/BRANCH`;
+    /// `None` falls back to `trunk::get_trunk` at runtime.
+    trunk: Option<(String, String)>,
+    /// GitHub token; resolved via `mergify_core::auth::resolve_token`
+    /// when None.
+    token: Option<String>,
 }
 
 struct InternalRebaseTodoRewriteOpts {
@@ -696,6 +716,15 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
                     std::process::exit(2);
                 }
             }
+        }
+        Some("checkout") => {
+            let parsed = match StackCheckoutCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackCheckout(StackCheckoutOpts::from(
+                parsed,
+            )))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
@@ -1693,6 +1722,99 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackCheckout(opts) => {
+                let token = mergify_core::auth::resolve_token(opts.token.as_deref())?;
+                let github_server =
+                    mergify_stack::stack_context::resolve_github_server(None)?;
+                let client = mergify_stack::remote_changes::default_client(
+                    github_server,
+                    &token,
+                )?;
+
+                // Trunk: explicit --trunk wins; otherwise resolve.
+                let trunk = if let Some((remote, branch)) = opts.trunk {
+                    (remote, branch)
+                } else {
+                    let t = mergify_stack::trunk::get_trunk(None).map_err(|e| {
+                        mergify_core::CliError::StackNotFound(format!(
+                            "could not determine trunk branch ({e}). Pass --trunk REMOTE/BRANCH."
+                        ))
+                    })?;
+                    (t.remote, t.branch)
+                };
+                let remote = &trunk.0;
+
+                let slug = mergify_stack::stack_context::resolve_repo(
+                    None,
+                    opts.repository.as_deref(),
+                    remote,
+                )?;
+
+                // Author: explicit wins; else GET /user.
+                let author = if let Some(a) = opts.author.as_deref() {
+                    a.to_string()
+                } else {
+                    let user_payload: serde_json::Value = client.get("/user").await?;
+                    user_payload
+                        .get("login")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            mergify_core::CliError::GitHubApi(
+                                "/user response missing `login`".to_string(),
+                            )
+                        })?
+                };
+
+                let branch_prefix = opts.branch_prefix.unwrap_or_else(|| {
+                    mergify_stack::stack_context::resolve_default_branch_prefix(None, &author)
+                });
+
+                let outcome = mergify_stack::commands::checkout::run(
+                    &mergify_stack::commands::checkout::Options {
+                        repo_dir: None,
+                        client: &client,
+                        user: &slug.owner,
+                        repo: &slug.repo,
+                        author: &author,
+                        branch_prefix: &branch_prefix,
+                        name: &opts.name,
+                        local_branch: opts.branch.as_deref(),
+                        remote,
+                        dry_run: opts.dry_run,
+                    },
+                )
+                .await?;
+
+                match outcome {
+                    mergify_stack::commands::checkout::Outcome::NoStackedPrs => {
+                        println!("No stacked pull requests found");
+                    }
+                    mergify_stack::commands::checkout::Outcome::CheckedOut {
+                        chain,
+                        created,
+                        local_branch,
+                        upstream,
+                    } => {
+                        println!("Stacked pull requests:");
+                        for pr in &chain {
+                            println!(
+                                "* #{n} {title}  {url}",
+                                n = pr.number,
+                                title = pr.title,
+                                url = pr.html_url,
+                            );
+                            println!("  {} -> {}", pr.base_ref, pr.head_ref);
+                        }
+                        if created {
+                            println!(
+                                "Checked out '{local_branch}' tracking {upstream}",
+                            );
+                        }
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -2214,6 +2336,58 @@ struct StackSquashCli {
     /// Show the plan without rebasing.
     #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
     dry_run: bool,
+}
+
+/// `mergify stack checkout <NAME>`.
+#[derive(Parser)]
+#[command(name = "checkout", about = "Checkout the pull requests stack")]
+struct StackCheckoutCli {
+    name: String,
+
+    /// Author of the stack. Defaults to the token's user.
+    #[arg(long)]
+    author: Option<String>,
+
+    /// `owner/repo`. Falls back to the URL of `--trunk`'s remote.
+    #[arg(long = "repository", alias = "repo")]
+    repository: Option<String>,
+
+    /// Local branch name. Defaults to the normalised NAME.
+    #[arg(long)]
+    branch: Option<String>,
+
+    /// Override the stack branch prefix.
+    #[arg(long = "branch-prefix")]
+    branch_prefix: Option<String>,
+
+    /// Show the plan without checking out.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+
+    /// Target trunk as `REMOTE/BRANCH`. Defaults to the resolved
+    /// trunk for the current branch.
+    #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
+    trunk: Option<(String, String)>,
+
+    /// GitHub token (falls back to `MERGIFY_TOKEN` / `GITHUB_TOKEN`
+    /// / `gh auth token`).
+    #[arg(long)]
+    token: Option<String>,
+}
+
+impl From<StackCheckoutCli> for StackCheckoutOpts {
+    fn from(cli: StackCheckoutCli) -> Self {
+        Self {
+            name: cli.name,
+            author: cli.author,
+            repository: cli.repository,
+            branch: cli.branch,
+            branch_prefix: cli.branch_prefix,
+            dry_run: cli.dry_run,
+            trunk: cli.trunk,
+            token: cli.token,
+        }
+    }
 }
 
 impl TryFrom<StackSquashCli> for StackSquashOpts {
