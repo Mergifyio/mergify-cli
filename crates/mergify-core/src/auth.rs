@@ -18,12 +18,12 @@
 //! and `mergify-queue::auth` were missing the `gh auth token` and
 //! `git config` fallbacks — that's why this module exists.
 
-use std::env;
 use std::process::Command;
 
 use url::Url;
 
 use crate::CliError;
+use crate::env::var_non_empty;
 
 const DEFAULT_API_URL: &str = "https://api.mergify.com";
 
@@ -37,10 +37,8 @@ pub fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
         return Ok(value.to_string());
     }
     for env_name in ["MERGIFY_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(value) = env::var(env_name) {
-            if !value.is_empty() {
-                return Ok(value);
-            }
+        if let Some(value) = var_non_empty(env_name) {
+            return Ok(value);
         }
     }
     if let Ok(token) = gh_auth_token() {
@@ -60,9 +58,9 @@ pub fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
 /// `https://api.mergify.com`.
 pub fn resolve_api_url(explicit: Option<&str>) -> Result<Url, CliError> {
     let raw = explicit
-        .map(str::to_string)
-        .or_else(|| env::var("MERGIFY_API_URL").ok())
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| var_non_empty("MERGIFY_API_URL"))
         .unwrap_or_else(|| DEFAULT_API_URL.to_string());
     Url::parse(&raw).map_err(|e| CliError::Configuration(format!("invalid --api-url {raw:?}: {e}")))
 }
@@ -76,10 +74,8 @@ pub fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(value.to_string());
     }
-    if let Ok(value) = env::var("GITHUB_REPOSITORY") {
-        if !value.is_empty() {
-            return Ok(value);
-        }
+    if let Some(value) = var_non_empty("GITHUB_REPOSITORY") {
+        return Ok(value);
     }
     if let Some(remote) = git_remote_origin_url() {
         if let Some(slug) = parse_slug(&remote) {

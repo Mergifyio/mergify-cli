@@ -17,9 +17,9 @@
 // kind of templated text emission.
 #![allow(clippy::format_push_string)]
 
-use std::env;
 use std::path::{Path, PathBuf};
 
+use mergify_core::env::var_non_empty;
 use mergify_core::{CliError, ExitCode, Output};
 use url::Url;
 
@@ -132,9 +132,7 @@ pub async fn run(
     let metadata = UploadMetadata {
         test_framework: opts.test_framework.map(str::to_string),
         test_language: opts.test_language.map(str::to_string),
-        mergify_test_job_name: env::var("MERGIFY_TEST_JOB_NAME")
-            .ok()
-            .filter(|s| !s.is_empty()),
+        mergify_test_job_name: var_non_empty("MERGIFY_TEST_JOB_NAME"),
         quarantined: quarantine_result
             .quarantined
             .iter()
@@ -207,15 +205,11 @@ fn emit(output: &mut dyn Output, report: &str) -> Result<(), CliError> {
 }
 
 fn resolve_api_url(explicit: Option<&str>) -> String {
-    if let Some(v) = explicit.filter(|s| !s.is_empty()) {
-        return v.to_string();
-    }
-    if let Ok(v) = env::var("MERGIFY_API_URL") {
-        if !v.is_empty() {
-            return v;
-        }
-    }
-    "https://api.mergify.com".to_string()
+    explicit
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| var_non_empty("MERGIFY_API_URL"))
+        .unwrap_or_else(|| "https://api.mergify.com".to_string())
 }
 
 /// Resolve `--test-exit-code` / `MERGIFY_TEST_EXIT_CODE`. Empty
@@ -230,23 +224,21 @@ fn resolve_test_exit_code(explicit: Option<i32>) -> Result<Option<i32>, CliError
     if explicit.is_some() {
         return Ok(explicit);
     }
-    match env::var("MERGIFY_TEST_EXIT_CODE") {
-        Ok(v) if !v.is_empty() => v.parse::<i32>().map(Some).map_err(|e| {
-            CliError::Configuration(format!(
-                "MERGIFY_TEST_EXIT_CODE={v:?} is not a valid integer: {e}",
-            ))
-        }),
-        _ => Ok(None),
-    }
+    let Some(raw) = var_non_empty("MERGIFY_TEST_EXIT_CODE") else {
+        return Ok(None);
+    };
+    raw.parse::<i32>().map(Some).map_err(|e| {
+        CliError::Configuration(format!(
+            "MERGIFY_TEST_EXIT_CODE={raw:?} is not a valid integer: {e}",
+        ))
+    })
 }
 
 fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(v) = explicit.filter(|s| !s.is_empty()) {
-        return Ok(v.to_string());
-    }
-    env::var("MERGIFY_TOKEN")
-        .ok()
+    explicit
         .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| var_non_empty("MERGIFY_TOKEN"))
         .ok_or_else(|| {
             CliError::Configuration(
                 "--token not provided and MERGIFY_TOKEN env var is empty".to_string(),

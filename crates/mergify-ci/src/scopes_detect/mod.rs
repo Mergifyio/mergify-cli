@@ -32,6 +32,7 @@ use std::path::PathBuf;
 
 use mergify_core::CliError;
 use mergify_core::Output;
+use mergify_core::env::var_non_empty;
 use serde::Serialize;
 
 use crate::git_refs;
@@ -127,16 +128,14 @@ fn resolve_config_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
             path.display(),
         )));
     }
-    if let Ok(env_path) = env::var("MERGIFY_CONFIG_PATH") {
-        if !env_path.is_empty() {
-            let p = PathBuf::from(&env_path);
-            if !p.is_file() {
-                return Err(CliError::Configuration(format!(
-                    "MERGIFY_CONFIG_PATH={env_path} does not point at a regular file",
-                )));
-            }
-            return Ok(p);
+    if let Some(env_path) = var_non_empty("MERGIFY_CONFIG_PATH") {
+        let p = PathBuf::from(&env_path);
+        if !p.is_file() {
+            return Err(CliError::Configuration(format!(
+                "MERGIFY_CONFIG_PATH={env_path} does not point at a regular file",
+            )));
         }
+        return Ok(p);
     }
     mergify_config::paths::resolve_config_path(None)
 }
