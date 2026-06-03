@@ -1,6 +1,6 @@
-//! `mergify tests quarantine` / `mergify tests unquarantine` — add a
-//! test to, or remove it from, the CI Insights quarantine through the
-//! public quarantine API.
+//! `mergify tests quarantine` / `mergify tests unquarantine` /
+//! `mergify tests quarantined` — add a test to, remove it from, or list
+//! the CI Insights quarantine through the public quarantine API.
 //!
 //! `quarantine` addresses a test by its fully qualified name.
 //! `unquarantine` accepts either the quarantine id (deleted directly,
@@ -9,9 +9,12 @@
 //! `(repository, test_name)`, so a name resolves to at most one
 //! quarantine per repository — `unquarantine` relies on this when it
 //! looks the name up in the list endpoint to recover the id.
+//! `quarantined` lists that same endpoint, rendering every record.
 
 use std::io::{self, Write};
 
+use chrono::DateTime;
+use chrono::Utc;
 use mergify_core::ApiFlavor;
 use mergify_core::CliError;
 use mergify_core::DeleteOutcome;
@@ -38,6 +41,12 @@ pub struct UnquarantineOptions<'a> {
     /// A test name or a quarantine id. A UUID-shaped value is taken as
     /// the quarantine id; anything else is treated as a test name.
     pub name_or_id: &'a str,
+    pub token: Option<&'a str>,
+    pub api_url: Option<&'a str>,
+}
+
+pub struct QuarantinedOptions<'a> {
+    pub repository: &'a str,
     pub token: Option<&'a str>,
     pub api_url: Option<&'a str>,
 }
@@ -104,6 +113,30 @@ pub async fn unquarantine(
     Ok(ExitCode::Success)
 }
 
+/// List every quarantine recorded for the repository, one block per
+/// record. Returns `Success` even when the quarantine is empty — an
+/// empty list is a normal state, not an error (mirrors `freeze list`).
+/// Auth, request, and decode failures still propagate as errors.
+pub async fn quarantined(
+    opts: QuarantinedOptions<'_>,
+    output: &mut dyn Output,
+) -> Result<ExitCode, CliError> {
+    let (owner, repo) = split_owner_repo(opts.repository)?;
+    let token = auth::resolve_token(opts.token)?;
+    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
+
+    // Omitting `per_page` returns the full list in a single response.
+    let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");
+    let list: QuarantineList<QuarantinedTest> = client.get(&path).await?;
+
+    let payload = QuarantinedPayload {
+        quarantined_tests: list.quarantined_tests,
+    };
+    output.emit(&payload, &mut |w| render_quarantined_list(w, &payload))?;
+    Ok(ExitCode::Success)
+}
+
 /// The quarantine targeted by `unquarantine`, with the test name
 /// included only when we learned it (i.e. resolved by name).
 struct UnquarantineTarget {
@@ -132,7 +165,7 @@ async fn resolve_target(
 
     // Omitting `per_page` returns the full list in a single response.
     let list_path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");
-    let list: QuarantineList = client.get(&list_path).await?;
+    let list: QuarantineList<QuarantineListItem> = client.get(&list_path).await?;
     list.quarantined_tests
         .into_iter()
         .find(|quarantine| quarantine.test_name == name_or_id)
@@ -181,15 +214,43 @@ struct AddQuarantineResponse {
     id: String,
 }
 
+/// The list endpoint's envelope. Generic over the row type so callers
+/// pull only the fields they need: `unquarantine` resolves a name to an
+/// id with the minimal [`QuarantineListItem`], while `quarantined`
+/// reads the full [`QuarantinedTest`] for display.
 #[derive(Deserialize)]
-struct QuarantineList {
-    quarantined_tests: Vec<QuarantineListItem>,
+struct QuarantineList<T> {
+    quarantined_tests: Vec<T>,
 }
 
 #[derive(Deserialize)]
 struct QuarantineListItem {
     id: String,
     test_name: String,
+}
+
+/// A full quarantine record as listed by `quarantined`. Every field is
+/// re-serialized in `--json` mode, so the fields the human block omits
+/// (e.g. `created_at`) still reach machine consumers.
+#[derive(Deserialize, Serialize)]
+struct QuarantinedTest {
+    id: String,
+    test_name: String,
+    reason: String,
+    // Null means the quarantine applies to every branch.
+    branch: Option<String>,
+    created_at: DateTime<Utc>,
+    // How the quarantine was created — `manual` by a user, `auto` by
+    // flaky detection. Kept as the raw string (the API models it as a
+    // free-form string with a `manual` default, not a closed enum) so
+    // `--json` stays faithful and an omitted value still deserializes.
+    #[serde(default = "default_source")]
+    source: String,
+    is_recovered: bool,
+}
+
+fn default_source() -> String {
+    "manual".to_string()
 }
 
 #[derive(Serialize)]
@@ -211,6 +272,14 @@ struct UnquarantineResult {
     test_name: Option<String>,
 }
 
+/// The `quarantined` payload. Wraps the rows under `quarantined_tests`
+/// so `--json` emits `{"quarantined_tests": [...]}`, mirroring the API
+/// envelope.
+#[derive(Serialize)]
+struct QuarantinedPayload {
+    quarantined_tests: Vec<QuarantinedTest>,
+}
+
 fn render_quarantined(w: &mut dyn Write, result: &QuarantineResult) -> io::Result<()> {
     write!(w, "✓ Quarantined '{}'", result.test_name)?;
     if let Some(branch) = &result.branch {
@@ -224,6 +293,49 @@ fn render_unquarantined(w: &mut dyn Write, result: &UnquarantineResult) -> io::R
         Some(test_name) => writeln!(w, "✓ Unquarantined '{test_name}' (id: {}).", result.id),
         None => writeln!(w, "✓ Unquarantined quarantine {}.", result.id),
     }
+}
+
+/// Render each quarantine as an indented block followed by a count, or
+/// a single line when nothing is quarantined. The test name gets its
+/// own line — never a table cell — so a long name is never wrapped
+/// mid-name. Mirrors `tests show`'s detail layout in this crate.
+fn render_quarantined_list(w: &mut dyn Write, payload: &QuarantinedPayload) -> io::Result<()> {
+    let tests = &payload.quarantined_tests;
+    if tests.is_empty() {
+        return writeln!(w, "No quarantined tests found.");
+    }
+
+    for (index, test) in tests.iter().enumerate() {
+        if index > 0 {
+            writeln!(w)?;
+        }
+        render_quarantined_one(w, test)?;
+    }
+
+    writeln!(w)?;
+    let n = tests.len();
+    writeln!(
+        w,
+        "{n} quarantined test{plural}",
+        plural = if n == 1 { "" } else { "s" },
+    )
+}
+
+/// One record: the test name as a header, then its id (the value
+/// `unquarantine` accepts) and metadata indented under it. A null
+/// branch shows as `*`, the "all branches" marker `quarantine`'s human
+/// output already uses.
+fn render_quarantined_one(w: &mut dyn Write, test: &QuarantinedTest) -> io::Result<()> {
+    writeln!(w, "{}", test.test_name)?;
+    writeln!(w, "  id:         {}", test.id)?;
+    writeln!(w, "  branch:     {}", test.branch.as_deref().unwrap_or("*"))?;
+    writeln!(w, "  source:     {}", test.source)?;
+    writeln!(
+        w,
+        "  recovered:  {}",
+        if test.is_recovered { "yes" } else { "no" },
+    )?;
+    writeln!(w, "  reason:     {}", test.reason)
 }
 
 #[cfg(test)]
@@ -613,5 +725,231 @@ mod tests {
         assert!(matches!(err, CliError::MergifyApi(_)), "got {err:?}");
         assert!(err.to_string().contains("is not quarantined"), "got {err}");
         assert_eq!(read(&cap.stdout), "");
+    }
+
+    fn quarantined_options(api_url: &str) -> QuarantinedOptions<'_> {
+        QuarantinedOptions {
+            repository: "owner/repo",
+            token: Some("test-token"),
+            api_url: Some(api_url),
+        }
+    }
+
+    async fn mount_quarantine_list(server: &MockServer, body: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path_matcher(QUARANTINES_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn quarantined_renders_each_record_as_a_block() {
+        let server = MockServer::start().await;
+        mount_quarantine_list(
+            &server,
+            json!({
+                "quarantined_tests": [
+                    {
+                        "id": "id-1",
+                        "test_name": "test_login",
+                        "reason": "flaky — MRGFY-1234",
+                        "branch": null,
+                        "created_at": "2026-01-01T10:00:00Z",
+                        "source": "manual",
+                        "is_recovered": false,
+                    },
+                    {
+                        "id": "id-2",
+                        "test_name": "test_logout",
+                        "reason": "consistently failing",
+                        "branch": "release/*",
+                        "created_at": "2026-02-01T12:00:00Z",
+                        "source": "auto",
+                        "is_recovered": true,
+                    },
+                ],
+                "size": 2,
+                "per_page": null,
+            }),
+        )
+        .await;
+
+        let mut cap = captured(OutputMode::Human);
+        let api_url = server.uri();
+        let exit = quarantined(quarantined_options(&api_url), &mut cap.output)
+            .await
+            .unwrap();
+
+        assert_eq!(exit, ExitCode::Success);
+        let out = read(&cap.stdout);
+        // Each test name sits on its own line (a block header), with the
+        // quarantine id shown so the row is actionable for `unquarantine`.
+        assert!(out.contains("test_login\n"), "got {out:?}");
+        assert!(out.contains("id:         id-1"), "id missing, got {out:?}");
+        assert!(out.contains("id:         id-2"), "id missing, got {out:?}");
+        // A null branch renders as the all-branches marker.
+        assert!(
+            out.contains("branch:     *"),
+            "null branch should show '*', got {out:?}"
+        );
+        assert!(out.contains("source:     manual"), "got {out:?}");
+        assert!(out.contains("branch:     release/*"), "got {out:?}");
+        assert!(out.contains("source:     auto"), "got {out:?}");
+        assert!(out.contains("recovered:  yes"), "got {out:?}");
+        assert!(out.contains("recovered:  no"), "got {out:?}");
+        assert!(
+            out.contains("reason:     flaky — MRGFY-1234"),
+            "got {out:?}"
+        );
+        assert!(
+            out.contains("2 quarantined tests"),
+            "count missing, got {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn quarantined_empty_list_renders_message() {
+        let server = MockServer::start().await;
+        mount_quarantine_list(
+            &server,
+            json!({"quarantined_tests": [], "size": 0, "per_page": null}),
+        )
+        .await;
+
+        let mut cap = captured(OutputMode::Human);
+        let api_url = server.uri();
+        quarantined(quarantined_options(&api_url), &mut cap.output)
+            .await
+            .unwrap();
+
+        let out = read(&cap.stdout);
+        assert!(out.contains("No quarantined tests found"), "got {out:?}");
+    }
+
+    #[tokio::test]
+    async fn quarantined_json_emits_every_field() {
+        let server = MockServer::start().await;
+        mount_quarantine_list(
+            &server,
+            json!({
+                "quarantined_tests": [{
+                    "id": "id-1",
+                    "test_name": "test_login",
+                    "reason": "flaky",
+                    "branch": null,
+                    "created_at": "2026-01-01T10:00:00Z",
+                    "source": "auto",
+                    "is_recovered": true,
+                }],
+                "size": 1,
+                "per_page": null,
+            }),
+        )
+        .await;
+
+        let mut cap = captured(OutputMode::Json);
+        let api_url = server.uri();
+        quarantined(quarantined_options(&api_url), &mut cap.output)
+            .await
+            .unwrap();
+
+        let value: serde_json::Value = serde_json::from_str(&read(&cap.stdout)).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "quarantined_tests": [{
+                    "id": "id-1",
+                    "test_name": "test_login",
+                    "reason": "flaky",
+                    "branch": null,
+                    "created_at": "2026-01-01T10:00:00Z",
+                    "source": "auto",
+                    "is_recovered": true,
+                }],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn quarantined_preserves_unmodeled_source_verbatim() {
+        // The API models `source` as a free-form string; a value beyond
+        // manual/auto must reach `--json` unchanged, not normalized.
+        let server = MockServer::start().await;
+        mount_quarantine_list(
+            &server,
+            json!({
+                "quarantined_tests": [{
+                    "id": "id-1",
+                    "test_name": "test_login",
+                    "reason": "flaky",
+                    "branch": null,
+                    "created_at": "2026-01-01T10:00:00Z",
+                    "source": "some_future_source",
+                    "is_recovered": false,
+                }],
+                "size": 1,
+                "per_page": null,
+            }),
+        )
+        .await;
+
+        let mut cap = captured(OutputMode::Json);
+        let api_url = server.uri();
+        quarantined(quarantined_options(&api_url), &mut cap.output)
+            .await
+            .unwrap();
+
+        let value: serde_json::Value = serde_json::from_str(&read(&cap.stdout)).unwrap();
+        assert_eq!(
+            value["quarantined_tests"][0]["source"], "some_future_source",
+            "unmodeled source must round-trip verbatim, got {value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn quarantined_omitted_source_defaults_to_manual() {
+        // The schema marks `source` optional with a `manual` default, so
+        // a record that omits it must still deserialize — not abort the
+        // whole list — and render as `manual`.
+        let server = MockServer::start().await;
+        mount_quarantine_list(
+            &server,
+            json!({
+                "quarantined_tests": [{
+                    "id": "id-1",
+                    "test_name": "test_login",
+                    "reason": "flaky",
+                    "branch": null,
+                    "created_at": "2026-01-01T10:00:00Z",
+                    "is_recovered": false,
+                }],
+                "size": 1,
+                "per_page": null,
+            }),
+        )
+        .await;
+
+        let mut cap = captured(OutputMode::Human);
+        let api_url = server.uri();
+        quarantined(quarantined_options(&api_url), &mut cap.output)
+            .await
+            .unwrap();
+
+        let out = read(&cap.stdout);
+        assert!(out.contains("source:     manual"), "got {out:?}");
+    }
+
+    #[tokio::test]
+    async fn quarantined_invalid_repository_format_is_a_configuration_error() {
+        let mut cap = captured(OutputMode::Human);
+        let opts = QuarantinedOptions {
+            repository: "not-a-slash-pair",
+            token: Some("t"),
+            api_url: Some("https://example.invalid"),
+        };
+        let err = quarantined(opts, &mut cap.output).await.unwrap_err();
+        assert!(matches!(err, CliError::Configuration(_)), "got {err:?}");
     }
 }
