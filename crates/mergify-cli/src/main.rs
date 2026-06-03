@@ -158,8 +158,10 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "drop"),
     ("stack", "edit"),
     ("stack", "fixup"),
+    ("stack", "move"),
     ("stack", "new"),
     ("stack", "note"),
+    ("stack", "reorder"),
     ("stack", "reword"),
     // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
@@ -242,6 +244,12 @@ enum NativeCommand {
     /// `mergify stack reword <COMMIT> [-m <msg>] [--dry-run]` —
     /// change a commit's message in place.
     StackReword(StackRewordOpts),
+    /// `mergify stack reorder <COMMIT>... [--dry-run]` — rebase
+    /// the stack with the requested commit order.
+    StackReorder(StackReorderOpts),
+    /// `mergify stack move <COMMIT> <POSITION> [<TARGET>]
+    /// [--dry-run]` — move a single commit within the stack.
+    StackMove(StackMoveOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -273,6 +281,26 @@ struct StackRewordOpts {
     dry_run: bool,
 }
 
+struct StackReorderOpts {
+    commit_prefixes: Vec<String>,
+    dry_run: bool,
+}
+
+struct StackMoveOpts {
+    commit_prefix: String,
+    position: StackMovePosition,
+    target_prefix: Option<String>,
+    dry_run: bool,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum StackMovePosition {
+    First,
+    Last,
+    Before,
+    After,
+}
+
 struct InternalRebaseTodoRewriteOpts {
     /// Which transformation to apply. New variants land with the
     /// respective port slices (today: `edit`, `drop`, `fixup`,
@@ -296,6 +324,7 @@ enum InternalRebaseAction {
     Fixup,
     Reword,
     ExecAfter,
+    Reorder,
 }
 
 struct StackNoteOpts {
@@ -630,6 +659,20 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
                 Err(err) => err.exit(),
             };
             Dispatch::Native(NativeCommand::StackReword(StackRewordOpts::from(parsed)))
+        }
+        Some("reorder") => {
+            let parsed = match StackReorderCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackReorder(StackReorderOpts::from(parsed)))
+        }
+        Some("move") => {
+            let parsed = match StackMoveCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackMove(StackMoveOpts::from(parsed)))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
@@ -1531,6 +1574,88 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackReorder(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let outcome = mergify_stack::commands::reorder::run(
+                    &mergify_stack::commands::reorder::Options {
+                        repo_dir: None,
+                        commit_prefixes: &opts.commit_prefixes,
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::reorder::Outcome::Reordered { plan }
+                    | mergify_stack::commands::reorder::Outcome::DryRun { plan } => {
+                        println!("Reorder plan:");
+                        for (i, c) in plan.iter().enumerate() {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("  {n}. {short} {subject}", n = i + 1, subject = c.subject);
+                        }
+                        if opts.dry_run {
+                            println!("Dry run — no changes made");
+                        } else {
+                            println!("Stack reordered successfully.");
+                        }
+                    }
+                    mergify_stack::commands::reorder::Outcome::AlreadyInOrder => {
+                        println!("Stack is already in the requested order");
+                    }
+                    mergify_stack::commands::reorder::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
+            NativeCommand::StackMove(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let position = match opts.position {
+                    StackMovePosition::First => mergify_stack::commands::move_cmd::Position::First,
+                    StackMovePosition::Last => mergify_stack::commands::move_cmd::Position::Last,
+                    StackMovePosition::Before => mergify_stack::commands::move_cmd::Position::Before,
+                    StackMovePosition::After => mergify_stack::commands::move_cmd::Position::After,
+                };
+                let outcome = mergify_stack::commands::move_cmd::run(
+                    &mergify_stack::commands::move_cmd::Options {
+                        repo_dir: None,
+                        commit_prefix: &opts.commit_prefix,
+                        position,
+                        target_prefix: opts.target_prefix.as_deref(),
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::move_cmd::Outcome::Moved { plan }
+                    | mergify_stack::commands::move_cmd::Outcome::DryRun { plan } => {
+                        println!("Move plan:");
+                        for (i, c) in plan.iter().enumerate() {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("  {n}. {short} {subject}", n = i + 1, subject = c.subject);
+                        }
+                        if opts.dry_run {
+                            println!("Dry run — no changes made");
+                        } else {
+                            println!("Commit moved successfully.");
+                        }
+                    }
+                    mergify_stack::commands::move_cmd::Outcome::AlreadyInPosition => {
+                        println!("Commit is already in the requested position");
+                    }
+                    mergify_stack::commands::move_cmd::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -1580,6 +1705,21 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                             )
                         })?;
                         mergify_stack::rebase_todo::Action::Reword { sha }
+                    }
+                    InternalRebaseAction::Reorder => {
+                        let raw = opts.shas.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action reorder requires --shas"
+                                    .to_string(),
+                            )
+                        })?;
+                        let ordered_shas = raw
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        mergify_stack::rebase_todo::Action::Reorder { ordered_shas }
                     }
                     InternalRebaseAction::ExecAfter => {
                         let sha = opts.sha.ok_or_else(|| {
@@ -1923,6 +2063,57 @@ impl From<StackRewordCli> for StackRewordOpts {
         Self {
             commit_prefix: cli.commit,
             message: cli.message,
+            dry_run: cli.dry_run,
+        }
+    }
+}
+
+/// `mergify stack reorder <COMMIT>... [--dry-run]`.
+#[derive(Parser)]
+#[command(name = "reorder", about = "Reorder the stack's commits")]
+struct StackReorderCli {
+    #[arg(required = true)]
+    commits: Vec<String>,
+
+    /// Show the plan without reordering.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+impl From<StackReorderCli> for StackReorderOpts {
+    fn from(cli: StackReorderCli) -> Self {
+        Self {
+            commit_prefixes: cli.commits,
+            dry_run: cli.dry_run,
+        }
+    }
+}
+
+/// `mergify stack move <COMMIT> <POSITION> [<TARGET>] [--dry-run]`.
+#[derive(Parser)]
+#[command(name = "move", about = "Move a commit within the stack")]
+struct StackMoveCli {
+    /// Commit to move.
+    commit: String,
+
+    /// Where to put it: `first`, `last`, `before`, `after`.
+    #[arg(value_enum)]
+    position: StackMovePosition,
+
+    /// Required when `position` is `before` or `after`.
+    target: Option<String>,
+
+    /// Show the plan without moving.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+impl From<StackMoveCli> for StackMoveOpts {
+    fn from(cli: StackMoveCli) -> Self {
+        Self {
+            commit_prefix: cli.commit,
+            position: cli.position,
+            target_prefix: cli.target,
             dry_run: cli.dry_run,
         }
     }
