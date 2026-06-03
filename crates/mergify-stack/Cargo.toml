@@ -14,10 +14,11 @@ mergify-core = { path = "../mergify-core" }
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.14"
 url = "2"
 
 [dev-dependencies]
-tempfile = "3.14"
+temp-env = "0.3"
 tokio = { version = "1", default-features = false, features = ["macros", "rt"] }
 url = "2"
 wiremock = "0.6"

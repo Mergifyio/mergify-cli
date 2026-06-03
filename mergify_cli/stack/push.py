@@ -33,7 +33,13 @@ from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack import approvals as approvals_mod
 from mergify_cli.stack import changes
 from mergify_cli.stack import replay
-from mergify_cli.stack.note import NOTES_REF
+
+
+# Git ref where ``mergify stack note`` stores amend-reason notes.
+# Defined here as the sole Python consumer post-port; the native
+# `mergify stack note` impl carries its own copy in
+# ``crates/mergify-stack/src/local_commits.rs::STACK_NOTES_REF``.
+NOTES_REF = "refs/notes/mergify/stack"
 
 
 if typing.TYPE_CHECKING:

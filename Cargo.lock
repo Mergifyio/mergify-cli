@@ -1254,6 +1254,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "temp-env",
  "tempfile",
  "tokio",
  "url",

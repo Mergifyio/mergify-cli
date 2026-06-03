@@ -4,3 +4,4 @@
 //! rest still shim to Python.
 
 pub mod new;
+pub mod note;
