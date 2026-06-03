@@ -165,6 +165,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "note"),
     ("stack", "reorder"),
     ("stack", "reword"),
+    ("stack", "squash"),
     // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
     // clap rejects it, but they stay hidden from `--help` (see
@@ -255,6 +256,10 @@ enum NativeCommand {
     /// `mergify stack move <COMMIT> <POSITION> [<TARGET>]
     /// [--dry-run]` — move a single commit within the stack.
     StackMove(StackMoveOpts),
+    /// `mergify stack squash <SRC>... into <TARGET> [-m <msg>]
+    /// [--dry-run]` — fold several commits into a target,
+    /// reordering them adjacent first.
+    StackSquash(StackSquashOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -310,17 +315,29 @@ enum StackMovePosition {
     After,
 }
 
+struct StackSquashOpts {
+    src_prefixes: Vec<String>,
+    target_prefix: String,
+    message: Option<String>,
+    dry_run: bool,
+}
+
 struct InternalRebaseTodoRewriteOpts {
     /// Which transformation to apply. New variants land with the
     /// respective port slices (today: `edit`, `drop`, `fixup`,
-    /// `reword`, `exec-after`).
+    /// `reword`, `exec-after`, `reorder`, `squash`).
     action: InternalRebaseAction,
-    /// Target commit SHA — used by `edit`, `reword`, `exec-after`.
+    /// Target commit SHA — used by `edit`, `reword`, `exec-after`,
+    /// and (optionally) `squash` for the post-fixup exec.
     sha: Option<String>,
-    /// Comma-separated commit SHAs — used by `drop`, `fixup`.
+    /// Comma-separated commit SHAs — used by `drop`, `fixup`,
+    /// `reorder`, `squash` (the full new order in this case).
     shas: Option<String>,
-    /// Shell command to inject after the target — used by
-    /// `exec-after`.
+    /// Comma-separated SHAs that should fold as `fixup` — used
+    /// by `squash`.
+    fixup_shas: Option<String>,
+    /// Shell command to inject as an `exec` line — used by
+    /// `exec-after`, `squash`.
     command: Option<String>,
     /// Path to the rebase-todo file git wrote.
     todo_path: PathBuf,
@@ -334,6 +351,7 @@ enum InternalRebaseAction {
     Reword,
     ExecAfter,
     Reorder,
+    Squash,
 }
 
 struct StackNoteOpts {
@@ -683,6 +701,19 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             };
             Dispatch::Native(NativeCommand::StackMove(StackMoveOpts::from(parsed)))
         }
+        Some("squash") => {
+            let parsed = match StackSquashCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            match StackSquashOpts::try_from(parsed) {
+                Ok(opts) => Dispatch::Native(NativeCommand::StackSquash(opts)),
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    std::process::exit(2);
+                }
+            }
+        }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
 }
@@ -777,6 +808,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                     action,
                     sha,
                     shas,
+                    fixup_shas,
                     command,
                     todo_path,
                 }),
@@ -785,6 +817,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 action,
                 sha,
                 shas,
+                fixup_shas,
                 command,
                 todo_path,
             },
@@ -1678,6 +1711,42 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackSquash(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let outcome = mergify_stack::commands::squash::run(
+                    &mergify_stack::commands::squash::Options {
+                        repo_dir: None,
+                        src_prefixes: &opts.src_prefixes,
+                        target_prefix: &opts.target_prefix,
+                        message: opts.message.as_deref(),
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::squash::Outcome::Squashed { plan }
+                    | mergify_stack::commands::squash::Outcome::DryRun { plan } => {
+                        println!("Squash plan:");
+                        for (i, c) in plan.iter().enumerate() {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("  {n}. {short} {subject}", n = i + 1, subject = c.subject);
+                        }
+                        if opts.dry_run {
+                            println!("Dry run — no changes made");
+                        } else {
+                            println!("Commits squashed successfully.");
+                        }
+                    }
+                    mergify_stack::commands::squash::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -1742,6 +1811,38 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                             .map(str::to_string)
                             .collect();
                         mergify_stack::rebase_todo::Action::Reorder { ordered_shas }
+                    }
+                    InternalRebaseAction::Squash => {
+                        let raw_shas = opts.shas.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action squash requires --shas"
+                                    .to_string(),
+                            )
+                        })?;
+                        let ordered_shas: Vec<String> = raw_shas
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        let raw_fixup = opts.fixup_shas.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action squash requires --fixup-shas"
+                                    .to_string(),
+                            )
+                        })?;
+                        let fixup_shas: Vec<String> = raw_fixup
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        mergify_stack::rebase_todo::Action::Squash {
+                            ordered_shas,
+                            fixup_shas,
+                            exec_after_sha: opts.sha,
+                            exec_command: opts.command,
+                        }
                     }
                     InternalRebaseAction::ExecAfter => {
                         let sha = opts.sha.ok_or_else(|| {
@@ -1943,11 +2044,15 @@ struct InternalRebaseTodoRewriteArgs {
     /// Target SHA — required for `edit`, `reword`, `exec-after`.
     #[arg(long)]
     sha: Option<String>,
-    /// Comma-separated SHAs — required for `drop`, `fixup`.
+    /// Comma-separated SHAs — required for `drop`, `fixup`,
+    /// `reorder`, `squash` (full new order).
     #[arg(long)]
     shas: Option<String>,
+    /// Comma-separated SHAs to fold as fixup — used by `squash`.
+    #[arg(long = "fixup-shas")]
+    fixup_shas: Option<String>,
     /// Shell command to inject as an `exec` line — required for
-    /// `exec-after`.
+    /// `exec-after`, optional for `squash`.
     #[arg(long)]
     command: Option<String>,
     /// Path to the rebase-todo file git wrote; positional so it
@@ -2144,6 +2249,63 @@ impl From<StackMoveCli> for StackMoveOpts {
             target_prefix: cli.target,
             dry_run: cli.dry_run,
         }
+    }
+}
+
+/// `mergify stack squash <SRC>... into <TARGET> [-m <msg>]
+/// [--dry-run]`. The `<SRC>... into <TARGET>` shape doesn't fit
+/// clap's positional model directly, so we accept a flat
+/// `Vec<String>` and split on the literal `into` keyword inside
+/// [`StackSquashOpts::try_from`].
+#[derive(Parser)]
+#[command(name = "squash", about = "Squash commits into a target commit")]
+struct StackSquashCli {
+    /// `SRC1 SRC2 ... into TARGET` — must contain exactly one
+    /// `into` token; everything before is a source, the single
+    /// token after is the target.
+    #[arg(required = true, num_args = 3..)]
+    tokens: Vec<String>,
+
+    /// Final commit message (required to rename; otherwise the
+    /// target's message is kept).
+    #[arg(short = 'm', long = "message")]
+    message: Option<String>,
+
+    /// Show the plan without rebasing.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+impl TryFrom<StackSquashCli> for StackSquashOpts {
+    type Error = String;
+
+    fn try_from(cli: StackSquashCli) -> Result<Self, Self::Error> {
+        let into_positions: Vec<usize> = cli
+            .tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| (t == "into").then_some(i))
+            .collect();
+        if into_positions.len() != 1 {
+            return Err(
+                "squash requires exactly one 'into' keyword: SRC... into TARGET".to_string(),
+            );
+        }
+        let idx = into_positions[0];
+        let srcs: Vec<String> = cli.tokens[..idx].to_vec();
+        let after = &cli.tokens[idx + 1..];
+        if srcs.is_empty() {
+            return Err("at least one source commit required before 'into'".to_string());
+        }
+        if after.len() != 1 {
+            return Err("exactly one target commit required after 'into'".to_string());
+        }
+        Ok(Self {
+            src_prefixes: srcs,
+            target_prefix: after[0].clone(),
+            message: cli.message,
+            dry_run: cli.dry_run,
+        })
     }
 }
 

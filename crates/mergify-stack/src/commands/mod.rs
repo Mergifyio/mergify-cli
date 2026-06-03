@@ -12,3 +12,4 @@ pub mod new;
 pub mod note;
 pub mod reorder;
 pub mod reword;
+pub mod squash;
