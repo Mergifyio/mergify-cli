@@ -1,7 +1,6 @@
-//! End-to-end tests for `mergify stack reword`. The `-m` path is
-//! exercised end to end; the interactive path (no `-m`) opens an
-//! editor we don't have in test contexts so we cover only its
-//! dry-run resolution.
+//! End-to-end tests for `mergify stack reorder` and
+//! `mergify stack move` — both reduce to the same
+//! `Action::Reorder` machinery, so they share a test binary.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,7 +24,7 @@ fn run_in(dir: &Path, args: &[&str]) {
         .status()
         .unwrap()
         .success();
-    assert!(ok, "git -C {}: {args:?} failed", dir.display());
+    assert!(ok);
 }
 
 fn capture(dir: &Path, args: &[&str]) -> String {
@@ -38,6 +37,8 @@ fn capture(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
+/// `feature` branch with three non-empty commits A, B, C
+/// (touching different files so reorder is conflict-free).
 fn build_stack_repo() -> (tempfile::TempDir, Vec<String>) {
     let workdir = tempfile::tempdir().unwrap();
     let upstream = workdir.path().join("up.git");
@@ -75,6 +76,7 @@ fn build_stack_repo() -> (tempfile::TempDir, Vec<String>) {
     for (label, cid) in [
         ("A", "Iaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01"),
         ("B", "Ibbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb02"),
+        ("C", "Icccccccccccccccccccccccccccccccccccccc03"),
     ] {
         let fname = format!("{}.txt", label.to_lowercase());
         std::fs::write(local.join(&fname), format!("content {label}")).unwrap();
@@ -94,8 +96,18 @@ fn run_mergify(local: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+fn feature_subjects(local: &Path) -> Vec<String> {
+    capture(
+        local,
+        &["log", "--reverse", "--format=%s", "origin/main..HEAD"],
+    )
+    .lines()
+    .map(str::to_string)
+    .collect()
+}
+
 #[test]
-fn reword_with_message_replaces_subject() {
+fn reorder_to_explicit_sequence() {
     let (work, commits) = build_stack_repo();
     let local = work.path().join("local");
 
@@ -103,10 +115,10 @@ fn reword_with_message_replaces_subject() {
         &local,
         &[
             "stack",
-            "reword",
-            &commits[1][..12],
-            "-m",
-            "feat: new subject\n\nbody line",
+            "reorder",
+            &commits[2][..12], // C
+            &commits[0][..12], // A
+            &commits[1][..12], // B
         ],
     );
     assert!(
@@ -116,30 +128,101 @@ fn reword_with_message_replaces_subject() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let subject = capture(&local, &["log", "-1", "--format=%s"]);
-    assert_eq!(subject, "feat: new subject");
-    let body = capture(&local, &["log", "-1", "--format=%b"]);
-    assert!(body.contains("body line"), "got body: {body}");
+    let order = feature_subjects(&local);
+    assert_eq!(order, ["Commit C", "Commit A", "Commit B"]);
 }
 
 #[test]
-fn reword_dry_run_does_not_modify_head() {
+fn reorder_already_in_order_is_noop() {
     let (work, commits) = build_stack_repo();
     let local = work.path().join("local");
     let head_before = capture(&local, &["rev-parse", "HEAD"]);
+
     let output = run_mergify(
         &local,
-        &["stack", "reword", "--dry-run", &commits[1][..12], "-m", "x"],
+        &[
+            "stack",
+            "reorder",
+            &commits[0][..12],
+            &commits[1][..12],
+            &commits[2][..12],
+        ],
     );
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Reword plan:"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("already"));
     assert_eq!(capture(&local, &["rev-parse", "HEAD"]), head_before);
 }
 
 #[test]
-fn reword_unknown_prefix_exits_nonzero() {
-    let (work, _) = build_stack_repo();
+fn reorder_count_mismatch_errors() {
+    let (work, commits) = build_stack_repo();
     let local = work.path().join("local");
-    let output = run_mergify(&local, &["stack", "reword", "deadbeef1234", "-m", "x"]);
+    let output = run_mergify(&local, &["stack", "reorder", &commits[0][..12]]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn move_commit_first_brings_it_to_the_top() {
+    let (work, commits) = build_stack_repo();
+    let local = work.path().join("local");
+
+    let output = run_mergify(&local, &["stack", "move", &commits[2][..12], "first"]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert_eq!(
+        feature_subjects(&local),
+        ["Commit C", "Commit A", "Commit B"]
+    );
+}
+
+#[test]
+fn move_commit_before_target() {
+    let (work, commits) = build_stack_repo();
+    let local = work.path().join("local");
+
+    let output = run_mergify(
+        &local,
+        &[
+            "stack",
+            "move",
+            &commits[2][..12], // C
+            "before",
+            &commits[0][..12], // A
+        ],
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        feature_subjects(&local),
+        ["Commit C", "Commit A", "Commit B"]
+    );
+}
+
+#[test]
+fn move_before_without_target_errors() {
+    let (work, commits) = build_stack_repo();
+    let local = work.path().join("local");
+    let output = run_mergify(&local, &["stack", "move", &commits[2][..12], "before"]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn move_first_with_target_errors() {
+    let (work, commits) = build_stack_repo();
+    let local = work.path().join("local");
+    let output = run_mergify(
+        &local,
+        &[
+            "stack",
+            "move",
+            &commits[2][..12],
+            "first",
+            &commits[0][..12],
+        ],
+    );
     assert!(!output.status.success());
 }

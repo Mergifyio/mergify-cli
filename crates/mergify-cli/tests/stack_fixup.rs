@@ -9,8 +9,15 @@ fn mergify_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mergify"))
 }
 
+fn isolated_git() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd
+}
+
 fn run_in(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = isolated_git()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -21,7 +28,7 @@ fn run_in(dir: &Path, args: &[&str]) {
 }
 
 fn capture(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = isolated_git()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -35,7 +42,7 @@ fn capture(dir: &Path, args: &[&str]) -> String {
 fn build_stack_repo() -> (tempfile::TempDir, Vec<(String, String)>) {
     let workdir = tempfile::tempdir().unwrap();
     let upstream = workdir.path().join("up.git");
-    Command::new("git")
+    isolated_git()
         .args([
             "init",
             "-q",

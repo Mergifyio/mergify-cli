@@ -46,6 +46,12 @@ pub enum Action {
     /// interactive reword), and as one half of `stack squash`'s
     /// custom-message path.
     ExecAfter { sha: String, command: String },
+    /// Reorder the `pick` lines to the given sequence (other lines
+    /// — comments, blank lines, `exec` etc. — are appended at the
+    /// end). Every SHA in `ordered_shas` must match exactly one
+    /// `pick` line and the count must equal the number of picks in
+    /// the todo.
+    Reorder { ordered_shas: Vec<String> },
 }
 
 /// Apply `action` to `todo` and return the rewritten contents.
@@ -59,6 +65,7 @@ pub fn rewrite(todo: &str, action: &Action) -> Result<String, CliError> {
         Action::Fixup { shas } => rewrite_replace_verb(todo, shas, "fixup"),
         Action::Reword { sha } => rewrite_replace_verb(todo, std::slice::from_ref(sha), "reword"),
         Action::ExecAfter { sha, command } => rewrite_exec_after(todo, sha, command),
+        Action::Reorder { ordered_shas } => rewrite_reorder(todo, ordered_shas),
     }
 }
 
@@ -203,6 +210,53 @@ fn rewrite_exec_after(todo: &str, target: &str, command: &str) -> Result<String,
             "rebase-todo has no `pick` line for {target}; aborting so the exec doesn't run unanchored"
         )));
     }
+    Ok(out)
+}
+
+/// Reorder the `pick` lines to match `ordered_shas`. Non-pick
+/// lines (comments, blank lines, `exec` annotations) are
+/// preserved verbatim at the *end* of the rewritten todo, after
+/// the new pick order. Mirrors the Python `run_action_rebase`
+/// fallback that bucketed "other" lines after the reordered
+/// picks.
+fn rewrite_reorder(todo: &str, ordered_shas: &[String]) -> Result<String, CliError> {
+    // First pass: split into pick lines (keyed by SHA) and "other".
+    let mut pick_lines: Vec<(String, String)> = Vec::new();
+    let mut other_lines: String = String::new();
+    for line in todo.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if let Some(rest) = trimmed.strip_prefix("pick ") {
+            let (sha, _) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            pick_lines.push((sha.to_string(), line.to_string()));
+        } else {
+            other_lines.push_str(line);
+        }
+    }
+    if ordered_shas.len() != pick_lines.len() {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo reorder: have {} pick lines but caller asked for {} ordered SHAs",
+            pick_lines.len(),
+            ordered_shas.len()
+        )));
+    }
+    // Second pass: rebuild in the requested order, consuming each
+    // pick at most once so duplicates surface.
+    let mut consumed = vec![false; pick_lines.len()];
+    let mut out = String::with_capacity(todo.len());
+    for sha in ordered_shas {
+        let idx = pick_lines
+            .iter()
+            .enumerate()
+            .position(|(i, (todo_sha, _))| !consumed[i] && sha_matches(todo_sha, sha));
+        let Some(idx) = idx else {
+            return Err(CliError::InvalidState(format!(
+                "rebase-todo reorder: no remaining pick line matches {sha}"
+            )));
+        };
+        consumed[idx] = true;
+        out.push_str(&pick_lines[idx].1);
+    }
+    out.push_str(&other_lines);
     Ok(out)
 }
 
@@ -517,6 +571,68 @@ exec cargo test
              \n\
              # Rebase abc..def onto abc (3 commands)\n"
         );
+    }
+
+    #[test]
+    fn reorder_rewrites_picks_in_given_order() {
+        let out = rewrite(
+            TODO,
+            &Action::Reorder {
+                ordered_shas: vec![
+                    "cafe1234".to_string(),
+                    "1a2b3c4d".to_string(),
+                    "deadbeef".to_string(),
+                ],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "pick cafe1234 fix: typo\n\
+             pick 1a2b3c4d feat: add foo\n\
+             pick deadbeef chore: bump deps\n\
+             \n\
+             # Rebase abc..def onto abc (3 commands)\n"
+        );
+    }
+
+    #[test]
+    fn reorder_count_mismatch_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::Reorder {
+                ordered_shas: vec!["1a2b3c4d".to_string()],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(
+                    msg.contains("3 pick lines") && msg.contains("1 ordered"),
+                    "got: {msg}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reorder_unknown_sha_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::Reorder {
+                ordered_shas: vec![
+                    "ffffffff".to_string(),
+                    "1a2b3c4d".to_string(),
+                    "deadbeef".to_string(),
+                ],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => assert!(msg.contains("ffffffff"), "got: {msg}"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

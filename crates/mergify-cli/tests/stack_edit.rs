@@ -20,8 +20,15 @@ fn mergify_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mergify"))
 }
 
+fn isolated_git() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd
+}
+
 fn run_in(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = isolated_git()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -32,7 +39,7 @@ fn run_in(dir: &Path, args: &[&str]) {
 }
 
 fn capture(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = isolated_git()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -47,7 +54,7 @@ fn capture(dir: &Path, args: &[&str]) -> String {
 fn build_stack_repo() -> (tempfile::TempDir, Vec<(String, String)>) {
     let workdir = tempfile::tempdir().unwrap();
     let upstream = workdir.path().join("up.git");
-    let ok = Command::new("git")
+    let ok = isolated_git()
         .args([
             "init",
             "-q",
@@ -113,7 +120,7 @@ fn stack_edit_pauses_at_target_commit() {
     assert_eq!(capture(&local, &["log", "-1", "--format=%s"]), "Commit B");
     assert!(local.join(".git/rebase-merge").exists());
 
-    Command::new("git")
+    isolated_git()
         .arg("-C")
         .arg(&local)
         .args(["rebase", "--abort"])
@@ -136,7 +143,7 @@ fn stack_edit_pauses_by_change_id_prefix() {
     );
     assert_eq!(capture(&local, &["log", "-1", "--format=%s"]), "Commit B");
 
-    Command::new("git")
+    isolated_git()
         .arg("-C")
         .arg(&local)
         .args(["rebase", "--abort"])
@@ -164,7 +171,7 @@ fn stack_edit_empty_stack_prints_message() {
     // — no commits between trunk and HEAD.
     let workdir = tempfile::tempdir().unwrap();
     let upstream = workdir.path().join("up.git");
-    Command::new("git")
+    isolated_git()
         .args([
             "init",
             "-q",
