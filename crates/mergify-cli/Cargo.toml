@@ -36,6 +36,8 @@ regex = "1"
 serde_yaml_ng = "0.10"
 temp-env = "0.3"
 tempfile = "3.14"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
+wiremock = "0.6"
 
 [lints]
 workspace = true
