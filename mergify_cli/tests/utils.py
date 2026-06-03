@@ -62,6 +62,7 @@ class _CommitRequired(typing.TypedDict):
 
 class Commit(_CommitRequired, total=False):
     head_ref: str  # existing PR branch ref; overrides slug-based refspec in finalize()
+    note: str  # amend-reason note from `refs/notes/mergify/stack`; empty by default
 
 
 @dataclasses.dataclass
@@ -128,13 +129,15 @@ class GitMock:
 
         Mirrors the per-commit shape emitted by
         `crates/mergify-stack/src/local_commits.rs::LocalCommit`:
-        `{commit_sha, title, message, change_id, slug}`. Called by the
-        `git_mock` fixture's bridge stub instead of running the
-        real subprocess against a real git repo. The `slug` is
-        computed via the test-only oracle in
+        `{commit_sha, title, message, change_id, slug, note}`.
+        Called by the `git_mock` fixture's bridge stub instead of
+        running the real subprocess against a real git repo. The
+        `slug` is computed via the test-only oracle in
         `mergify_cli/tests/_slug_oracle.py`, which mirrors the
         Rust `mergify-stack::slug::slugify_title` algorithm; the
-        Rust crate's unit tests pin the parity.
+        Rust crate's unit tests pin the parity. The `note`
+        defaults to empty string and individual tests can override
+        it via `Commit["note"]`.
         """
         from mergify_cli.tests._slug_oracle import slugify_title
 
@@ -148,6 +151,7 @@ class GitMock:
                     "message": body,
                     "change_id": c["change_id"],
                     "slug": slugify_title(c["title"], c["change_id"]),
+                    "note": c.get("note", ""),
                 },
             )
         return out
