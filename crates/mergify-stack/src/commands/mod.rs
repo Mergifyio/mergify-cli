@@ -5,5 +5,6 @@
 
 pub mod drop;
 pub mod edit;
+pub mod fixup;
 pub mod new;
 pub mod note;
