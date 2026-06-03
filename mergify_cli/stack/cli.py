@@ -12,7 +12,6 @@ from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.stack import checkout as stack_checkout_mod
-from mergify_cli.stack import drop as stack_drop_mod
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import move as stack_move_mod
 from mergify_cli.stack import open as stack_open_mod
@@ -591,20 +590,6 @@ async def reword(*, commit: str, message: str | None, dry_run: bool) -> None:
         message=message,
         dry_run=dry_run,
     )
-
-
-@stack.command(help="Drop commits from the stack")
-@click.argument("commits", nargs=-1, required=True)
-@click.option(
-    "--dry-run",
-    "-n",
-    is_flag=True,
-    default=False,
-    help="Show the plan without dropping",
-)
-@utils.run_with_asyncio
-async def drop(*, commits: tuple[str, ...], dry_run: bool) -> None:
-    await stack_drop_mod.stack_drop(list(commits), dry_run=dry_run)
 
 
 @stack.command(help="Squash commits into a target commit")
