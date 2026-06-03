@@ -52,6 +52,18 @@ pub enum Action {
     /// `pick` line and the count must equal the number of picks in
     /// the todo.
     Reorder { ordered_shas: Vec<String> },
+    /// Combined reorder + fixup + optional exec-after used by
+    /// `stack squash`. Each SHA in `ordered_shas` matches exactly
+    /// one pick line; those listed in `fixup_shas` get their verb
+    /// rewritten to `fixup`. If `exec_after_sha` and `exec_command`
+    /// are both set, an `exec <command>` line is inserted right
+    /// after the matching todo entry.
+    Squash {
+        ordered_shas: Vec<String>,
+        fixup_shas: Vec<String>,
+        exec_after_sha: Option<String>,
+        exec_command: Option<String>,
+    },
 }
 
 /// Apply `action` to `todo` and return the rewritten contents.
@@ -66,6 +78,18 @@ pub fn rewrite(todo: &str, action: &Action) -> Result<String, CliError> {
         Action::Reword { sha } => rewrite_replace_verb(todo, std::slice::from_ref(sha), "reword"),
         Action::ExecAfter { sha, command } => rewrite_exec_after(todo, sha, command),
         Action::Reorder { ordered_shas } => rewrite_reorder(todo, ordered_shas),
+        Action::Squash {
+            ordered_shas,
+            fixup_shas,
+            exec_after_sha,
+            exec_command,
+        } => rewrite_squash(
+            todo,
+            ordered_shas,
+            fixup_shas,
+            exec_after_sha.as_deref(),
+            exec_command.as_deref(),
+        ),
     }
 }
 
@@ -255,6 +279,83 @@ fn rewrite_reorder(todo: &str, ordered_shas: &[String]) -> Result<String, CliErr
         };
         consumed[idx] = true;
         out.push_str(&pick_lines[idx].1);
+    }
+    out.push_str(&other_lines);
+    Ok(out)
+}
+
+/// Combined reorder + per-SHA verb swap + optional `exec` line.
+/// Mirrors Python's `run_action_rebase` with the same call shape
+/// the `stack squash` orchestrator uses.
+fn rewrite_squash(
+    todo: &str,
+    ordered_shas: &[String],
+    fixup_shas: &[String],
+    exec_after_sha: Option<&str>,
+    exec_command: Option<&str>,
+) -> Result<String, CliError> {
+    // Split todo into picks (keyed by SHA) and other lines (kept
+    // verbatim at the end, same bucketing as Action::Reorder).
+    let mut pick_lines: Vec<(String, String)> = Vec::new();
+    let mut other_lines = String::new();
+    for line in todo.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if let Some(rest) = trimmed.strip_prefix("pick ") {
+            let (sha, _) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            pick_lines.push((sha.to_string(), line.to_string()));
+        } else {
+            other_lines.push_str(line);
+        }
+    }
+    if ordered_shas.len() != pick_lines.len() {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo squash: have {} pick lines but caller asked for {} ordered SHAs",
+            pick_lines.len(),
+            ordered_shas.len()
+        )));
+    }
+
+    let exec_set = exec_after_sha.zip(exec_command);
+    let mut consumed = vec![false; pick_lines.len()];
+    let mut out = String::with_capacity(todo.len());
+    for sha in ordered_shas {
+        let idx = pick_lines
+            .iter()
+            .enumerate()
+            .position(|(i, (todo_sha, _))| !consumed[i] && sha_matches(todo_sha, sha));
+        let Some(idx) = idx else {
+            return Err(CliError::InvalidState(format!(
+                "rebase-todo squash: no remaining pick line matches {sha}"
+            )));
+        };
+        consumed[idx] = true;
+        let original_line = &pick_lines[idx].1;
+        let trimmed = original_line.trim_end_matches(['\n', '\r']);
+        let rest = trimmed.strip_prefix("pick ").unwrap_or(trimmed);
+        let terminator = &original_line[trimmed.len()..];
+        let term_to_emit = if terminator.is_empty() {
+            "\n"
+        } else {
+            terminator
+        };
+
+        let verb = if fixup_shas.iter().any(|f| sha_matches(sha, f)) {
+            "fixup"
+        } else {
+            "pick"
+        };
+        out.push_str(verb);
+        out.push(' ');
+        out.push_str(rest);
+        out.push_str(term_to_emit);
+
+        if let Some((after_sha, command)) = exec_set {
+            if sha_matches(sha, after_sha) {
+                out.push_str("exec ");
+                out.push_str(command);
+                out.push_str(term_to_emit);
+            }
+        }
     }
     out.push_str(&other_lines);
     Ok(out)
@@ -611,6 +712,80 @@ exec cargo test
                     msg.contains("3 pick lines") && msg.contains("1 ordered"),
                     "got: {msg}"
                 );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn squash_folds_srcs_into_target_and_keeps_target_verb() {
+        // ordered: target then src; src is fixup so it folds in.
+        let out = rewrite(
+            TODO,
+            &Action::Squash {
+                ordered_shas: vec![
+                    "1a2b3c4d".to_string(), // A
+                    "cafe1234".to_string(), // C (will be fixed up into A)
+                    "deadbeef".to_string(), // B (stays a pick)
+                ],
+                fixup_shas: vec!["cafe1234".to_string()],
+                exec_after_sha: None,
+                exec_command: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "pick 1a2b3c4d feat: add foo\n\
+             fixup cafe1234 fix: typo\n\
+             pick deadbeef chore: bump deps\n\
+             \n\
+             # Rebase abc..def onto abc (3 commands)\n"
+        );
+    }
+
+    #[test]
+    fn squash_with_exec_after_injects_command() {
+        let out = rewrite(
+            TODO,
+            &Action::Squash {
+                ordered_shas: vec![
+                    "1a2b3c4d".to_string(),
+                    "cafe1234".to_string(),
+                    "deadbeef".to_string(),
+                ],
+                fixup_shas: vec!["cafe1234".to_string()],
+                exec_after_sha: Some("cafe1234".to_string()),
+                exec_command: Some("git commit --amend -F /tmp/msg.txt".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "pick 1a2b3c4d feat: add foo\n\
+             fixup cafe1234 fix: typo\n\
+             exec git commit --amend -F /tmp/msg.txt\n\
+             pick deadbeef chore: bump deps\n\
+             \n\
+             # Rebase abc..def onto abc (3 commands)\n"
+        );
+    }
+
+    #[test]
+    fn squash_count_mismatch_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::Squash {
+                ordered_shas: vec!["1a2b3c4d".to_string()],
+                fixup_shas: vec![],
+                exec_after_sha: None,
+                exec_command: None,
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(msg.contains("3 pick lines"), "got: {msg}");
             }
             other => panic!("unexpected: {other:?}"),
         }
