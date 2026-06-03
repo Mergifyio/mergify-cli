@@ -204,34 +204,6 @@ async def push_branches(
         os.environ.pop("MERGIFY_STACK_PUSH", None)
 
 
-async def read_reasons(local_changes: list[changes.LocalChange]) -> None:
-    """Populate ``c.reason`` from ``refs/notes/mergify/stack`` for each
-    change in ``create`` or ``update`` state.
-
-    Commits without a note get an empty string. Unexpected git errors
-    (missing binary, permission failures, corrupted object store, …)
-    propagate to the caller so real problems surface instead of being
-    silently swallowed.
-    """
-
-    async def read_one(c: changes.LocalChange) -> None:
-        if c.action not in {"create", "update"}:
-            return
-        try:
-            c.reason = await utils.git(
-                "notes",
-                f"--ref={NOTES_REF}",
-                "show",
-                c.commit_sha,
-            )
-        except utils.CommandError as exc:
-            if b"no note found" not in exc.stdout:
-                raise
-            c.reason = ""
-
-    await asyncio.gather(*(read_one(c) for c in local_changes))
-
-
 async def _git_patch_id(sha: str) -> str:
     """Get the patch-id of a commit, stable across rebases."""
     diff = await utils.git("show", sha)
@@ -607,8 +579,6 @@ async def stack_push(
                     old="skip-up-to-date",
                     new="update",
                 )
-
-        await read_reasons(planned_changes.locals)
 
         changes.display_plan(
             planned_changes,

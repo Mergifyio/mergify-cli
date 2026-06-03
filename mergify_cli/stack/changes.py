@@ -351,6 +351,13 @@ async def get_changes(
                 changes.locals[-1].dest_branch if changes.locals else base_branch,
                 dest_branch,
                 action,
+                # Amend-reason note from `refs/notes/mergify/stack`,
+                # already populated by the Rust walker via
+                # `git log --notes=…`. Empty string when no note is
+                # attached. Replaces the per-commit
+                # `read_reasons()` round-trip the orchestrator used
+                # to make in `stack_push`.
+                reason=local["note"],
             ),
         )
 
@@ -376,7 +383,7 @@ async def _read_local_commits_via_rust(
 ) -> list[dict[str, str]]:
     """Walk the stack range via the native Rust subcommand.
 
-    Returns a list of `{commit_sha, title, message, change_id, slug}`
+    Returns a list of `{commit_sha, title, message, change_id, slug, note}`
     dicts, one per commit in `<base_commit_sha>..<dest_branch>`.
     A missing `Change-Id:` trailer makes the Rust binary exit with
     `ExitCode.INVALID_STATE`; we mirror the Python exit path so the
