@@ -17,6 +17,7 @@
 
 pub mod auth;
 pub mod command_context;
+pub mod env;
 pub mod error;
 pub mod exit_code;
 pub mod http;
