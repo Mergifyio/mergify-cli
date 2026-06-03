@@ -156,6 +156,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
+    ("stack", "new"),
     // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
     // clap rejects it, but they stay hidden from `--help` (see
@@ -209,6 +210,19 @@ enum NativeCommand {
     /// JSON array of `{change_id, pull}` records. Wire format is
     /// not stable.
     InternalStackRemoteChanges(InternalStackRemoteChangesOpts),
+    /// `mergify stack new <name> [--base REMOTE/BRANCH]
+    /// [--checkout/--no-checkout]` — create a new stack branch
+    /// tracking the resolved trunk. First stack subcommand to land
+    /// natively; the rest still shim to Python.
+    StackNew(StackNewOpts),
+}
+
+struct StackNewOpts {
+    name: String,
+    /// `Some((remote, branch))` for an explicit `--base`; `None`
+    /// means "resolve the trunk".
+    base: Option<(String, String)>,
+    checkout: bool,
 }
 
 struct InternalStackLocalCommitsOpts {
@@ -451,13 +465,40 @@ fn detect_dispatch(argv: &[String]) -> Option<Dispatch> {
     Some(dispatch_from_parsed(parsed))
 }
 
+/// Route a captured `mergify stack <args…>` invocation to either
+/// the native stack subcommand handler or the Python shim.
+///
+/// `stack` is a hybrid group during the port: today only `new` is
+/// native, every other subcommand still runs through `mergify-py-shim`.
+/// The decision is made by inspecting the first positional arg
+/// after `stack` — if it names a natively-ported subcommand, we
+/// secondary-parse the rest with clap and dispatch native;
+/// otherwise we forward the whole argv to Python verbatim.
+///
+/// `--help` for shimmed subcommands (and the bare `stack --help`)
+/// falls through to Python, which prints the full help listing
+/// including the Python-only subcommands. Adding new native stack
+/// subcommands later means adding a branch here and a matching
+/// `NATIVE_COMMANDS` entry.
+fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
+    if args.first().is_some_and(|a| a == "new") {
+        // `args[0]` is `"new"` — clap consumes it as the program
+        // name in the secondary parse, leaving `args[1..]` as the
+        // actual arguments.
+        let parsed = match StackNewCli::try_parse_from(&args) {
+            Ok(parsed) => parsed,
+            Err(err) => err.exit(),
+        };
+        return Dispatch::Native(NativeCommand::StackNew(StackNewOpts::from(parsed)));
+    }
+    Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
+}
+
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
     let debug = parsed.debug;
     match parsed.command {
-        Subcommands::Stack(ShimmedArgs { args }) => {
-            Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
-        }
+        Subcommands::Stack(ShimmedArgs { args }) => dispatch_stack(debug, args),
         Subcommands::Internal(InternalArgs {
             command:
                 InternalSubcommand::StackLocalCommits(InternalStackLocalCommitsArgs {
@@ -1094,6 +1135,40 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             )
             .await
             .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::StackNew(opts) => {
+                let base = opts
+                    .base
+                    .map(|(remote, branch)| mergify_stack::commands::new::Base {
+                        remote,
+                        branch,
+                    });
+                let outcome =
+                    mergify_stack::commands::new::run(None, &opts.name, base, opts.checkout)?;
+                if let Some(auto_set) = &outcome.upstream_auto_set {
+                    // Yellow notice — matches `utils.get_trunk`'s
+                    // print when it auto-sets upstream tracking.
+                    eprintln!(
+                        "Upstream not set for {branch}, automatically set to {remote}/{target}",
+                        branch = auto_set.current_branch,
+                        remote = auto_set.remote,
+                        target = auto_set.branch,
+                    );
+                }
+                println!(
+                    "Created branch '{name}' tracking {base}",
+                    name = outcome.branch_name,
+                    base = outcome.base_refspec,
+                );
+                if outcome.checked_out {
+                    println!("Switched to branch '{}'", outcome.branch_name);
+                } else {
+                    println!(
+                        "Run 'git checkout {}' to switch to the new branch",
+                        outcome.branch_name,
+                    );
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalStackLocalCommits(opts) => {
                 // Run `git log` for the stack range, parse each
                 // commit's `Change-Id:` trailer, emit a JSON array
@@ -1237,6 +1312,66 @@ enum InternalSubcommand {
     /// regrouping. Not a stable user-facing surface.
     #[command(name = "stack-remote-changes")]
     StackRemoteChanges(InternalStackRemoteChangesArgs),
+}
+
+/// `mergify stack new <name>` — clap definition for the natively-
+/// ported `stack new` subcommand. Parsed as a side step after the
+/// top-level clap pass captures `Stack(ShimmedArgs)`, so the rest
+/// of the `stack` group still flows through the Python shim.
+#[derive(Parser)]
+#[command(name = "new", about = "Create a new stack branch")]
+struct StackNewCli {
+    /// Name of the new branch.
+    name: String,
+
+    /// Base branch to fork from, formatted as `REMOTE/BRANCH`
+    /// (e.g. `origin/main`). When omitted, the trunk is resolved
+    /// from the current branch's tracking info or
+    /// `refs/remotes/origin/HEAD`.
+    #[arg(long, short = 'b', value_parser = parse_remote_branch)]
+    base: Option<(String, String)>,
+
+    /// Checkout the new branch after creation. This is the default.
+    /// Pass `--no-checkout` to keep the current branch checked out.
+    #[arg(
+        long = "checkout",
+        action = clap::ArgAction::SetTrue,
+        conflicts_with = "no_checkout",
+    )]
+    #[allow(dead_code)] // default-on; only consumed for `conflicts_with`
+    checkout: bool,
+
+    /// Leave the current branch checked out and just create the
+    /// new branch ref.
+    #[arg(long = "no-checkout", action = clap::ArgAction::SetTrue)]
+    no_checkout: bool,
+}
+
+impl From<StackNewCli> for StackNewOpts {
+    fn from(cli: StackNewCli) -> Self {
+        Self {
+            name: cli.name,
+            base: cli.base,
+            // Default is checkout-on; `--no-checkout` is the only
+            // way to flip it. `--checkout` is accepted for parity
+            // with the Python click flag pair but is a no-op since
+            // it matches the default.
+            checkout: !cli.no_checkout,
+        }
+    }
+}
+
+/// Parse a `REMOTE/BRANCH` argument into its two parts. Matches
+/// the Python `trunk_type` click callback in
+/// `mergify_cli/stack/cli.py`: split on the first `/`, so branch
+/// names containing `/` (e.g. `release/2026.06`) survive intact;
+/// the error message is kept verbatim so users see the same text
+/// regardless of which `stack` subcommand is parsing.
+fn parse_remote_branch(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('/')
+        .map(|(r, b)| (r.to_string(), b.to_string()))
+        .ok_or_else(|| "Trunk is invalid. It must be origin/branch-name".to_string())
 }
 
 #[derive(clap::Args)]

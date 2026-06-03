@@ -16,7 +16,6 @@ from mergify_cli.stack import drop as stack_drop_mod
 from mergify_cli.stack import edit as stack_edit_mod
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import move as stack_move_mod
-from mergify_cli.stack import new as stack_new_mod
 from mergify_cli.stack import note as stack_note_mod
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
@@ -288,36 +287,6 @@ async def move(
         position=position,
         target_prefix=target,
         dry_run=dry_run,
-    )
-
-
-@stack.command(help="Create a new stack branch")
-@click.argument("name")
-@click.option(
-    "--base",
-    "-b",
-    type=click.UNPROCESSED,
-    metavar="REMOTE/BRANCH",
-    default=None,
-    callback=trunk_type,
-    help="Base branch to create from (default: current trunk)",
-)
-@click.option(
-    "--checkout/--no-checkout",
-    default=True,
-    help="Whether to checkout the new branch after creation (default: checkout)",
-)
-@utils.run_with_asyncio
-async def new(
-    *,
-    name: str,
-    base: tuple[str, str] | None,
-    checkout: bool,
-) -> None:
-    await stack_new_mod.stack_new(
-        name=name,
-        base=base,
-        checkout=checkout,
     )
 
 
