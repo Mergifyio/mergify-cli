@@ -21,6 +21,7 @@ mergify ci queue-info                     # Output merge queue batch metadata fr
 mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
 mergify tests quarantine NAME             # Add a test to the CI Insights quarantine
 mergify tests unquarantine NAME           # Remove a test from the CI Insights quarantine
+mergify tests quarantined                 # List the tests currently in the CI Insights quarantine
 ```
 
 ## JUnit Processing (`junit-process`)
@@ -233,6 +234,37 @@ mergify tests unquarantine -r owner/repo 12345678-1234-5678-1234-567812345678
 **Exit codes:**
 - `0` -- Test unquarantined.
 - `6` -- Mergify API error (e.g. the test is not quarantined).
+
+## Tests Quarantined (`tests quarantined`)
+
+Lists every test currently in the repository's CI Insights quarantine. Takes no
+test argument -- it prints the whole quarantine. Human output is one indented
+block per record -- the test name on its own line (never wrapped mid-name),
+then its id (the value `unquarantine` accepts), branch, source, recovered, and
+reason. `--json` emits the full records.
+
+```bash
+# Human output (one block per record).
+mergify tests quarantined -r owner/repo
+
+# JSON for jq -- e.g. names of quarantines an auto-recover run flagged.
+mergify tests quarantined -r owner/repo --json \
+  | jq -r '.quarantined_tests[] | select(.is_recovered) | .test_name'
+```
+
+A null `branch` renders as `*` (the quarantine applies to all branches).
+`source` is `manual` (added by a user) or `auto` (added by flaky detection).
+`is_recovered` flags quarantines whose recent runs suggest they can be removed.
+
+**Key options:**
+- `--repository` / `-r` -- Repository full name (`owner/repo`); required.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
+- `--json` -- Emit `{"quarantined_tests": [...]}` to stdout, each record carrying
+  `id`, `test_name`, `reason`, `branch`, `created_at`, `source`, `is_recovered`.
+
+**Exit codes:**
+- `0` -- Always, including an empty quarantine ("No quarantined tests found.").
 
 ## Queue Info (`queue-info`)
 
