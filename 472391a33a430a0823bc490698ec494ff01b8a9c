@@ -1,0 +1,1 @@
+address Copilot review: 1 enrich the duplicate-open-PR RuntimeError to include both PR numbers/URLs and the Change-Id key so the user can resolve it without a second API round trip; 2 ruff format the new respx mock blocks so trailing commas land consistent with the surrounding tests (this also fixes the COM812 linter failure on CI)
