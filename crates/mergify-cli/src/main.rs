@@ -161,6 +161,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "fixup"),
     ("stack", "new"),
     ("stack", "note"),
+    ("stack", "reword"),
     // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
     // clap rejects it, but they stay hidden from `--help` (see
@@ -238,6 +239,9 @@ enum NativeCommand {
     /// or more commits into their parents via the rebase-todo
     /// machinery.
     StackFixup(StackFixupOpts),
+    /// `mergify stack reword <COMMIT> [-m <msg>] [--dry-run]` —
+    /// change a commit's message in place.
+    StackReword(StackRewordOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -263,16 +267,24 @@ struct StackFixupOpts {
     dry_run: bool,
 }
 
+struct StackRewordOpts {
+    commit_prefix: String,
+    message: Option<String>,
+    dry_run: bool,
+}
+
 struct InternalRebaseTodoRewriteOpts {
     /// Which transformation to apply. New variants land with the
-    /// respective port slices (today: `edit`, `drop`).
+    /// respective port slices (today: `edit`, `drop`, `fixup`,
+    /// `reword`, `exec-after`).
     action: InternalRebaseAction,
-    /// Target commit SHA — used by `edit`. Required for any
-    /// single-target action.
+    /// Target commit SHA — used by `edit`, `reword`, `exec-after`.
     sha: Option<String>,
-    /// Comma-separated commit SHAs — used by `drop`. Required
-    /// for multi-target actions.
+    /// Comma-separated commit SHAs — used by `drop`, `fixup`.
     shas: Option<String>,
+    /// Shell command to inject after the target — used by
+    /// `exec-after`.
+    command: Option<String>,
     /// Path to the rebase-todo file git wrote.
     todo_path: PathBuf,
 }
@@ -282,6 +294,8 @@ enum InternalRebaseAction {
     Edit,
     Drop,
     Fixup,
+    Reword,
+    ExecAfter,
 }
 
 struct StackNoteOpts {
@@ -602,6 +616,13 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             };
             Dispatch::Native(NativeCommand::StackFixup(StackFixupOpts::from(parsed)))
         }
+        Some("reword") => {
+            let parsed = match StackRewordCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackReword(StackRewordOpts::from(parsed)))
+        }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
 }
@@ -651,6 +672,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                     action,
                     sha,
                     shas,
+                    command,
                     todo_path,
                 }),
         }) => Dispatch::Native(NativeCommand::InternalRebaseTodoRewrite(
@@ -658,6 +680,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 action,
                 sha,
                 shas,
+                command,
                 todo_path,
             },
         )),
@@ -1437,6 +1460,45 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackReword(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let outcome = mergify_stack::commands::reword::run(
+                    &mergify_stack::commands::reword::Options {
+                        repo_dir: None,
+                        commit_prefix: &opts.commit_prefix,
+                        message: opts.message.as_deref(),
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::reword::Outcome::Reworded { commit } => {
+                        let short = &commit.sha[..commit.sha.len().min(12)];
+                        println!(
+                            "Reworded {short} {subject}",
+                            subject = commit.subject,
+                        );
+                    }
+                    mergify_stack::commands::reword::Outcome::DryRun {
+                        commit,
+                        inline_message,
+                    } => {
+                        let short = &commit.sha[..commit.sha.len().min(12)];
+                        let verb = if inline_message { "amend" } else { "reword" };
+                        println!("Reword plan:");
+                        println!("  {verb} {short} {subject}", subject = commit.subject);
+                        println!("Dry run — no changes made");
+                    }
+                    mergify_stack::commands::reword::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -1477,6 +1539,30 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                             .map(str::to_string)
                             .collect();
                         mergify_stack::rebase_todo::Action::Fixup { shas }
+                    }
+                    InternalRebaseAction::Reword => {
+                        let sha = opts.sha.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action reword requires --sha"
+                                    .to_string(),
+                            )
+                        })?;
+                        mergify_stack::rebase_todo::Action::Reword { sha }
+                    }
+                    InternalRebaseAction::ExecAfter => {
+                        let sha = opts.sha.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action exec-after requires --sha"
+                                    .to_string(),
+                            )
+                        })?;
+                        let command = opts.command.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action exec-after requires --command"
+                                    .to_string(),
+                            )
+                        })?;
+                        mergify_stack::rebase_todo::Action::ExecAfter { sha, command }
                     }
                 };
                 let original = std::fs::read_to_string(&opts.todo_path).map_err(|e| {
@@ -1650,15 +1736,20 @@ enum InternalSubcommand {
 #[derive(clap::Args)]
 struct InternalRebaseTodoRewriteArgs {
     /// Transformation to apply. New variants land with the
-    /// respective port slices (today: `edit`, `drop`).
+    /// respective port slices (today: `edit`, `drop`, `fixup`,
+    /// `reword`, `exec-after`).
     #[arg(long, value_enum)]
     action: InternalRebaseAction,
-    /// Target SHA — required when `--action edit`.
+    /// Target SHA — required for `edit`, `reword`, `exec-after`.
     #[arg(long)]
     sha: Option<String>,
-    /// Comma-separated SHAs — required when `--action drop`.
+    /// Comma-separated SHAs — required for `drop`, `fixup`.
     #[arg(long)]
     shas: Option<String>,
+    /// Shell command to inject as an `exec` line — required for
+    /// `exec-after`.
+    #[arg(long)]
+    command: Option<String>,
     /// Path to the rebase-todo file git wrote; positional so it
     /// catches whatever git's `sh -c "$EDITOR \"$@\"" sh <path>`
     /// hands us.
@@ -1774,6 +1865,32 @@ impl From<StackFixupCli> for StackFixupOpts {
     fn from(cli: StackFixupCli) -> Self {
         Self {
             commit_prefixes: cli.commits,
+            dry_run: cli.dry_run,
+        }
+    }
+}
+
+/// `mergify stack reword <COMMIT> [-m <msg>] [--dry-run]`.
+#[derive(Parser)]
+#[command(name = "reword", about = "Change a commit's message")]
+struct StackRewordCli {
+    commit: String,
+
+    /// New message. When omitted, `git rebase -i` pauses at the
+    /// target and opens `$GIT_EDITOR`.
+    #[arg(short = 'm', long = "message")]
+    message: Option<String>,
+
+    /// Show the plan without rebasing.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+impl From<StackRewordCli> for StackRewordOpts {
+    fn from(cli: StackRewordCli) -> Self {
+        Self {
+            commit_prefix: cli.commit,
+            message: cli.message,
             dry_run: cli.dry_run,
         }
     }
