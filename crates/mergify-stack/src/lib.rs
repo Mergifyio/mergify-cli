@@ -18,6 +18,7 @@
 //!   (the rest still shim to Python).
 
 pub mod change_id;
+pub mod changes;
 pub mod commands;
 pub mod local_commits;
 pub mod rebase_todo;
