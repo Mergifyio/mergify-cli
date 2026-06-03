@@ -31,6 +31,7 @@ use mergify_ci::git_refs::GitRefsOptions;
 use mergify_ci::junit_process::JunitProcessOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
 use mergify_ci::tests_quarantine::QuarantineOptions;
+use mergify_ci::tests_quarantine::QuarantinedOptions;
 use mergify_ci::tests_quarantine::UnquarantineOptions;
 use mergify_ci::tests_show::TestsShowOptions;
 use mergify_config::simulate::PullRequestRef;
@@ -146,6 +147,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("tests", "show"),
     ("tests", "quarantine"),
     ("tests", "unquarantine"),
+    ("tests", "quarantined"),
     ("queue", "pause"),
     ("queue", "unpause"),
     ("queue", "status"),
@@ -183,6 +185,7 @@ enum NativeCommand {
     TestsShow(TestsShowOpts),
     TestsQuarantine(TestsQuarantineOpts),
     TestsUnquarantine(TestsUnquarantineOpts),
+    TestsQuarantined(TestsQuarantinedOpts),
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
     QueueStatus(QueueStatusOpts),
@@ -306,6 +309,13 @@ struct TestsQuarantineOpts {
 struct TestsUnquarantineOpts {
     repository: String,
     name_or_id: String,
+    token: Option<String>,
+    api_url: Option<String>,
+    json: bool,
+}
+
+struct TestsQuarantinedOpts {
+    repository: String,
     token: Option<String>,
     api_url: Option<String>,
     json: bool,
@@ -611,6 +621,20 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             api_url,
             json,
         })),
+        Subcommands::Tests(TestsArgs {
+            command:
+                TestsSubcommand::Quarantined(TestsQuarantinedCliArgs {
+                    repository,
+                    token,
+                    api_url,
+                    json,
+                }),
+        }) => Dispatch::Native(NativeCommand::TestsQuarantined(TestsQuarantinedOpts {
+            repository,
+            token,
+            api_url,
+            json,
+        })),
         Subcommands::Queue(QueueArgs {
             repository,
             token,
@@ -781,6 +805,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
         NativeCommand::TestsShow(opts) if opts.json => OutputMode::Json,
         NativeCommand::TestsQuarantine(opts) if opts.json => OutputMode::Json,
         NativeCommand::TestsUnquarantine(opts) if opts.json => OutputMode::Json,
+        NativeCommand::TestsQuarantined(opts) if opts.json => OutputMode::Json,
         _ => OutputMode::Human,
     };
     let mut output = StdioOutput::new(mode);
@@ -911,6 +936,17 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     UnquarantineOptions {
                         repository: &opts.repository,
                         name_or_id: &opts.name_or_id,
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::TestsQuarantined(opts) => {
+                mergify_ci::tests_quarantine::quarantined(
+                    QuarantinedOptions {
+                        repository: &opts.repository,
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
                     },
@@ -1380,6 +1416,8 @@ enum TestsSubcommand {
     Quarantine(TestsQuarantineCliArgs),
     /// Remove a test from the CI Insights quarantine.
     Unquarantine(TestsUnquarantineCliArgs),
+    /// List the tests currently in the CI Insights quarantine.
+    Quarantined(TestsQuarantinedCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -1480,6 +1518,32 @@ struct TestsUnquarantineCliArgs {
     #[arg(value_name = "NAME_OR_ID")]
     name_or_id: String,
 
+    /// Repository full name (owner/repo).
+    #[arg(
+        long,
+        short = 'r',
+        required = true,
+        value_parser = mergify_ci::detector::parse_owner_repo,
+    )]
+    repository: String,
+
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+
+    /// Emit a single JSON document to stdout instead of human prose.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct TestsQuarantinedCliArgs {
     /// Repository full name (owner/repo).
     #[arg(
         long,
