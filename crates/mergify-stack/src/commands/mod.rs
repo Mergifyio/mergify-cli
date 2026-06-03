@@ -14,3 +14,4 @@ pub mod note;
 pub mod reorder;
 pub mod reword;
 pub mod squash;
+pub mod sync;
