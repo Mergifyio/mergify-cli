@@ -38,6 +38,11 @@
 //!   approved (so the approvals aren't dismissed) unless the
 //!   bottom of the stack has a real merge conflict with
 //!   trunk. Ported from `mergify_cli/stack/approvals.py`.
+//! - [`notes_push`] — `git fetch`/`git push` plumbing for
+//!   `refs/notes/mergify/stack` + the per-PR refspecs that
+//!   `stack push` lands atomically with `--force-with-lease`.
+//!   Ported from `mergify_cli/stack/push.py::{fetch_notes_ref,
+//!   _merge_remote_notes, push_branches}`.
 
 pub mod approvals;
 pub mod change_id;
@@ -45,6 +50,7 @@ pub mod change_type;
 pub mod changes;
 pub mod commands;
 pub mod local_commits;
+pub mod notes_push;
 pub mod rebase_todo;
 pub mod remote_changes;
 pub mod replay;
