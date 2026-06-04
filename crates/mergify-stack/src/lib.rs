@@ -47,6 +47,10 @@
 //!   narration log lines emitted by `stack push`. Ported from
 //!   `mergify_cli/stack/push.py::{_log_rebase_performed,
 //!   _log_rebase_skipped, _log_rebase_dry_run}`.
+//! - [`push_helpers`] — `format_pull_description` (strip
+//!   Change-Id + stale Depends-On, append fresh Depends-On)
+//!   and `build_change_tasks` (turn the planned changes into
+//!   the per-PR dependency graph the upserter walks).
 
 pub mod approvals;
 pub mod change_id;
@@ -55,6 +59,7 @@ pub mod changes;
 pub mod commands;
 pub mod local_commits;
 pub mod notes_push;
+pub mod push_helpers;
 pub mod rebase_log;
 pub mod rebase_todo;
 pub mod remote_changes;
