@@ -1,0 +1,1 @@
+address Copilot review: clarify the cli.py comment about ci/freeze unavailability when invoked via python -m mergify_cli
