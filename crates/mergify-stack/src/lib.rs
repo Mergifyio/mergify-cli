@@ -56,12 +56,18 @@
 //!   branch teardown. Ported from
 //!   `mergify_cli/stack/push.py::{create_or_update_pr,
 //!   delete_stack}`.
+//! - [`comment_upsert`] — the two per-PR sticky-comment
+//!   upserters: stack comment (skip-when-single-PR) and
+//!   revision history (parse + append + recover-from-corrupt).
+//!   Ported from `mergify_cli/stack/push.py::{_update_comment_for_pull,
+//!   _update_revision_for_pull}`.
 
 pub mod approvals;
 pub mod change_id;
 pub mod change_type;
 pub mod changes;
 pub mod commands;
+pub mod comment_upsert;
 pub mod local_commits;
 pub mod notes_push;
 pub mod pr_upsert;
