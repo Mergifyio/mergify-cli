@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
 from urllib import parse
 
 import click
@@ -12,7 +11,6 @@ from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.stack import push as stack_push_mod
-from mergify_cli.stack import setup as stack_setup_mod
 
 
 def trunk_type(
@@ -97,98 +95,6 @@ def github_server_to_context(
 def stack(ctx: click.Context, **_kwargs: object) -> None:
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
-
-
-def _print_hooks_status(status: dict[str, Any]) -> None:
-    """Print hooks status in a formatted table."""
-    needs_setup = False
-    needs_force = False
-
-    # Git hooks section
-    console.print("\nGit Hooks Status:\n")
-    git_hooks = status["git_hooks"]
-
-    for hook_name, info in git_hooks.items():
-        console.print(f"  {hook_name}:")
-
-        wrapper_status = info["wrapper_status"]
-        wrapper_path = info["wrapper_path"]
-
-        if wrapper_status == stack_setup_mod.WrapperStatus.INSTALLED:
-            console.print(f"    Wrapper: [green]installed[/] ({wrapper_path})")
-        elif wrapper_status == stack_setup_mod.WrapperStatus.LEGACY:
-            console.print(
-                "    Wrapper: [yellow]legacy[/] (needs --force to migrate)",
-            )
-            needs_force = True
-        else:  # MISSING
-            console.print("    Wrapper: [red]not installed[/]")
-            needs_setup = True
-
-        script_path = info["script_path"]
-        if info["script_installed"]:
-            if info["script_needs_update"]:
-                console.print(f"    Script:  [yellow]needs update[/] ({script_path})")
-                needs_setup = True
-            else:
-                console.print(f"    Script:  [green]up to date[/] ({script_path})")
-        else:
-            console.print("    Script:  [red]not installed[/]")
-            needs_setup = True
-
-        console.print()
-
-    if needs_setup or needs_force:
-        console.print("Run 'mergify stack hooks --setup' to install/upgrade hooks.")
-        if needs_force:
-            console.print(
-                "Run 'mergify stack hooks --setup --force' to force reinstall wrappers.",
-            )
-    else:
-        console.print("[green]All hooks are up to date.[/]")
-
-
-@stack.command(help="Show git hooks status and manage installation")
-@click.option(
-    "--setup",
-    "do_setup",
-    is_flag=True,
-    help="Install or upgrade hooks",
-)
-@click.option(
-    "--force",
-    "-f",
-    is_flag=True,
-    help="Force reinstall wrappers (use with --setup)",
-)
-@utils.run_with_asyncio
-async def hooks(*, do_setup: bool, force: bool) -> None:
-    if do_setup:
-        await stack_setup_mod.stack_setup(force=force)
-    else:
-        status = await stack_setup_mod.get_hooks_status()
-        _print_hooks_status(status)
-
-
-@stack.command(help="Configure git hooks (alias for 'stack hooks --setup')")
-@click.option(
-    "--force",
-    "-f",
-    is_flag=True,
-    help="Force reinstall of hook wrappers, even if user modified them",
-)
-@click.option(
-    "--check",
-    is_flag=True,
-    help="Check status only (use 'stack hooks' instead)",
-)
-@utils.run_with_asyncio
-async def setup(*, force: bool, check: bool) -> None:
-    if check:
-        status = await stack_setup_mod.get_hooks_status()
-        _print_hooks_status(status)
-    else:
-        await stack_setup_mod.stack_setup(force=force)
 
 
 @stack.command(
@@ -311,13 +217,19 @@ async def push(
         raise click.UsageError(msg)
 
     if setup:
-        # backward compat
-        await stack_setup_mod.stack_setup()
+        # Backward-compat: ``--setup`` runs the hook installer and
+        # exits. The Rust binary owns the installer now, so we
+        # subprocess into it rather than re-importing the deleted
+        # ``stack/setup.py``.
+        await utils.run_command("mergify", "stack", "setup")
         return
 
-    # Auto-upgrade hook scripts (not wrappers) unless disabled
+    # Auto-upgrade managed hook scripts (not the user-modifiable
+    # wrappers) unless ``--no-upgrade-hooks`` is set. Same subprocess
+    # path as above — see the deleted ``ensure_hooks_updated`` for
+    # the pre-port shape.
     if not no_upgrade_hooks:
-        await stack_setup_mod.ensure_hooks_updated()
+        await utils.run_command("mergify", "stack", "setup")
 
     await stack_push_mod.stack_push(
         github_server=ctx.obj["github_server"],

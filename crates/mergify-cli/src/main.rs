@@ -161,6 +161,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "drop"),
     ("stack", "edit"),
     ("stack", "fixup"),
+    ("stack", "hooks"),
     ("stack", "list"),
     ("stack", "move"),
     ("stack", "new"),
@@ -168,6 +169,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "open"),
     ("stack", "reorder"),
     ("stack", "reword"),
+    ("stack", "setup"),
     ("stack", "squash"),
     ("stack", "sync"),
     // Internal Python migration helpers. Listed so `looks_native`
@@ -278,6 +280,13 @@ enum NativeCommand {
     /// `mergify stack open [<commit>]` — open the PR for a stack
     /// commit in the default browser.
     StackOpen(StackOpenOpts),
+    /// `mergify stack hooks [--setup] [--force] [-f]` — show the
+    /// status of the managed git hooks (or, with `--setup`,
+    /// install/upgrade them).
+    StackHooks(StackHooksOpts),
+    /// `mergify stack setup [--force] [--check]` — alias for
+    /// `stack hooks --setup`; `--check` reports status instead.
+    StackSetup(StackSetupOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -381,6 +390,16 @@ struct StackOpenOpts {
     branch_prefix: Option<String>,
     trunk: Option<(String, String)>,
     token: Option<String>,
+}
+
+struct StackHooksOpts {
+    do_setup: bool,
+    force: bool,
+}
+
+struct StackSetupOpts {
+    force: bool,
+    check: bool,
 }
 
 struct InternalRebaseTodoRewriteOpts {
@@ -805,6 +824,20 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
                 Err(err) => err.exit(),
             };
             Dispatch::Native(NativeCommand::StackOpen(StackOpenOpts::from(parsed)))
+        }
+        Some("hooks") => {
+            let parsed = match StackHooksCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackHooks(StackHooksOpts::from(parsed)))
+        }
+        Some("setup") => {
+            let parsed = match StackSetupCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackSetup(StackSetupOpts::from(parsed)))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
@@ -1329,6 +1362,93 @@ fn render_stack_list_text(out: &mergify_stack::commands::list::StackListOutput, 
             println!("  [{status_label}] {title} ({short})", title = entry.title);
         }
         println!();
+    }
+}
+
+/// Install / upgrade the git hooks. Prints one human line per
+/// action performed, then a summary footer. Surfaces the same
+/// outcome ``mergify_cli/stack/setup.py`` used to print.
+fn run_stack_setup(force: bool) -> Result<(), mergify_core::CliError> {
+    use mergify_stack::commands::setup::HookAction;
+    let logs = mergify_stack::commands::setup::install(&mergify_stack::commands::setup::Options {
+        repo_dir: None,
+        force,
+    })?;
+    let mut any_legacy_needs_force = false;
+    for log in &logs {
+        for action in &log.actions {
+            match action {
+                HookAction::ScriptInstalled | HookAction::ScriptUpdated => {
+                    println!(
+                        "Updating managed hook script: mergify-hooks/{}.sh",
+                        log.hook_name
+                    );
+                }
+                HookAction::WrapperInstalled => {
+                    println!("Installing hook wrapper: {}", log.hook_name);
+                }
+                HookAction::WrapperMigrated => {
+                    println!("Migrating legacy hook to new format: {}", log.hook_name);
+                }
+                HookAction::WrapperLegacyNeedsForce => {
+                    println!(
+                        "Found legacy hook: {} (run with --force to migrate)",
+                        log.hook_name
+                    );
+                    any_legacy_needs_force = true;
+                }
+                HookAction::ScriptUpToDate | HookAction::WrapperAlreadyInstalled => {}
+            }
+        }
+    }
+    if any_legacy_needs_force {
+        println!("Some hooks are legacy. Run 'mergify stack hooks --setup --force' to migrate.");
+    }
+    Ok(())
+}
+
+/// Print the hooks status table. Mirrors ``_print_hooks_status``
+/// in ``mergify_cli/stack/cli.py``.
+fn render_hooks_status(status: &mergify_stack::commands::setup::HooksStatus) {
+    use mergify_stack::commands::setup::WrapperStatus;
+    let mut needs_setup = false;
+    let mut needs_force = false;
+
+    println!("\nGit Hooks Status:\n");
+    for h in &status.git_hooks {
+        println!("  {}:", h.hook_name);
+        let wrapper_line = match h.wrapper_status {
+            WrapperStatus::Installed => format!("    Wrapper: installed ({})", h.wrapper_path),
+            WrapperStatus::Legacy => {
+                needs_force = true;
+                "    Wrapper: legacy (needs --force to migrate)".to_string()
+            }
+            WrapperStatus::Missing => {
+                needs_setup = true;
+                "    Wrapper: not installed".to_string()
+            }
+        };
+        println!("{wrapper_line}");
+        if h.script_installed {
+            if h.script_needs_update {
+                println!("    Script:  needs update ({})", h.script_path);
+                needs_setup = true;
+            } else {
+                println!("    Script:  up to date ({})", h.script_path);
+            }
+        } else {
+            println!("    Script:  not installed");
+            needs_setup = true;
+        }
+        println!();
+    }
+    if needs_setup || needs_force {
+        println!("Run 'mergify stack hooks --setup' to install/upgrade hooks.");
+        if needs_force {
+            println!("Run 'mergify stack hooks --setup --force' to force reinstall wrappers.");
+        }
+    } else {
+        println!("All hooks are up to date.");
     }
 }
 
@@ -2234,6 +2354,24 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackHooks(opts) => {
+                if opts.do_setup {
+                    run_stack_setup(opts.force)?;
+                } else {
+                    let status = mergify_stack::commands::setup::status(None)?;
+                    render_hooks_status(&status);
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
+            NativeCommand::StackSetup(opts) => {
+                if opts.check {
+                    let status = mergify_stack::commands::setup::status(None)?;
+                    render_hooks_status(&status);
+                } else {
+                    run_stack_setup(opts.force)?;
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -2930,6 +3068,56 @@ impl From<StackOpenCli> for StackOpenOpts {
             branch_prefix: cli.branch_prefix,
             trunk: cli.trunk,
             token: cli.token,
+        }
+    }
+}
+
+/// `mergify stack hooks [--setup] [--force]`.
+#[derive(Parser)]
+#[command(
+    name = "hooks",
+    about = "Show git hooks status and manage installation"
+)]
+struct StackHooksCli {
+    /// Install or upgrade hooks.
+    #[arg(long = "setup", action = clap::ArgAction::SetTrue)]
+    do_setup: bool,
+
+    /// Force reinstall wrappers (use with --setup).
+    #[arg(short = 'f', long = "force", action = clap::ArgAction::SetTrue)]
+    force: bool,
+}
+
+impl From<StackHooksCli> for StackHooksOpts {
+    fn from(cli: StackHooksCli) -> Self {
+        Self {
+            do_setup: cli.do_setup,
+            force: cli.force,
+        }
+    }
+}
+
+/// `mergify stack setup [--force] [--check]`.
+#[derive(Parser)]
+#[command(
+    name = "setup",
+    about = "Configure git hooks (alias for 'stack hooks --setup')"
+)]
+struct StackSetupCli {
+    /// Force reinstall of hook wrappers, even if user modified them.
+    #[arg(short = 'f', long = "force", action = clap::ArgAction::SetTrue)]
+    force: bool,
+
+    /// Check status only (use 'stack hooks' instead).
+    #[arg(long = "check", action = clap::ArgAction::SetTrue)]
+    check: bool,
+}
+
+impl From<StackSetupCli> for StackSetupOpts {
+    fn from(cli: StackSetupCli) -> Self {
+        Self {
+            force: cli.force,
+            check: cli.check,
         }
     }
 }
