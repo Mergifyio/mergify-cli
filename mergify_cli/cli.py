@@ -26,10 +26,8 @@ from mergify_cli import VERSION
 from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import utils
-from mergify_cli.ci import cli as ci_cli_mod
 from mergify_cli.dym import DYMGroup
 from mergify_cli.exit_codes import ExitCode
-from mergify_cli.freeze import cli as freeze_cli_mod
 from mergify_cli.stack import cli as stack_cli_mod
 
 
@@ -56,8 +54,13 @@ def cli(
 
 
 cli.add_command(stack_cli_mod.stack)
-cli.add_command(ci_cli_mod.ci)
-cli.add_command(freeze_cli_mod.freeze)
+# `ci` and `freeze` are implemented natively in Rust and intercepted
+# by the `mergify` binary before reaching this click group (see
+# ``NATIVE_COMMANDS`` in ``crates/mergify-cli/src/main.rs``). They
+# are intentionally NOT registered here, which means
+# ``python -m mergify_cli ci ...`` / ``python -m mergify_cli freeze ...``
+# will fail with "No such command" — that path is unsupported; use
+# the ``mergify`` binary instead.
 
 
 def main() -> None:
