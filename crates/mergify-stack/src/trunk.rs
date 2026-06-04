@@ -162,7 +162,6 @@ fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command as StdCommand;
     use tempfile::TempDir;
 
     fn init_repo() -> TempDir {
@@ -173,7 +172,7 @@ mod tests {
             &["config", "user.name", "Test"],
             &["commit", "--allow-empty", "-m", "root"],
         ] {
-            let ok = StdCommand::new("git")
+            let ok = crate::test_env::isolated_git()
                 .arg("-C")
                 .arg(dir.path())
                 .args(args)
@@ -186,7 +185,7 @@ mod tests {
     }
 
     fn run(dir: &Path, args: &[&str]) {
-        let ok = StdCommand::new("git")
+        let ok = crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(args)
@@ -241,7 +240,7 @@ mod tests {
     fn get_trunk_falls_back_to_origin_head() {
         // Simulate `origin/HEAD -> origin/main` with a bare upstream.
         let upstream_dir = tempfile::tempdir().unwrap();
-        let ok = StdCommand::new("git")
+        let ok = crate::test_env::isolated_git()
             .arg("-C")
             .arg(upstream_dir.path())
             .args(["init", "-q", "--bare", "-b", "main"])

@@ -372,7 +372,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path();
         let git = |args: &[&str]| {
-            let out = Command::new("git")
+            let out = crate::test_env::isolated_git()
                 .arg("-C")
                 .arg(path)
                 .args(args)
