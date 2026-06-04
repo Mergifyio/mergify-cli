@@ -6,12 +6,17 @@ name = "mergify_cli"
 # hatch-vcs did pre-port. Cargo.toml stays at "0.0.0" because Cargo
 # SemVer rejects the 4-component calver format the project uses
 # (`2026.4.23.1`); `mergify --version` from the Rust binary will
-# report the placeholder until Phase 6, when versioning becomes
-# Rust-native end-to-end.
+# report the placeholder until versioning becomes Rust-native end-
+# to-end.
 version = "0.0.0"
 description = "Mergify CLI is a tool that automates the creation and management of stacked pull requests on GitHub and handles CI results upload"
 authors = [{ name = "Mergify Team", email = "hello@mergify.com" }]
-requires-python = ">=3.13"
+# No runtime Python dependencies — the wheel ships a single Rust
+# binary. `requires-python` is kept for the wheel's metadata so
+# `pip install` resolves a recent-enough interpreter to actually
+# run the install scripts; nothing in the binary needs Python at
+# runtime.
+requires-python = ">=3.10"
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["git", "github", "pull-request", "stacked-pr", "ci", "merge"]
@@ -19,25 +24,12 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
     "Topic :: Software Development :: Version Control :: Git",
-    "Typing :: Typed",
 ]
 
-dependencies = [
-    "httpx==0.28.1",
-    "jsonschema==4.26.0",
-    "rich==15.0.0",
-    "aiofiles==25.1.0",
-    "click==8.4.1",
-    "tenacity==9.1.4",
-    "pyyaml==6.0.3",
-    "pydantic==2.13.4",
-    "questionary>=2.0.0",
-    "tzlocal==5.3.1",
-]
+# Empty: the binary has no Python runtime deps.
+dependencies = []
 
 [project.urls]
 Homepage = "https://mergify.com"
@@ -46,38 +38,17 @@ Repository = "https://github.com/Mergifyio/mergify-cli"
 Issues = "https://github.com/Mergifyio/mergify-cli/issues"
 Changelog = "https://github.com/Mergifyio/mergify-cli/releases"
 
-[dependency-groups]
-dev = [
-    "mypy==2.1.0",
-    "mypy-extensions==1.1.0",
-    "ruff==0.15.14",
-    "pytest==9.0.3",
-    "poethepoet==0.46.0",
-    "pytest-asyncio==1.4.0",
-    "respx==0.23.1",
-    "types-aiofiles==25.1.0.20260518",
-    "types-click==7.1.8",
-    "types-jsonschema==4.26.0.20260518",
-    "types-pyyaml==6.0.12.20260518",
-    "anys==0.3.1",
-    "responses==0.26.1",
-]
-
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-# The wheel contains both the Rust binary `mergify` (built from
-# crates/mergify-cli) and the Python package `mergify_cli/`. The
-# Rust binary is the install-time `mergify` entry point; on
-# un-ported subcommands it shells out to the sibling `python3` in
-# the venv to run `python -m mergify_cli` against the bundled
-# package — keeping a single copy of every command at any moment.
+# The wheel ships only the Rust binary `mergify` (built from
+# `crates/mergify-cli`). The previous incarnation also bundled a
+# Python `mergify_cli/` package for un-ported subcommands; every
+# command is now native, so the wheel is binary-only.
 bindings = "bin"
 manifest-path = "crates/mergify-cli/Cargo.toml"
-python-source = "."
-module-name = "mergify_cli"
 strip = true
 # Bundle LICENSE in both the wheel and sdist. PEP 639 metadata
 # (auto-derived by maturin from `license = "Apache-2.0"`) emits a
@@ -86,191 +57,3 @@ strip = true
 # distribution file` if the file isn't actually bundled. Listing it
 # here keeps wheel + sdist in sync with the metadata.
 include = ["LICENSE"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-markers = [
-    "live: hits the real Mergify API. Skipped unless LIVE_TEST_MERGIFY_TOKEN is set; runs in the dedicated `func-tests-live` workflow only.",
-]
-
-[tool.poe]
-include = ["poe.toml"]
-
-[tool.mypy]
-strict = true
-warn_unreachable = true
-exclude = [".venv"]
-files = ["mergify_cli"]
-show_error_codes = true
-
-[tool.ruff]
-line-length = 88
-indent-width = 4
-target-version = "py313"
-
-[tool.ruff.lint]
-preview = true
-select = [
- "E", "W", "F", "I", "A", "B", "Q",
- "C4", "T10", "ISC", "ICN", "BLE",
- "G", "RSE", "TID", "TRY", "UP",
- "RUF", "RET", "DTZ", "TC", "COM",
- "PERF", "PT", "PGH", "SIM",
- "PIE", "YTT", "T20", "ARG", "PTH",
- "N", "PYI", "FURB", "FBT", "S",
- "NPY", "FA", "LOG", "SLOT",
- "PLC", "PLE", "PLR", "PLW",
- "FAST",
- # FIXME(sileht): doctring/rst-docstring like
- # "D"
-]
-
-ignore = [
-    # NOTE: Parameter {arg_name} appears in route path, but not in {function_name} signature
-    "FAST003",
-    # NOTE: subclassing of collections.UserDict/List/String instead of dict/list/string
-    "FURB189",
-    # NOTE: we don't care that much about shadowing Python modules
-    "A004", "A005",
-    # NOTE(Greesb): subprocess module is possibly insecure
-    "S404",
-    # NOTE(Greesb): Starting a process with a partial executable path
-    "S607",
-    # NOTE(Greesb): itertools.starmap is less efficient than list comprehensions
-    "FURB140",
-    # NOTE(Greesb): Checks for union annotations that contain redundant numeric types (e.g., int | float).
-    # too confusing to only have `float` as typing when the function can also receive an `int`
-    "PYI041",
-    # NOTE(Greesb): Function name should be lowercase
-    # For a lot of usecases it makes sense to want to not use lowercase
-    "N802",
-    # NOTE(Greesb): variable in function should be lowercase
-    # For a lot of usecases it makes sense to want to not use lowercase variables
-    "N806",
-    # NOTE(Greesb): contextlib.suppress is slower than try-except-pass
-    "SIM105",
-    # NOTE(Greesb): Import should be at the top level of the file
-    # we already have isort for this, also when we do not have an import at top level
-    # it's because of circular imports
-    "PLC0415",
-    # NOTE(Greesb): Method could be a function, classmethod or static method
-    # rule useless since we have a lot of abstraction
-    "PLR6301",
-    # NOTE(Greesb): Magic value used in comparison
-    # Interesting but will require a refactor, and will need to be ignored
-    # in tests
-    "PLR2004",
-    # NOTE(Greesb): too many public methods
-    "PLR0904",
-    # NOTE(Greesb): Too many return, branches, arguments, local variables, statements, positional arguments.
-    # Interesting but will require a big refactor
-    "PLR0911", "PLR0912", "PLR0913", "PLR0914", "PLR0915", "PLR0917",
-    # NOTE: Too many statements in try clause — same "too many X" family as PLR0915,
-    # would require a big refactor for little gain.
-    "PLW0717",
-    # NOTE(Greesb): Too many nested blocks
-    # interesting but require some refactor
-    "PLR1702",
-    # NOTE(Greesb): custom class with __eq__ but no __hash__
-    # We don't need it
-    "PLW1641",
-    # NOTE(Greesb): Checks for the use of global statements to update identifiers.
-    "PLW0603",
-    # NOTE(Greesb): subprocess.run without explicit check argument
-    "PLW1510",
-    # NOTE(Greesb): continue not supported inside finally clause
-    # only useful for python < 3.8
-    "PLE0116",
-    # NOTE(Greesb): we use mock.patch.object, which automatically pass
-    # the mock as an argument to the test if no `new` is specified, without
-    # needing the mock itself.
-    "PT019",
-    # NOTE(sileht): not compatible with ruff-format
-    "ISC001",
-    # NOTE(sileht): line-length is up to black
-    "E501",
-    # NOTE(sileht): we prefer using exc_info=True
-    "G201", "TRY400",
-    # NOTE(sileht): "Unnecessary parentheses on raised exception", this breaks
-    # isinstance on exception
-    "RSE102",
-    # NOTE(sileht): No exception with message set via __init__
-    "TRY003", "TRY301",
-    # NOTE(sileht): This enforce usage of raise ... from ...
-    "B904",
-    # FIXME(sileht): very interesting, ruff BLE is far better that flake8-blind-except
-    "BLE001",
-    # NOTE(Greesb): mypy doesn't support the `type myvar = [...]` syntax yet
-    "UP040",
-]
-
-[tool.ruff.lint.flake8-pytest-style]
-parametrize-values-type = "list"
-parametrize-values-row-type = "tuple"
-
-[tool.ruff.lint.flake8-type-checking]
-strict = true
-quote-annotations = true
-# https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking_runtime-evaluated-base-classes
-runtime-evaluated-base-classes = [
-    "typing.Annotated",
-    "pydantic.BaseModel",
-    "pydantic.TypeAdapter",
-    # typing.TypedDict is generally used by pydantic for validation,
-    # so we need the imports of the key of a typing.TypedDict class
-    # to be available at runtime.
-    "typing.TypedDict",
-]
-# https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking_exempt-modules
-# Modules that should not be moved to a type-checking block.
-exempt-modules = [
-    "typing",
-    "annotated_types",
-]
-# https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking_runtime-evaluated-decorators
-# Exempt classes and functions decorated with any of the enumerated decorators
-# from being moved into type-checking blocks.
-runtime-evaluated-decorators = [
-    "pydantic.dataclasses.dataclass",
-]
-
-
-[tool.ruff.lint.per-file-ignores]
-"mergify_cli/tests/**/*.py" = [
-    # Use of assert detected
-    "S101",
-    # hardcoded passwords
-    "S105", "S106",
-    # Standard pseudo-random generators are not suitable for cryptographic purposes
-    "S311",
-    # subprocess call: check for execution of untrusted input
-    "S603",
-    # Magic value used in comparison
-    "PLR2004",
-    # Function is declared async, but doesn't await or use async features.
-    "RUF029",
-]
-"compat-tests/**/*.py" = [
-    # Use of assert detected — this is pytest
-    "S101",
-    # subprocess call: check for execution of untrusted input
-    "S603",
-]
-"func-tests/**/*.py" = [
-    # Use of assert detected — this is pytest
-    "S101",
-    # subprocess call: check for execution of untrusted input
-    "S603",
-    # hardcoded passwords / tokens — fixtures only, not real creds
-    "S105", "S106",
-]
-
-[tool.ruff.lint.isort]
-force-single-line = true
-force-sort-within-sections = true
-lines-after-imports = 2
-known-first-party = ["mergify_cli"]
-required-imports = ["from __future__ import annotations"]
-
-[tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"

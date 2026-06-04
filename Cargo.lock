@@ -1163,7 +1163,6 @@ dependencies = [
  "mergify-config",
  "mergify-core",
  "mergify-freeze",
- "mergify-py-shim",
  "mergify-queue",
  "mergify-stack",
  "regex",
@@ -1221,15 +1220,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "wiremock",
-]
-
-[[package]]
-name = "mergify-py-shim"
-version = "0.0.0"
-dependencies = [
- "temp-env",
- "tempfile",
- "thiserror",
 ]
 
 [[package]]
