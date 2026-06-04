@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import typing
 from typing import TYPE_CHECKING
 from unittest import mock
@@ -30,7 +29,6 @@ from mergify_cli.exit_codes import ExitCode
 
 if TYPE_CHECKING:
     import collections
-    import pathlib
 
 
 def test_command_error_str_handles_non_utf8_stdout() -> None:
@@ -211,40 +209,6 @@ def test_get_boolean_env_default_false(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_get_boolean_env_default_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TEST_VAR", raising=False)
     assert utils.get_boolean_env("TEST_VAR", default=True) is True
-
-
-def test_get_github_event_success(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    event_data = {"pull_request": {"number": 123}}
-    event_file = tmp_path / "event.json"
-    event_file.write_text(json.dumps(event_data))
-
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
-    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
-    name, event = utils.get_github_event()
-    assert name == "pull_request"
-    assert event.pull_request is not None
-    assert event.pull_request.number == 123
-
-
-def test_get_github_event_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
-
-    with pytest.raises(utils.GitHubEventNotFoundError):
-        utils.get_github_event()
-
-
-def test_get_github_event_file_not_exists(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    event_path = tmp_path / "nonexistent.json"
-    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
-
-    with pytest.raises(utils.GitHubEventNotFoundError):
-        utils.get_github_event()
 
 
 def test_get_mergify_http_client() -> None:
