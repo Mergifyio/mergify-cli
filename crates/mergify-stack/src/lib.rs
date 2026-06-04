@@ -29,7 +29,16 @@
 //!   that materialise the rebase-aware revision-history compare
 //!   URL. Git-only half of `mergify_cli/stack/replay.py`; the
 //!   HTTP upload step lands separately.
+//! - [`revision_history`] — the "Revision history" sticky
+//!   comment renderer + parser. Ported from
+//!   `mergify_cli/stack/push.py::RevisionHistoryComment`.
+//! - [`approvals`] — the rebase/no-rebase decision for
+//!   `stack push`: skip the rebase when PRs are already
+//!   approved (so the approvals aren't dismissed) unless the
+//!   bottom of the stack has a real merge conflict with
+//!   trunk. Ported from `mergify_cli/stack/approvals.py`.
 
+pub mod approvals;
 pub mod change_id;
 pub mod change_type;
 pub mod changes;
