@@ -38,6 +38,7 @@ pub mod local_commits;
 pub mod rebase_todo;
 pub mod remote_changes;
 pub mod replay;
+pub mod revision_history;
 pub mod slug;
 pub mod stack_comment;
 pub mod stack_context;

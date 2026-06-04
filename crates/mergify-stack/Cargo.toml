@@ -10,6 +10,7 @@ description = "Native implementation of `mergify stack` subcommands."
 publish = false
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 mergify-core = { path = "../mergify-core" }
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
