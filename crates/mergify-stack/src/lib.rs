@@ -21,6 +21,10 @@
 //!   `refs/pull/<n>/head` fetch helper. Leaf-only port from
 //!   `mergify_cli/stack/push.py`; the bridge that lets Python
 //!   consume it ships in a follow-up.
+//! - [`stack_comment`] — the "this PR is part of a stack"
+//!   sticky comment renderer + header recogniser. Pure
+//!   markdown/JSON formatting ported from
+//!   `mergify_cli/stack/push.py::StackComment`.
 
 pub mod change_id;
 pub mod change_type;
@@ -30,6 +34,7 @@ pub mod local_commits;
 pub mod rebase_todo;
 pub mod remote_changes;
 pub mod slug;
+pub mod stack_comment;
 pub mod stack_context;
 pub mod sync_status;
 pub mod trunk;
