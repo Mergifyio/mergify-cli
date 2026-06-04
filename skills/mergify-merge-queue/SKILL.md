@@ -1,13 +1,24 @@
 ---
 name: mergify-merge-queue
-description: Use Mergify merge queue to monitor, inspect, pause, and manage the merge queue. ALWAYS use this skill when checking queue status, investigating PR merge state, pausing/unpausing the queue, or debugging merge failures. Triggers on merge queue, queue status, queue pause, queue show, pause, unpause, frozen, bisecting, batch, CI checks.
+description: Use Mergify merge queue to queue/dequeue PRs and to monitor, inspect, pause, and manage the merge queue. ALWAYS use this skill when queuing or dequeuing a PR, checking queue status, investigating PR merge state, pausing/unpausing the queue, or debugging merge failures. Triggers on queue a PR, requeue, dequeue, merge queue, queue status, queue pause, queue show, pause, unpause, frozen, bisecting, batch, CI checks.
 ---
 
 # Mergify Merge Queue
 
 ## Overview
 
-The merge queue serializes PR merges, running CI on temporary merge commits to catch integration failures before they reach the target branch. Use the CLI to monitor queue state, inspect individual PRs, and manage the queue.
+The merge queue serializes PR merges, running CI on temporary merge commits to catch integration failures before they reach the target branch. Use comments on the PR to queue/dequeue it, and the CLI to monitor queue state, inspect individual PRs, and manage the queue.
+
+## Queuing and Dequeuing a PR
+
+Queue, dequeue, and requeue actions are driven by **comments on the pull request**, not the CLI:
+
+| Comment | Effect |
+|---------|--------|
+| `@mergifyio queue` | Add the PR to the merge queue (also use to **requeue** a PR that was dequeued) |
+| `@mergifyio dequeue` | Remove (dequeue) the PR from the merge queue |
+
+When Mergify processes the comment, it adds a 👍 (thumbs up) reaction to the comment to acknowledge receipt. After queuing, use `mergify queue show <PR_NUMBER>` to watch the PR's status as it progresses through the queue.
 
 ## Commands
 
@@ -73,6 +84,7 @@ mergify queue unpause
 ## Troubleshooting
 
 **PR not entering the queue:**
+- Make sure the PR was queued: post `@mergifyio queue` and confirm Mergify reacted with 👍 on the comment
 - Check that the PR's merge conditions are met: `mergify queue show <PR_NUMBER> -v`
 - Look at the conditions section for unmet requirements
 
