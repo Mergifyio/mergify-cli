@@ -30,6 +30,7 @@ use mergify_ci::git_refs::Format as GitRefsFormat;
 use mergify_ci::git_refs::GitRefsOptions;
 use mergify_ci::junit_process::JunitProcessOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
+use mergify_ci::tests_quarantine::GetOptions;
 use mergify_ci::tests_quarantine::QuarantineOptions;
 use mergify_ci::tests_quarantine::QuarantinedOptions;
 use mergify_ci::tests_quarantine::UnquarantineOptions;
@@ -145,9 +146,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("ci", "junit-process"),
     ("ci", "junit-upload"),
     ("tests", "show"),
-    ("tests", "quarantine"),
-    ("tests", "unquarantine"),
-    ("tests", "quarantined"),
+    ("tests", "quarantines"),
     ("queue", "pause"),
     ("queue", "unpause"),
     ("queue", "status"),
@@ -194,6 +193,7 @@ enum NativeCommand {
     TestsShow(TestsShowOpts),
     TestsQuarantine(TestsQuarantineOpts),
     TestsUnquarantine(TestsUnquarantineOpts),
+    TestsQuarantineGet(TestsQuarantineGetOpts),
     TestsQuarantined(TestsQuarantinedOpts),
     QueuePause(QueuePauseOpts),
     QueueUnpause(QueueUnpauseOpts),
@@ -402,6 +402,14 @@ struct TestsUnquarantineOpts {
     json: bool,
 }
 
+struct TestsQuarantineGetOpts {
+    repository: Option<String>,
+    name_or_id: String,
+    token: Option<String>,
+    api_url: Option<String>,
+    json: bool,
+}
+
 struct TestsQuarantinedOpts {
     repository: Option<String>,
     token: Option<String>,
@@ -564,6 +572,51 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             Dispatch::Native(NativeCommand::StackEdit(StackEditOpts::from(parsed)))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
+    }
+}
+
+/// Build the run options for `quarantines add`.
+fn quarantine_opts(args: TestsQuarantineCliArgs) -> TestsQuarantineOpts {
+    TestsQuarantineOpts {
+        repository: args.repository,
+        test_name: args.test_name,
+        reason: args.reason,
+        branch: args.branch,
+        token: args.token,
+        api_url: args.api_url,
+        json: args.json,
+    }
+}
+
+/// Build the run options for `quarantines remove`.
+fn unquarantine_opts(args: TestsUnquarantineCliArgs) -> TestsUnquarantineOpts {
+    TestsUnquarantineOpts {
+        repository: args.repository,
+        name_or_id: args.name_or_id,
+        token: args.token,
+        api_url: args.api_url,
+        json: args.json,
+    }
+}
+
+/// Build the run options for `quarantines list`.
+fn quarantined_opts(args: TestsQuarantinedCliArgs) -> TestsQuarantinedOpts {
+    TestsQuarantinedOpts {
+        repository: args.repository,
+        token: args.token,
+        api_url: args.api_url,
+        json: args.json,
+    }
+}
+
+/// Build the run options for `quarantines get`.
+fn quarantine_get_opts(args: TestsQuarantineGetCliArgs) -> TestsQuarantineGetOpts {
+    TestsQuarantineGetOpts {
+        repository: args.repository,
+        name_or_id: args.name_or_id,
+        token: args.token,
+        api_url: args.api_url,
+        json: args.json,
     }
 }
 
@@ -751,55 +804,21 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             json,
         })),
         Subcommands::Tests(TestsArgs {
-            command:
-                TestsSubcommand::Quarantine(TestsQuarantineCliArgs {
-                    test_name,
-                    repository,
-                    reason,
-                    branch,
-                    token,
-                    api_url,
-                    json,
-                }),
-        }) => Dispatch::Native(NativeCommand::TestsQuarantine(TestsQuarantineOpts {
-            repository,
-            test_name,
-            reason,
-            branch,
-            token,
-            api_url,
-            json,
-        })),
-        Subcommands::Tests(TestsArgs {
-            command:
-                TestsSubcommand::Unquarantine(TestsUnquarantineCliArgs {
-                    name_or_id,
-                    repository,
-                    token,
-                    api_url,
-                    json,
-                }),
-        }) => Dispatch::Native(NativeCommand::TestsUnquarantine(TestsUnquarantineOpts {
-            repository,
-            name_or_id,
-            token,
-            api_url,
-            json,
-        })),
-        Subcommands::Tests(TestsArgs {
-            command:
-                TestsSubcommand::Quarantined(TestsQuarantinedCliArgs {
-                    repository,
-                    token,
-                    api_url,
-                    json,
-                }),
-        }) => Dispatch::Native(NativeCommand::TestsQuarantined(TestsQuarantinedOpts {
-            repository,
-            token,
-            api_url,
-            json,
-        })),
+            command: TestsSubcommand::Quarantines(TestsQuarantinesArgs { command }),
+        }) => Dispatch::Native(match command {
+            QuarantinesSubcommand::Add(args) => {
+                NativeCommand::TestsQuarantine(quarantine_opts(args))
+            }
+            QuarantinesSubcommand::Remove(args) => {
+                NativeCommand::TestsUnquarantine(unquarantine_opts(args))
+            }
+            QuarantinesSubcommand::Get(args) => {
+                NativeCommand::TestsQuarantineGet(quarantine_get_opts(args))
+            }
+            QuarantinesSubcommand::List(args) => {
+                NativeCommand::TestsQuarantined(quarantined_opts(args))
+            }
+        }),
         Subcommands::Queue(QueueArgs {
             repository,
             token,
@@ -970,6 +989,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
         NativeCommand::TestsShow(opts) if opts.json => OutputMode::Json,
         NativeCommand::TestsQuarantine(opts) if opts.json => OutputMode::Json,
         NativeCommand::TestsUnquarantine(opts) if opts.json => OutputMode::Json,
+        NativeCommand::TestsQuarantineGet(opts) if opts.json => OutputMode::Json,
         NativeCommand::TestsQuarantined(opts) if opts.json => OutputMode::Json,
         _ => OutputMode::Human,
     };
@@ -1099,6 +1119,18 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::TestsUnquarantine(opts) => {
                 mergify_ci::tests_quarantine::unquarantine(
                     UnquarantineOptions {
+                        repository: opts.repository.as_deref(),
+                        name_or_id: &opts.name_or_id,
+                        token: opts.token.as_deref(),
+                        api_url: opts.api_url.as_deref(),
+                    },
+                    &mut output,
+                )
+                .await
+            }
+            NativeCommand::TestsQuarantineGet(opts) => {
+                mergify_ci::tests_quarantine::get(
+                    GetOptions {
                         repository: opts.repository.as_deref(),
                         name_or_id: &opts.name_or_id,
                         token: opts.token.as_deref(),
@@ -1914,12 +1946,26 @@ struct TestsArgs {
 enum TestsSubcommand {
     /// Look up tests by name and print their health and metrics.
     Show(TestsShowCliArgs),
+    /// Manage the CI Insights quarantine.
+    Quarantines(TestsQuarantinesArgs),
+}
+
+#[derive(clap::Args)]
+struct TestsQuarantinesArgs {
+    #[command(subcommand)]
+    command: QuarantinesSubcommand,
+}
+
+#[derive(Subcommand)]
+enum QuarantinesSubcommand {
     /// Add a test to the CI Insights quarantine.
-    Quarantine(TestsQuarantineCliArgs),
+    Add(TestsQuarantineCliArgs),
     /// Remove a test from the CI Insights quarantine.
-    Unquarantine(TestsUnquarantineCliArgs),
+    Remove(TestsUnquarantineCliArgs),
+    /// Print a single quarantine by test name or id.
+    Get(TestsQuarantineGetCliArgs),
     /// List the tests currently in the CI Insights quarantine.
-    Quarantined(TestsQuarantinedCliArgs),
+    List(TestsQuarantinedCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -2016,7 +2062,38 @@ struct TestsQuarantineCliArgs {
 #[derive(clap::Args)]
 struct TestsUnquarantineCliArgs {
     /// Test to remove from quarantine: either its fully qualified name
-    /// or the quarantine id (as printed by `tests quarantine`).
+    /// or the quarantine id (as printed by `tests quarantines add`).
+    #[arg(value_name = "NAME_OR_ID")]
+    name_or_id: String,
+
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
+    #[arg(
+        long,
+        short = 'r',
+        value_parser = mergify_ci::detector::parse_owner_repo,
+    )]
+    repository: Option<String>,
+
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+
+    /// Emit a single JSON document to stdout instead of human prose.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct TestsQuarantineGetCliArgs {
+    /// Quarantine to print: either the test's fully qualified name or
+    /// the quarantine id (as printed by `tests quarantines add`).
     #[arg(value_name = "NAME_OR_ID")]
     name_or_id: String,
 
@@ -2418,5 +2495,58 @@ mod tests {
         assert_eq!(opts.token.as_deref(), Some("tok"));
         assert_eq!(opts.tests_target_branch.as_deref(), Some("main"));
         assert_eq!(opts.files, vec!["report.xml"]);
+    }
+
+    #[test]
+    fn tests_quarantines_add_dispatches_natively() {
+        let parsed = parse(&[
+            "tests",
+            "quarantines",
+            "add",
+            "test_login",
+            "--reason",
+            "flaky",
+            "-r",
+            "owner/repo",
+        ]);
+        let Dispatch::Native(NativeCommand::TestsQuarantine(opts)) = dispatch_from_parsed(parsed)
+        else {
+            panic!("tests quarantines add must dispatch to TestsQuarantine");
+        };
+        assert_eq!(opts.test_name, "test_login");
+        assert_eq!(opts.reason, "flaky");
+        assert_eq!(opts.repository.as_deref(), Some("owner/repo"));
+    }
+
+    #[test]
+    fn tests_quarantines_get_dispatches_natively() {
+        let parsed = parse(&[
+            "tests",
+            "quarantines",
+            "get",
+            "test_login",
+            "-r",
+            "owner/repo",
+        ]);
+        let Dispatch::Native(NativeCommand::TestsQuarantineGet(opts)) =
+            dispatch_from_parsed(parsed)
+        else {
+            panic!("tests quarantines get must dispatch to TestsQuarantineGet");
+        };
+        assert_eq!(opts.name_or_id, "test_login");
+        assert_eq!(opts.repository.as_deref(), Some("owner/repo"));
+    }
+
+    #[test]
+    fn removed_flat_quarantine_commands_are_not_native() {
+        // The deprecated flat commands were removed; only the
+        // `quarantines` subgroup routes natively now.
+        let native = |argv: &[&str]| {
+            looks_native(&argv.iter().map(|s| (*s).to_string()).collect::<Vec<_>>())
+        };
+        assert!(!native(&["mergify", "tests", "quarantine"]));
+        assert!(!native(&["mergify", "tests", "unquarantine"]));
+        assert!(!native(&["mergify", "tests", "quarantined"]));
+        assert!(native(&["mergify", "tests", "quarantines", "add"]));
     }
 }

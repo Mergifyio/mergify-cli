@@ -24,7 +24,7 @@ and global options (`--token`, `--repository`, `--api-url`).
   [Docs](https://docs.mergify.com/ci-insights/)
 - **`mergify tests`** — Inspect test health and manage quarantine for tests
   tracked by Mergify CI Insights (`mergify tests show NAME...`,
-  `mergify tests quarantine NAME`, `mergify tests unquarantine NAME`).
+  `mergify tests quarantines add NAME`, `mergify tests quarantines remove NAME`).
   [Docs](https://docs.mergify.com/ci-insights/)
 - **`mergify queue`** — Monitor and manage the Mergify merge queue.
   [Docs](https://docs.mergify.com/merge-queue/)

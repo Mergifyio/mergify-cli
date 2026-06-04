@@ -1,15 +1,15 @@
-//! `mergify tests quarantine` / `mergify tests unquarantine` /
-//! `mergify tests quarantined` — add a test to, remove it from, or list
-//! the CI Insights quarantine through the public quarantine API.
+//! `mergify tests quarantines add` / `remove` / `get` / `list` — add a
+//! test to, remove it from, fetch one from, or list the CI Insights
+//! quarantine through the public quarantine API.
 //!
-//! `quarantine` addresses a test by its fully qualified name.
-//! `unquarantine` accepts either the quarantine id (deleted directly,
-//! as the DELETE endpoint is keyed by it) or a test name. The
-//! quarantine resource has the composite primary key
-//! `(repository, test_name)`, so a name resolves to at most one
-//! quarantine per repository — `unquarantine` relies on this when it
-//! looks the name up in the list endpoint to recover the id.
-//! `quarantined` lists that same endpoint, rendering every record.
+//! `add` addresses a test by its fully qualified name. `remove`
+//! accepts either the quarantine id (deleted directly, as the DELETE
+//! endpoint is keyed by it) or a test name. The quarantine resource
+//! has the composite primary key `(repository, test_name)`, so a name
+//! resolves to at most one quarantine per repository — `remove` and
+//! `get` rely on this when they look the name up in the list endpoint.
+//! `list` renders every record; `get` filters that same list to the
+//! single match (the API exposes no single-quarantine GET).
 
 use std::io::{self, Write};
 
@@ -54,6 +54,17 @@ pub struct QuarantinedOptions<'a> {
     /// Explicit `--repository owner/repo`, or `None` to detect it
     /// from the CI environment.
     pub repository: Option<&'a str>,
+    pub token: Option<&'a str>,
+    pub api_url: Option<&'a str>,
+}
+
+pub struct GetOptions<'a> {
+    /// Explicit `--repository owner/repo`, or `None` to detect it
+    /// from the CI environment.
+    pub repository: Option<&'a str>,
+    /// A test name or a quarantine id. A UUID-shaped value is matched
+    /// against the quarantine id; anything else against the test name.
+    pub name_or_id: &'a str,
     pub token: Option<&'a str>,
     pub api_url: Option<&'a str>,
 }
@@ -130,21 +141,55 @@ pub async fn quarantined(
     opts: QuarantinedOptions<'_>,
     output: &mut dyn Output,
 ) -> Result<ExitCode, CliError> {
-    let repository = resolve_repository(opts.repository)?;
-    let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_token(opts.token)?;
-    let api_url = auth::resolve_api_url(opts.api_url)?;
-    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
-
-    // Omitting `per_page` returns the full list in a single response.
-    let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");
-    let list: QuarantineList<QuarantinedTest> = client.get(&path).await?;
-
-    let payload = QuarantinedPayload {
-        quarantined_tests: list.quarantined_tests,
-    };
+    let quarantined_tests = fetch_quarantines(opts.repository, opts.token, opts.api_url).await?;
+    let payload = QuarantinedPayload { quarantined_tests };
     output.emit(&payload, &mut |w| render_quarantined_list(w, &payload))?;
     Ok(ExitCode::Success)
+}
+
+/// Fetch a single quarantine, addressed either by quarantine id (a
+/// UUID-shaped value) or by test name, and render the full record.
+/// Both keys are resolved client-side against the list endpoint, the
+/// same source `quarantined` and `unquarantine` read — the API has no
+/// single-quarantine GET. Errors when no quarantine matches.
+pub async fn get(opts: GetOptions<'_>, output: &mut dyn Output) -> Result<ExitCode, CliError> {
+    let quarantines = fetch_quarantines(opts.repository, opts.token, opts.api_url).await?;
+
+    // Match by id when the argument is UUID-shaped, else by name —
+    // decided once rather than per row.
+    let by_id = looks_like_uuid(opts.name_or_id);
+    let test = quarantines
+        .into_iter()
+        .find(|quarantine| {
+            if by_id {
+                quarantine.id.eq_ignore_ascii_case(opts.name_or_id)
+            } else {
+                quarantine.test_name == opts.name_or_id
+            }
+        })
+        .ok_or_else(|| not_found(opts.name_or_id))?;
+
+    output.emit(&test, &mut |w| render_quarantined_one(w, &test))?;
+    Ok(ExitCode::Success)
+}
+
+/// Fetch every quarantine recorded for the repository. Shared by
+/// `quarantined` (renders all) and `get` (filters to one); omitting
+/// `per_page` returns the full list in a single response.
+async fn fetch_quarantines(
+    repository: Option<&str>,
+    token: Option<&str>,
+    api_url: Option<&str>,
+) -> Result<Vec<QuarantinedTest>, CliError> {
+    let repository = resolve_repository(repository)?;
+    let (owner, repo) = split_owner_repo(&repository)?;
+    let token = auth::resolve_token(token)?;
+    let api_url = auth::resolve_api_url(api_url)?;
+    let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
+
+    let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");
+    let list: QuarantineList<QuarantinedTest> = client.get(&path).await?;
+    Ok(list.quarantined_tests)
 }
 
 /// The quarantine targeted by `unquarantine`, with the test name
@@ -332,8 +377,8 @@ fn render_quarantined_list(w: &mut dyn Write, payload: &QuarantinedPayload) -> i
 }
 
 /// One record: the test name as a header, then its id (the value
-/// `unquarantine` accepts) and metadata indented under it. A null
-/// branch shows as `*`, the "all branches" marker `quarantine`'s human
+/// `quarantines remove` accepts) and metadata indented under it. A
+/// null branch shows as `*`, the "all branches" marker `add`'s human
 /// output already uses.
 fn render_quarantined_one(w: &mut dyn Write, test: &QuarantinedTest) -> io::Result<()> {
     writeln!(w, "{}", test.test_name)?;
@@ -994,5 +1039,84 @@ mod tests {
         };
         let err = quarantined(opts, &mut cap.output).await.unwrap_err();
         assert!(matches!(err, CliError::Configuration(_)), "got {err:?}");
+    }
+
+    fn get_options<'a>(api_url: &'a str, name_or_id: &'a str) -> GetOptions<'a> {
+        GetOptions {
+            repository: Some("owner/repo"),
+            name_or_id,
+            token: Some("test-token"),
+            api_url: Some(api_url),
+        }
+    }
+
+    fn one_quarantine_list(id: &str, test_name: &str) -> serde_json::Value {
+        json!({
+            "quarantined_tests": [{
+                "id": id,
+                "test_name": test_name,
+                "reason": "flaky — MRGFY-1234",
+                "branch": null,
+                "created_at": "2026-01-01T10:00:00Z",
+                "source": "manual",
+                "is_recovered": false,
+            }],
+            "size": 1,
+            "per_page": null,
+        })
+    }
+
+    #[tokio::test]
+    async fn get_by_name_renders_the_matching_record() {
+        let server = MockServer::start().await;
+        mount_quarantine_list(&server, one_quarantine_list("id-1", "test_login")).await;
+
+        let mut cap = captured(OutputMode::Human);
+        let api_url = server.uri();
+        let exit = get(get_options(&api_url, "test_login"), &mut cap.output)
+            .await
+            .unwrap();
+
+        assert_eq!(exit, ExitCode::Success);
+        let out = read(&cap.stdout);
+        assert!(out.contains("test_login\n"), "got {out:?}");
+        assert!(out.contains("id:         id-1"), "got {out:?}");
+        assert!(
+            out.contains("reason:     flaky — MRGFY-1234"),
+            "got {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_by_id_emits_the_record_in_json() {
+        let id = "12345678-1234-5678-1234-567812345678";
+        let server = MockServer::start().await;
+        mount_quarantine_list(&server, one_quarantine_list(id, "test_logout")).await;
+
+        let mut cap = captured(OutputMode::Json);
+        let api_url = server.uri();
+        // An uppercase id still matches the canonical lowercase record.
+        let upper_id = id.to_uppercase();
+        let exit = get(get_options(&api_url, &upper_id), &mut cap.output)
+            .await
+            .unwrap();
+
+        assert_eq!(exit, ExitCode::Success);
+        let value: serde_json::Value = serde_json::from_str(&read(&cap.stdout)).unwrap();
+        assert_eq!(value["id"], id);
+        assert_eq!(value["test_name"], "test_logout");
+    }
+
+    #[tokio::test]
+    async fn get_unknown_test_is_a_mergify_error() {
+        let server = MockServer::start().await;
+        mount_quarantine_list(&server, one_quarantine_list("id-1", "test_login")).await;
+
+        let mut cap = captured(OutputMode::Human);
+        let api_url = server.uri();
+        let err = get(get_options(&api_url, "ghost"), &mut cap.output)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::MergifyApi(_)), "got {err:?}");
     }
 }
