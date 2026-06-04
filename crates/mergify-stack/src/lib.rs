@@ -43,6 +43,10 @@
 //!   `stack push` lands atomically with `--force-with-lease`.
 //!   Ported from `mergify_cli/stack/push.py::{fetch_notes_ref,
 //!   _merge_remote_notes, push_branches}`.
+//! - [`rebase_log`] — pure formatters for the three rebase
+//!   narration log lines emitted by `stack push`. Ported from
+//!   `mergify_cli/stack/push.py::{_log_rebase_performed,
+//!   _log_rebase_skipped, _log_rebase_dry_run}`.
 
 pub mod approvals;
 pub mod change_id;
@@ -51,6 +55,7 @@ pub mod changes;
 pub mod commands;
 pub mod local_commits;
 pub mod notes_push;
+pub mod rebase_log;
 pub mod rebase_todo;
 pub mod remote_changes;
 pub mod replay;
