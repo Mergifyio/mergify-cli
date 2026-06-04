@@ -25,6 +25,10 @@
 //!   sticky comment renderer + header recogniser. Pure
 //!   markdown/JSON formatting ported from
 //!   `mergify_cli/stack/push.py::StackComment`.
+//! - [`replay`] — `git merge-tree` + `git diff-tree` helpers
+//!   that materialise the rebase-aware revision-history compare
+//!   URL. Git-only half of `mergify_cli/stack/replay.py`; the
+//!   HTTP upload step lands separately.
 
 pub mod change_id;
 pub mod change_type;
@@ -33,6 +37,7 @@ pub mod commands;
 pub mod local_commits;
 pub mod rebase_todo;
 pub mod remote_changes;
+pub mod replay;
 pub mod slug;
 pub mod stack_comment;
 pub mod stack_context;
