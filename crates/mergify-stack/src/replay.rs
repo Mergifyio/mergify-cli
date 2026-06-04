@@ -7,8 +7,7 @@
 //! synthetic commit whose tree is *only* the user's amendment
 //! and whose parent is `old_sha`, then point compare at that.
 //!
-//! This module ports the **git-only** half of
-//! `mergify_cli/stack/replay.py`:
+//! This module ports `mergify_cli/stack/replay.py`:
 //!
 //! - [`compute_merged_tree`] — `git merge-tree --write-tree` to
 //!   replay the new PR head onto `parent(old_sha)`, returning the
@@ -16,16 +15,20 @@
 //! - [`compute_tree_delta`] — `git diff-tree --raw --no-renames`
 //!   between two trees, parsed into entries shaped for the
 //!   GitHub `POST /repos/.../git/trees` API.
-//!
-//! The HTTP half (`upload_replay_commit` + `replay_for_revision`)
-//! lands in a follow-up that wires up the `mergify-core` HTTP
-//! client.
+//! - [`upload_replay_commit`] — chains
+//!   `POST /git/trees` + `POST /git/commits` to materialise the
+//!   synthetic commit on GitHub. Returns the commit SHA the
+//!   revision-history compare URL anchors at.
+//! - [`replay_for_revision`] — top-level entry point wiring all
+//!   three above together; returns `None` whenever the
+//!   rebase-aware compare URL can't be produced so the caller
+//!   falls back to the plain `old…new` three-dot URL.
 
 use std::path::Path;
 use std::process::Command;
 
-use mergify_core::CliError;
-use serde::Serialize;
+use mergify_core::{CliError, HttpClient};
+use serde::{Deserialize, Serialize};
 
 /// Output of [`compute_merged_tree`]: the merged tree SHA paired
 /// with the commit SHA the tree is anchored on (parent of
@@ -179,6 +182,118 @@ pub fn compute_tree_delta(
         }
     }
     Ok(entries)
+}
+
+/// Materialise a synthetic commit on GitHub: `POST /git/trees`
+/// with the delta to plant a tree, then `POST /git/commits` with
+/// `parents=[old_sha]` so `compare/<old_sha>...<commit>` shows
+/// only the amendment.
+///
+/// Returns the commit SHA on success or `None` on any API error
+/// (matches Python's `except httpx.HTTPError, ValueError`). The
+/// unreferenced object will be GC'd by GitHub eventually; the
+/// compare URL works in the meantime — and the
+/// revision-history table includes a `(raw)` fallback URL for
+/// when it goes away.
+pub async fn upload_replay_commit(
+    client: &HttpClient,
+    user: &str,
+    repo: &str,
+    base_tree_sha: &str,
+    old_sha: &str,
+    new_sha: &str,
+    entries: &[TreeEntry],
+) -> Option<String> {
+    let tree_path = format!("/repos/{user}/{repo}/git/trees");
+    let tree_payload = TreePayload {
+        base_tree: base_tree_sha,
+        tree: entries,
+    };
+    let tree_resp: ShaResponse = client.post(&tree_path, &tree_payload).await.ok()?;
+
+    let commit_path = format!("/repos/{user}/{repo}/git/commits");
+    let commit_payload = CommitPayload {
+        message: format!(
+            "mergify-cli: replay {} on {}",
+            short(new_sha),
+            short(old_sha),
+        ),
+        tree: &tree_resp.sha,
+        parents: vec![old_sha],
+    };
+    let commit_resp: ShaResponse = client.post(&commit_path, &commit_payload).await.ok()?;
+    Some(commit_resp.sha)
+}
+
+/// Top-level entry point: orchestrates [`compute_merged_tree`] →
+/// `rev-parse parent_old^{{tree}}` → [`compute_tree_delta`] →
+/// [`upload_replay_commit`], returning the server commit SHA the
+/// revision-history compare URL anchors at.
+///
+/// Returns `None` whenever the rebase-aware compare URL can't be
+/// produced (conflict, missing parents, no diff, git error, API
+/// error). Callers must fall back to the plain `old…new`
+/// three-dot URL anchored at `old_sha`.
+pub async fn replay_for_revision(
+    client: &HttpClient,
+    repo_dir: Option<&Path>,
+    user: &str,
+    repo: &str,
+    old_sha: &str,
+    new_sha: &str,
+) -> Option<String> {
+    let merged = compute_merged_tree(repo_dir, old_sha, new_sha)?;
+
+    // `^{tree}` dereferences a commit SHA to its root tree SHA
+    // (git plumbing syntax). Needed so the diff in
+    // `compute_tree_delta` starts from the right tree.
+    let parent_old_tree_sha = run_git_capture(
+        repo_dir,
+        &["rev-parse", &format!("{}^{{tree}}", merged.parent_old_sha)],
+    )
+    .ok()?;
+
+    let entries = compute_tree_delta(repo_dir, &parent_old_tree_sha, &merged.tree_sha).ok()?;
+    if entries.is_empty() {
+        // The rebase fully absorbs the user's edit, or the merge
+        // produced an identical tree — nothing to compare, no
+        // synth commit to upload.
+        return None;
+    }
+
+    upload_replay_commit(
+        client,
+        user,
+        repo,
+        &parent_old_tree_sha,
+        old_sha,
+        new_sha,
+        &entries,
+    )
+    .await
+}
+
+#[derive(Serialize)]
+struct TreePayload<'a> {
+    base_tree: &'a str,
+    #[serde(borrow)]
+    tree: &'a [TreeEntry],
+}
+
+#[derive(Serialize)]
+struct CommitPayload<'a> {
+    message: String,
+    tree: &'a str,
+    parents: Vec<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct ShaResponse {
+    sha: String,
+}
+
+fn short(sha: &str) -> &str {
+    if sha.len() > 7 { &sha[..7] } else { sha }
 }
 
 fn git_cmd(repo_dir: Option<&Path>) -> Command {
@@ -449,5 +564,208 @@ mod tests {
         assert_eq!(json["sha"], serde_json::Value::Null);
         assert_eq!(json["path"], "a.py");
         assert_eq!(json["mode"], "100644");
+    }
+
+    mod http {
+        use super::*;
+        use mergify_core::{ApiFlavor, HttpClient};
+        use serde_json::json;
+        use url::Url;
+        use wiremock::matchers::{method, path as wm_path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn client(server: &MockServer) -> HttpClient {
+            HttpClient::new(
+                Url::parse(&server.uri()).unwrap(),
+                "token",
+                ApiFlavor::GitHub,
+            )
+            .unwrap()
+        }
+
+        fn one_entry() -> Vec<TreeEntry> {
+            vec![TreeEntry {
+                path: "src/a.py".into(),
+                mode: "100644".into(),
+                type_: "blob".into(),
+                sha: Some("bbb2222".into()),
+            }]
+        }
+
+        #[tokio::test]
+        async fn upload_replay_commit_chains_tree_then_commit() {
+            // Two-call shape — body contract: tree POST carries
+            // `base_tree` + `tree` entries; commit POST carries
+            // `parents=[old_sha]` so the GitHub compare URL
+            // anchors on it.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/trees"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(json!({"sha": "server_tree"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/commits"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(json!({"sha": "server_commit"})),
+                )
+                .mount(&server)
+                .await;
+
+            let entries = one_entry();
+            let sha = upload_replay_commit(
+                &client(&server),
+                "o",
+                "r",
+                "parent_old_tree_sha",
+                "abc1234deadbeef",
+                "def5678cafef00d",
+                &entries,
+            )
+            .await;
+            assert_eq!(sha.as_deref(), Some("server_commit"));
+        }
+
+        #[tokio::test]
+        async fn upload_replay_commit_returns_none_when_tree_post_fails() {
+            // 422 on the tree POST — short-circuit, no commit
+            // POST. Python catches the error and returns None;
+            // mirror that so a transient API hiccup doesn't
+            // crash the push.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/trees"))
+                .respond_with(ResponseTemplate::new(422))
+                .mount(&server)
+                .await;
+
+            assert!(
+                upload_replay_commit(
+                    &client(&server),
+                    "o",
+                    "r",
+                    "base",
+                    "old",
+                    "new",
+                    &one_entry(),
+                )
+                .await
+                .is_none(),
+            );
+        }
+
+        #[tokio::test]
+        async fn upload_replay_commit_returns_none_when_commit_post_fails() {
+            // Tree POST succeeds, commit POST fails — still None.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/trees"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(json!({"sha": "server_tree"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/commits"))
+                .respond_with(ResponseTemplate::new(422))
+                .mount(&server)
+                .await;
+
+            assert!(
+                upload_replay_commit(
+                    &client(&server),
+                    "o",
+                    "r",
+                    "base",
+                    "old",
+                    "new",
+                    &one_entry(),
+                )
+                .await
+                .is_none(),
+            );
+        }
+
+        #[tokio::test]
+        async fn replay_for_revision_end_to_end_returns_server_commit_sha() {
+            // Drive the orchestrator against a real repo + a
+            // mock GitHub: clean merge, real diff, both POSTs
+            // succeed → returns the server commit SHA.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/trees"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(json!({"sha": "server_tree"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wm_path("/repos/o/r/git/commits"))
+                .respond_with(
+                    ResponseTemplate::new(201).set_body_json(json!({"sha": "server_commit"})),
+                )
+                .mount(&server)
+                .await;
+
+            let dir = init_repo();
+            let path = dir.path();
+            std::fs::write(path.join("base.txt"), "base\n").unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-q", "-m", "base"]);
+            let base_sha = rev_parse(path, "HEAD");
+
+            std::fs::write(path.join("routes.py"), "# routes\n").unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-q", "-m", "add"]);
+            let old_sha = rev_parse(path, "HEAD");
+
+            run(path, &["reset", "--hard", &base_sha]);
+            std::fs::write(path.join("routes.py"), "# routes\n").unwrap();
+            std::fs::write(path.join("migration.py"), "# migration\n").unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-q", "-m", "add + amend"]);
+            let new_sha = rev_parse(path, "HEAD");
+
+            let sha =
+                replay_for_revision(&client(&server), Some(path), "o", "r", &old_sha, &new_sha)
+                    .await;
+            assert_eq!(sha.as_deref(), Some("server_commit"));
+        }
+
+        #[tokio::test]
+        async fn replay_for_revision_returns_none_when_diff_is_empty() {
+            // If the merged tree equals parent_old's tree there's
+            // nothing to upload — short-circuit before any POST.
+            // No mocks needed: any POST attempt would 404 and
+            // turn into Some(...).is_none() == false.
+            let server = MockServer::start().await;
+            let dir = init_repo();
+            let path = dir.path();
+            std::fs::write(path.join("x"), "x\n").unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-q", "-m", "base"]);
+            let base_sha = rev_parse(path, "HEAD");
+
+            // Identical old/new commits (each child of base, both
+            // adding the same blob): merge-tree returns
+            // base_tree, diff against parent_old^{tree} is empty.
+            std::fs::write(path.join("y"), "y\n").unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-q", "-m", "child"]);
+            let old_sha = rev_parse(path, "HEAD");
+            run(path, &["reset", "--hard", &base_sha]);
+            std::fs::write(path.join("y"), "y\n").unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-q", "-m", "child"]);
+            let new_sha = rev_parse(path, "HEAD");
+
+            assert!(
+                replay_for_revision(&client(&server), Some(path), "o", "r", &old_sha, &new_sha,)
+                    .await
+                    .is_none(),
+            );
+        }
     }
 }

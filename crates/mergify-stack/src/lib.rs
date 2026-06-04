@@ -25,10 +25,11 @@
 //!   sticky comment renderer + header recogniser. Pure
 //!   markdown/JSON formatting ported from
 //!   `mergify_cli/stack/push.py::StackComment`.
-//! - [`replay`] — `git merge-tree` + `git diff-tree` helpers
-//!   that materialise the rebase-aware revision-history compare
-//!   URL. Git-only half of `mergify_cli/stack/replay.py`; the
-//!   HTTP upload step lands separately.
+//! - [`replay`] — full port of `mergify_cli/stack/replay.py`:
+//!   `git merge-tree` + `git diff-tree` to materialise the
+//!   amendment, then `POST /git/trees` + `POST /git/commits`
+//!   to upload a synthetic commit that the revision-history
+//!   compare URL anchors at.
 //! - [`revision_history`] — the "Revision history" sticky
 //!   comment renderer + parser. Ported from
 //!   `mergify_cli/stack/push.py::RevisionHistoryComment`.
