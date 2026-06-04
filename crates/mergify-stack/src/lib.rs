@@ -20,6 +20,10 @@
 pub mod change_id;
 pub mod commands;
 pub mod local_commits;
+pub mod rebase_todo;
 pub mod remote_changes;
 pub mod slug;
 pub mod trunk;
+
+#[cfg(test)]
+pub(crate) mod test_env;

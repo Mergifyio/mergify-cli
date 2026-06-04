@@ -13,7 +13,6 @@ from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
 from mergify_cli.stack import checkout as stack_checkout_mod
 from mergify_cli.stack import drop as stack_drop_mod
-from mergify_cli.stack import edit as stack_edit_mod
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import move as stack_move_mod
 from mergify_cli.stack import open as stack_open_mod
@@ -199,13 +198,6 @@ async def setup(*, force: bool, check: bool) -> None:
         _print_hooks_status(status)
     else:
         await stack_setup_mod.stack_setup(force=force)
-
-
-@stack.command(help="Edit the stack history")
-@click.argument("commit", required=False, default=None)
-@utils.run_with_asyncio
-async def edit(*, commit: str | None) -> None:
-    await stack_edit_mod.stack_edit(commit_prefix=commit)
 
 
 @stack.command(help="Reorder the stack's commits")
