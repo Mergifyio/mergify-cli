@@ -166,7 +166,7 @@ mergify tests show -r owner/repo \
 ```
 
 **Key options:**
-- `--repository` / `-r` -- Repository full name (`owner/repo`); required.
+- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--pipeline-name`, `--pipeline-name-exclude` -- Restrict / exclude by pipeline.
@@ -198,7 +198,7 @@ mergify tests quarantine -r owner/repo \
 ```
 
 **Key options:**
-- `--repository` / `-r` -- Repository full name (`owner/repo`); required.
+- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--reason` -- Reason recorded for the quarantine; required.
 - `--branch` / `-b` -- Branch name or pattern to scope to. Omit for all branches.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
@@ -225,7 +225,7 @@ mergify tests unquarantine -r owner/repo 12345678-1234-5678-1234-567812345678
 ```
 
 **Key options:**
-- `--repository` / `-r` -- Repository full name (`owner/repo`); required.
+- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"id", "test_name"}` to stdout (`test_name` is null when
@@ -257,7 +257,7 @@ A null `branch` renders as `*` (the quarantine applies to all branches).
 `is_recovered` flags quarantines whose recent runs suggest they can be removed.
 
 **Key options:**
-- `--repository` / `-r` -- Repository full name (`owner/repo`); required.
+- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"quarantined_tests": [...]}` to stdout, each record carrying

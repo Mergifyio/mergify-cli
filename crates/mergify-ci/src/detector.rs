@@ -9,6 +9,7 @@
 use std::env;
 
 use mergify_core::CliError;
+use mergify_core::auth;
 use url::Url;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +156,43 @@ pub fn get_github_repository() -> Option<String> {
         CIProvider::Jenkins => get_github_repository_from_env("GIT_URL"),
         CIProvider::Buildkite => get_github_repository_from_env("BUILDKITE_REPO"),
     }
+}
+
+/// Resolve the target repository for a CI Insights command, in
+/// precedence order: an explicit `--repository` value, then the CI
+/// environment (via [`get_github_repository`]), then the local git
+/// remote (via [`auth::repository_from_git_remote`]). CI detection
+/// wins over the git remote so a checkout with a different `origin`
+/// can't override the repository the job is actually running for.
+///
+/// The result is validated to a clean `owner/repo` regardless of its
+/// source, so callers can interpolate it into a request path without
+/// re-checking or percent-encoding.
+///
+/// # Errors
+///
+/// Returns `Configuration` when no source yields a repository, or
+/// when the resolved value isn't a valid `owner/repo`.
+pub fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
+    let repository = explicit
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(get_github_repository)
+        .or_else(auth::repository_from_git_remote)
+        .ok_or_else(|| {
+            CliError::Configuration(
+                "--repository not provided and could not be detected from the CI \
+                 environment or the local git remote"
+                    .to_string(),
+            )
+        })?;
+    // The git-remote fallback (`parse_slug`) doesn't enforce the
+    // owner/repo character set that CI detection and the `--repository`
+    // value parser do; validate every source here so a stray
+    // `remote.origin.url` can't slip extra path segments or reserved
+    // characters into a request URL downstream.
+    split_owner_repo(&repository)?;
+    Ok(repository)
 }
 
 pub fn get_github_pull_request_number() -> Result<Option<u64>, CliError> {
@@ -493,6 +531,56 @@ mod tests {
             assert_eq!(get_github_repository(), None);
         });
     }
+
+    #[test]
+    fn resolve_repository_prefers_flag_over_env() {
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_REPOSITORY", Some("env/env")),
+            ],
+            || {
+                assert_eq!(resolve_repository(Some("cli/cli")).unwrap(), "cli/cli");
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_repository_prefers_ci_env_over_git_remote() {
+        // With no flag but a CI provider present, the CI repository is
+        // used — even though this test runs inside a git checkout whose
+        // `origin` would otherwise resolve to a different slug. Asserts
+        // both the CI fallback and its precedence over the git remote.
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_REPOSITORY", Some("owner/repo")),
+            ],
+            || {
+                assert_eq!(resolve_repository(None).unwrap(), "owner/repo");
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_repository_rejects_invalid_slug() {
+        // The resolved value is validated regardless of source. The
+        // git-remote fallback (`parse_slug`) accepts multi-segment
+        // paths that would inject extra request-path segments; an
+        // explicit value exercises the same guard deterministically.
+        with_ci_env(&[], || {
+            assert!(matches!(
+                resolve_repository(Some("owner/repo/extra")),
+                Err(CliError::Configuration(_))
+            ));
+        });
+    }
+
+    // The no-flag/no-CI path falls through to the local git remote
+    // (`auth::repository_from_git_remote`); its parsing and the
+    // not-a-repo `None` case are covered in `mergify_core::auth`. The
+    // `Configuration` error only fires with neither a CI env nor a git
+    // remote, which can't be reproduced from inside this checkout.
 
     #[test]
     fn pull_request_buildkite_reads_env() {

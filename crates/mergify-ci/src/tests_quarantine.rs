@@ -25,10 +25,13 @@ use mergify_core::auth;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::detector::resolve_repository;
 use crate::detector::split_owner_repo;
 
 pub struct QuarantineOptions<'a> {
-    pub repository: &'a str,
+    /// Explicit `--repository owner/repo`, or `None` to detect it
+    /// from the CI environment.
+    pub repository: Option<&'a str>,
     pub test_name: &'a str,
     pub reason: &'a str,
     pub branch: Option<&'a str>,
@@ -37,7 +40,9 @@ pub struct QuarantineOptions<'a> {
 }
 
 pub struct UnquarantineOptions<'a> {
-    pub repository: &'a str,
+    /// Explicit `--repository owner/repo`, or `None` to detect it
+    /// from the CI environment.
+    pub repository: Option<&'a str>,
     /// A test name or a quarantine id. A UUID-shaped value is taken as
     /// the quarantine id; anything else is treated as a test name.
     pub name_or_id: &'a str,
@@ -46,7 +51,9 @@ pub struct UnquarantineOptions<'a> {
 }
 
 pub struct QuarantinedOptions<'a> {
-    pub repository: &'a str,
+    /// Explicit `--repository owner/repo`, or `None` to detect it
+    /// from the CI environment.
+    pub repository: Option<&'a str>,
     pub token: Option<&'a str>,
     pub api_url: Option<&'a str>,
 }
@@ -57,7 +64,8 @@ pub async fn quarantine(
     opts: QuarantineOptions<'_>,
     output: &mut dyn Output,
 ) -> Result<ExitCode, CliError> {
-    let (owner, repo) = split_owner_repo(opts.repository)?;
+    let repository = resolve_repository(opts.repository)?;
+    let (owner, repo) = split_owner_repo(&repository)?;
     let token = auth::resolve_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
@@ -87,7 +95,8 @@ pub async fn unquarantine(
     opts: UnquarantineOptions<'_>,
     output: &mut dyn Output,
 ) -> Result<ExitCode, CliError> {
-    let (owner, repo) = split_owner_repo(opts.repository)?;
+    let repository = resolve_repository(opts.repository)?;
+    let (owner, repo) = split_owner_repo(&repository)?;
     let token = auth::resolve_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
@@ -121,7 +130,8 @@ pub async fn quarantined(
     opts: QuarantinedOptions<'_>,
     output: &mut dyn Output,
 ) -> Result<ExitCode, CliError> {
-    let (owner, repo) = split_owner_repo(opts.repository)?;
+    let repository = resolve_repository(opts.repository)?;
+    let (owner, repo) = split_owner_repo(&repository)?;
     let token = auth::resolve_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
@@ -355,6 +365,7 @@ mod tests {
     use wiremock::matchers::path as path_matcher;
 
     use super::*;
+    use crate::testing::with_ci_env_async;
 
     type SharedBytes = Arc<Mutex<Vec<u8>>>;
 
@@ -396,7 +407,7 @@ mod tests {
         branch: Option<&'a str>,
     ) -> QuarantineOptions<'a> {
         QuarantineOptions {
-            repository: "owner/repo",
+            repository: Some("owner/repo"),
             test_name,
             reason,
             branch,
@@ -407,7 +418,7 @@ mod tests {
 
     fn unquarantine_options<'a>(api_url: &'a str, name_or_id: &'a str) -> UnquarantineOptions<'a> {
         UnquarantineOptions {
-            repository: "owner/repo",
+            repository: Some("owner/repo"),
             name_or_id,
             token: Some("test-token"),
             api_url: Some(api_url),
@@ -617,7 +628,7 @@ mod tests {
     async fn quarantine_invalid_repository_format_is_a_configuration_error() {
         let mut cap = captured(OutputMode::Human);
         let opts = QuarantineOptions {
-            repository: "not-a-slash-pair",
+            repository: Some("not-a-slash-pair"),
             test_name: "test_login",
             reason: "flaky",
             branch: None,
@@ -632,7 +643,7 @@ mod tests {
     async fn unquarantine_invalid_repository_format_is_a_configuration_error() {
         let mut cap = captured(OutputMode::Human);
         let opts = UnquarantineOptions {
-            repository: "not-a-slash-pair",
+            repository: Some("not-a-slash-pair"),
             name_or_id: "test_login",
             token: Some("t"),
             api_url: Some("https://example.invalid"),
@@ -729,7 +740,7 @@ mod tests {
 
     fn quarantined_options(api_url: &str) -> QuarantinedOptions<'_> {
         QuarantinedOptions {
-            repository: "owner/repo",
+            repository: Some("owner/repo"),
             token: Some("test-token"),
             api_url: Some(api_url),
         }
@@ -742,6 +753,38 @@ mod tests {
             .expect(1)
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn quarantined_detects_repository_from_ci_env() {
+        // With no `--repository`, the command resolves the repository
+        // from the CI environment — here GitHub Actions'
+        // `GITHUB_REPOSITORY` — and queries that repository's endpoint.
+        with_ci_env_async(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_REPOSITORY", Some("owner/repo")),
+            ],
+            async {
+                let server = MockServer::start().await;
+                mount_quarantine_list(
+                    &server,
+                    json!({"quarantined_tests": [], "size": 0, "per_page": null}),
+                )
+                .await;
+
+                let mut cap = captured(OutputMode::Human);
+                let api_url = server.uri();
+                let opts = QuarantinedOptions {
+                    repository: None,
+                    token: Some("test-token"),
+                    api_url: Some(&api_url),
+                };
+                let exit = quarantined(opts, &mut cap.output).await.unwrap();
+                assert_eq!(exit, ExitCode::Success);
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -945,7 +988,7 @@ mod tests {
     async fn quarantined_invalid_repository_format_is_a_configuration_error() {
         let mut cap = captured(OutputMode::Human);
         let opts = QuarantinedOptions {
-            repository: "not-a-slash-pair",
+            repository: Some("not-a-slash-pair"),
             token: Some("t"),
             api_url: Some("https://example.invalid"),
         };

@@ -54,7 +54,7 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
         return Ok(());
     };
 
-    let repository = resolve_repository(opts.repository)?;
+    let repository = detector::resolve_repository(opts.repository)?;
     let token = auth::resolve_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
 
@@ -89,18 +89,6 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
         .await?;
 
     Ok(())
-}
-
-fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(value) = explicit.filter(|s| !s.is_empty()) {
-        return Ok(value.to_string());
-    }
-    detector::get_github_repository().ok_or_else(|| {
-        CliError::Configuration(
-            "--repository not provided and could not be detected from the CI environment"
-                .to_string(),
-        )
-    })
 }
 
 fn resolve_pull_request(explicit: Option<u64>) -> Result<Option<u64>, CliError> {
@@ -158,26 +146,6 @@ mod tests {
     use super::*;
     use crate::testing::with_ci_env;
     use crate::testing::with_ci_env_async;
-
-    #[test]
-    fn resolve_repository_prefers_flag_over_env() {
-        with_ci_env(
-            &[
-                ("GITHUB_ACTIONS", Some("true")),
-                ("GITHUB_REPOSITORY", Some("env/env")),
-            ],
-            || {
-                assert_eq!(resolve_repository(Some("cli/cli")).unwrap(), "cli/cli");
-            },
-        );
-    }
-
-    #[test]
-    fn resolve_repository_errors_when_no_provider_and_no_flag() {
-        with_ci_env(&[], || {
-            assert!(resolve_repository(None).is_err());
-        });
-    }
 
     #[test]
     fn resolve_pull_request_prefers_explicit() {

@@ -77,16 +77,25 @@ pub fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
     if let Some(value) = var_non_empty("GITHUB_REPOSITORY") {
         return Ok(value);
     }
-    if let Some(remote) = git_remote_origin_url() {
-        if let Some(slug) = parse_slug(&remote) {
-            return Ok(slug);
-        }
+    if let Some(slug) = repository_from_git_remote() {
+        return Ok(slug);
     }
     Err(CliError::Configuration(
         "--repository not provided, GITHUB_REPOSITORY env var is unset, and \
          the local git config has no usable `remote.origin.url`"
             .to_string(),
     ))
+}
+
+/// Repository slug (`<owner>/<repo>`) parsed from the local
+/// `git config --get remote.origin.url`, or `None` when the working
+/// tree isn't a git repo or has no usable `remote.origin.url`.
+///
+/// Exposed so `mergify-ci`'s CI-aware resolver can share the same
+/// git-remote fallback instead of reimplementing it.
+#[must_use]
+pub fn repository_from_git_remote() -> Option<String> {
+    parse_slug(&git_remote_origin_url()?)
 }
 
 /// Run `gh auth token` and return stdout (trimmed). Returns an
