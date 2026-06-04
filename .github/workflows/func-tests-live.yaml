@@ -27,10 +27,11 @@ jobs:
           rustup default stable
       - uses: Swatinem/rust-cache@v2
 
-      - uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          version-file: requirements-uv.txt
+      - name: Build mergify binary
+        run: cargo build --release
+
+      - name: Put built binary on PATH
+        run: echo "${PWD}/target/release" >> "${GITHUB_PATH}"
 
       - name: Live smoke tests
         shell: bash
@@ -47,4 +48,11 @@ jobs:
           # cause individual tests to skip rather than fail.
           LIVE_TEST_MERGIFY_TOKEN_CI: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN_CI }}
           LIVE_TEST_MERGIFY_TOKEN_ADMIN: ${{ secrets.MERGIFY_CLI_LIVE_TEST_MERGIFY_TOKEN_ADMIN }}
-        run: uv run --locked poe live-test
+        # Use `pip install pytest` over an ephemeral `uv tool run`
+        # so the func-tests don't drag any package-management
+        # tool into the supported-runtime contract. The wheel
+        # itself has no Python deps; pytest only matters here as
+        # the test runner.
+        run: |
+          pip install --user 'pytest>=8'
+          python -m pytest -v func-tests/ -m live

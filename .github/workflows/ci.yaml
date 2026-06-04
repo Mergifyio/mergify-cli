@@ -8,56 +8,6 @@ on:
       - devs/**
 
 jobs:
-  linters:
-    timeout-minutes: 5
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: 3.14
-
-      # The maturin build-backend invokes cargo at sync time, so
-      # every Python-using job needs the Rust toolchain on PATH.
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          version-file: requirements-uv.txt
-
-      - name: Linters
-        shell: bash
-        run: uv run --locked poe linters
-
-  compat-tests:
-    timeout-minutes: 5
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: 3.14
-
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          version-file: requirements-uv.txt
-
-      - name: Compat tests
-        shell: bash
-        run: uv run --locked poe compat-test
-
   rust:
     timeout-minutes: 10
     runs-on: ubuntu-24.04
@@ -84,82 +34,6 @@ jobs:
       - name: cargo build --release
         run: cargo build --release
 
-  test:
-    # Cold-cache cargo builds on Windows can push past 15 minutes
-    # (uv sync invokes the maturin build-backend, which compiles the
-    # whole Rust workspace). Warm runs land in ~10 min; 25 gives the
-    # cold path enough headroom to avoid spurious cancellations
-    # without masking a genuinely runaway build.
-    timeout-minutes: 25
-    strategy:
-      matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-        python: [3.13, 3.14]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # The matrix runs the same target six times. Keying the
-          # cache on (os, python) avoids cross-pollution while still
-          # letting cargo reuse fetched crates within each shard.
-          key: ${{ matrix.os }}-py${{ matrix.python }}
-
-      - uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          version-file: requirements-uv.txt
-
-      - name: Tests
-        shell: bash
-        env:
-          _MERGIFY_TEST_NEW_FLAKY_DETECTION: "true"
-          PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
-        run: uv run --locked poe test
-
-      - name: Build
-        shell: bash
-        run: uv build
-
-      - name: Tests build
-        shell: bash
-        env:
-          PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
-        run: |
-          pip install dist/*.whl
-          # We check the installed wheel produces a working binary, specially on Windows
-          # to ensure the utf8 mode is enabled.
-          python -c "import test_binary_build; test_binary_build.test_reexec_enables_utf8_and_prints_emoji();"
-
-      - name: Tests uv tool install
-        shell: bash
-        env:
-          PYTHONUTF8: "${{ matrix.os == 'windows-2025' && 1 || 0 }}"
-        # Regression guard for the Windows uv-trampoline discovery
-        # path in `crates/mergify-py-shim`. `uv tool install` copies
-        # a standalone trampoline `.exe` into the uv tool bin dir
-        # (Windows requires privileges for symlinks, so unlike
-        # pipx on Unix this is *not* a symlink back into the venv).
-        # The shim has to walk to the uv tool dir via `uv tool dir`
-        # to find the interpreter — exercise that on every PR so the
-        # discovery path can't regress on a future shim rewrite.
-        run: |
-          uv tool install --force dist/*.whl
-          bin_dir="$(uv tool dir --bin)"
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            "${bin_dir}/mergify.exe" --help > /dev/null
-          else
-            "${bin_dir}/mergify" --help > /dev/null
-          fi
-
   # Smoke build the full release wheel matrix on every PR so a
   # cross-compile or platform-specific maturin failure is caught
   # here, not on the next `release: published` event. Calls the
@@ -171,14 +45,52 @@ jobs:
     with:
       stamp-version: false
 
+  # Confirm the binary actually runs out of the freshly-built wheel
+  # on each supported runtime. Lightweight smoke — `mergify --help`
+  # exits 0 — covers the most common breakage class (a maturin
+  # config change that ships a wheel with a broken or missing
+  # binary entry, or a libc / runtime-link issue that only shows
+  # up post-install). Builds the wheel locally with maturin
+  # rather than downloading the `wheels`-job artifacts, since
+  # `wheels` only uploads in release mode (PR smoke runs are
+  # `stamp-version: false`).
+  smoke-test-binary:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: smoke-${{ matrix.os }}
+      - name: Build wheel
+        shell: bash
+        run: |
+          pip install 'maturin~=1.7'
+          maturin build --release --out dist
+      - name: Install wheel
+        shell: bash
+        run: pip install dist/*.whl
+      - name: mergify --help
+        shell: bash
+        run: mergify --help
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
-      - test
-      - linters
-      - compat-tests
       - rust
       - wheels
+      - smoke-test-binary
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded

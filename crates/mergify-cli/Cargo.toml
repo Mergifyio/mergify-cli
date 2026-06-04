@@ -20,7 +20,6 @@ mergify-ci = { path = "../mergify-ci" }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
 mergify-freeze = { path = "../mergify-freeze" }
-mergify-py-shim = { path = "../mergify-py-shim" }
 mergify-queue = { path = "../mergify-queue" }
 mergify-stack = { path = "../mergify-stack" }
 # Backs the `_internal dump-cli-schema` generator (serializing the

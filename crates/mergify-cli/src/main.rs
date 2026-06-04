@@ -1,24 +1,12 @@
 //! `mergify` binary entry point.
 //!
-//! Dispatch logic: every invocation is speculatively parsed with
-//! clap. The clap tree covers both worlds:
-//!
-//! - **Natively-ported commands** ([`NATIVE_COMMANDS`]) — clap
-//!   parses the full flag set and the binary runs them in process.
-//! - **Python-shimmed commands** (`stack` is the last one left)
-//!   — clap registers them as stub variants with a catch-all
-//!   `args: Vec<String>`. That way
-//!   `mergify --help` and `mergify <group> --help` list the entire
-//!   CLI surface, but the captured argv is forwarded verbatim to
-//!   the Python implementation by [`mergify_py_shim::run`].
-//!
-//! Invocations clap can't parse at all (typos, unknown groups)
-//! still fall through to the Python shim with the original argv,
-//! so its "no such command" message reaches the user.
-//!
-//! As each Python command is ported to Rust, its stub variant is
-//! promoted to a real clap definition, a matching entry lands in
-//! [`NATIVE_COMMANDS`], and the shim fallback shrinks accordingly.
+//! Every command is native — clap parses the full flag set and the
+//! binary runs the matching [`NativeCommand`] in process. Any
+//! invocation clap can't parse (unknown subcommand, missing
+//! required flag, …) exits with clap's formatted error and exit
+//! code 2; for unknown subcommands that includes a "did you mean
+//! `<closest>`?" suggestion off clap's built-in Levenshtein
+//! distance.
 
 use std::env;
 use std::path::PathBuf;
@@ -83,53 +71,16 @@ fn main() -> ExitCode {
     }
 
     match detect_dispatch(&argv) {
-        Some(Dispatch::Native(cmd)) => run_native(cmd),
-        Some(Dispatch::Shim(forwarded)) => run_py_shim(&forwarded),
-        None => run_py_shim(&argv),
+        Dispatch::Native(cmd) => run_native(cmd),
     }
 }
 
-fn run_py_shim(argv: &[String]) -> ExitCode {
-    match mergify_py_shim::run(argv) {
-        Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
-        Err(err) => {
-            eprintln!("mergify: {err}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Outcome of speculatively parsing the argv with clap.
+/// Result of `detect_dispatch`. Kept as a single-variant enum so the
+/// match in `main` is exhaustive — every dispatch path lands on a
+/// native command, but pattern-matching makes that explicit rather
+/// than implicit.
 enum Dispatch {
-    /// argv resolved to a natively-ported command — run it in-process.
     Native(NativeCommand),
-    /// argv resolved to a clap *stub* for a Python-shimmed command.
-    /// The captured argv (with the group/subcommand restored at the
-    /// front) is forwarded to Python verbatim — including `--help`,
-    /// which our stubs deliberately let pass through.
-    Shim(Vec<String>),
-}
-
-fn prepend_one(head: &str, tail: Vec<String>) -> Vec<String> {
-    let mut out = Vec::with_capacity(tail.len() + 1);
-    out.push(head.to_string());
-    out.extend(tail);
-    out
-}
-
-/// Re-inject the global `--debug` flag at the front of the forwarded
-/// argv so Python's root group sees it. Clap consumed the flag when
-/// parsing the Rust-side argv, but the Python CLI declares it at
-/// root too — leaving it off would silently drop the user's intent
-/// for shimmed commands.
-fn inject_global_flags(debug: bool, argv: Vec<String>) -> Vec<String> {
-    if !debug {
-        return argv;
-    }
-    let mut out = Vec::with_capacity(argv.len() + 1);
-    out.push("--debug".to_string());
-    out.extend(argv);
-    out
 }
 
 /// Single source of truth for the `(group, subcommand)` pairs the
@@ -167,15 +118,15 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "new"),
     ("stack", "note"),
     ("stack", "open"),
+    ("stack", "push"),
     ("stack", "reorder"),
     ("stack", "reword"),
     ("stack", "setup"),
     ("stack", "squash"),
     ("stack", "sync"),
-    // Internal Python migration helpers. Listed so `looks_native`
-    // routes `mergify _internal …` past the shim fallback when
-    // clap rejects it, but they stay hidden from `--help` (see
-    // the `Subcommands::Internal` variant).
+    // Internal helpers. Stay hidden from `--help` (see the
+    // `Subcommands::Internal` variant) but still need to be
+    // dispatchable.
     ("_internal", "stack-local-commits"),
     ("_internal", "stack-remote-changes"),
     // Self-invocation target for the rebase-todo machinery — set
@@ -657,103 +608,33 @@ struct FreezeDeleteOpts {
     delete_reason: Option<String>,
 }
 
-/// Heuristic: does argv look like the user intended a native
-/// subcommand?
+/// Parse `argv` with clap and return the resolved native command.
 ///
-/// Used as a fallback when clap rejects the input — if the user
-/// clearly meant a native command, surface clap's error rather
-/// than silently dispatching to the Python shim. We look for two
-/// *consecutive* tokens forming a `(group, subcommand)` pair so a
-/// flag value like `--repository config` doesn't accidentally
-/// classify the invocation as native.
-fn looks_native(argv: &[String]) -> bool {
-    argv.windows(2).any(|pair| {
-        NATIVE_COMMANDS
-            .iter()
-            .any(|(g, s)| pair[0] == *g && pair[1] == *s)
-    })
-}
-
-/// Did clap exit on `--help` / `-h` / `--version`? Those return a
-/// special `Err` whose `kind()` is `DisplayHelp` /
-/// `DisplayHelpOnMissingArgumentOrSubcommand` / `DisplayVersion`;
-/// callers should always honor them and exit (printing the help /
-/// version) instead of falling through to the Python shim or
-/// surfacing them as argument errors.
-fn is_help_or_version(err: &clap::Error) -> bool {
-    matches!(
-        err.kind(),
-        clap::error::ErrorKind::DisplayHelp
-            | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-    )
-}
-
-/// Try to recognize the invocation as a native command.
-///
-/// Returns ``None`` when the argv doesn't look like a native
-/// command — callers fall back to the Python shim, which produces
-/// the same error messages as before the port started. When the
-/// argv obviously targets a native command (per [`looks_native`])
-/// but clap can't parse it — e.g. the user gave an unknown flag
-/// or omitted a required argument — this function prints clap's
-/// formatted error to stderr and exits the process with clap's
-/// exit code (2), matching the Python CLI's behavior for argument
-/// errors.
-///
-/// Argument *values* that are accepted by clap as `String` but
-/// fail later domain validation (e.g. an `--api-url` that doesn't
-/// parse as a URL) surface as [`mergify_core::CliError`] instead
-/// — the corresponding exit code is the one chosen by the command
-/// implementation (typically [`mergify_core::ExitCode::Configuration`]
-/// = 8), not 2.
+/// Any clap parse failure — unknown subcommand, missing required
+/// argument, bad flag value — prints clap's formatted error
+/// (including the built-in "did you mean `<closest>`?" suggestion
+/// for unknown subcommands) and exits with clap's status code.
+/// `--help` / `--version` also flow through `err.exit()` which
+/// prints to stdout and exits 0.
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
-fn detect_dispatch(argv: &[String]) -> Option<Dispatch> {
-    let looks_native = looks_native(argv);
-
+fn detect_dispatch(argv: &[String]) -> Dispatch {
     let parsed = match CliRoot::try_parse_from(
         std::iter::once("mergify".to_string()).chain(argv.iter().cloned()),
     ) {
         Ok(parsed) => parsed,
-        Err(err) if is_help_or_version(&err) => {
-            // ``--help`` at the binary's root or for any natively
-            // dispatched (sub)command is handled by clap. The
-            // top-level help now lists `stack` and the shimmed
-            // `ci` subcommands too, because they're registered as
-            // clap stub variants — that's how a single
-            // `mergify --help` covers the full CLI surface.
-            // ``err.exit()`` prints to stdout and calls
-            // ``process::exit(0)``.
-            err.exit()
-        }
-        Err(err) if looks_native => {
-            // Native intent + clap rejection = surface clap's error
-            // and exit. ``err.exit()`` prints to stderr and calls
-            // ``process::exit``; does not return.
-            err.exit()
-        }
-        Err(_) => return None,
+        Err(err) => err.exit(),
     };
-
-    Some(dispatch_from_parsed(parsed))
+    dispatch_from_parsed(parsed)
 }
 
-/// Route a captured `mergify stack <args…>` invocation to either
-/// the native stack subcommand handler or the Python shim.
+/// Route a captured `mergify stack <args…>` invocation to the
+/// matching native subcommand handler.
 ///
-/// `stack` is a hybrid group during the port: today only `new` is
-/// native, every other subcommand still runs through `mergify-py-shim`.
-/// The decision is made by inspecting the first positional arg
-/// after `stack` — if it names a natively-ported subcommand, we
-/// secondary-parse the rest with clap and dispatch native;
-/// otherwise we forward the whole argv to Python verbatim.
-///
-/// `--help` for shimmed subcommands (and the bare `stack --help`)
-/// falls through to Python, which prints the full help listing
-/// including the Python-only subcommands. Adding new native stack
-/// subcommands later means adding a branch here and a matching
-/// `NATIVE_COMMANDS` entry.
+/// Every stack subcommand is native; an unrecognised subcommand
+/// exits with clap's "unrecognized subcommand `<name>` … did you
+/// mean `<closest>`?" formatting.
 #[allow(clippy::too_many_lines)] // one mechanical arm per native subcommand
-fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
+fn dispatch_stack(args: Vec<String>) -> Dispatch {
     match args.first().map(String::as_str) {
         Some("new") => {
             // `args[0]` is the subcommand — clap consumes it as
@@ -878,7 +759,28 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             };
             Dispatch::Native(NativeCommand::StackSetup(StackSetupOpts::from(parsed)))
         }
-        _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
+        // Unknown / missing stack subcommand. Round-trip through a
+        // synthetic clap parse on the `stack` group so the user
+        // gets clap's "unrecognized subcommand `<name>` … did you
+        // mean `<closest>`?" formatting and exit code (2) instead
+        // of a hand-rolled message.
+        other => {
+            let probe: Vec<String> = std::iter::once("stack".to_string())
+                .chain(other.map(str::to_owned))
+                .chain(args.into_iter().skip(1))
+                .collect();
+            match StackProbeCli::try_parse_from(&probe) {
+                Err(err) => err.exit(),
+                // `StackProbeCli` requires a subcommand to be
+                // *picked* from a fixed list; an unknown one
+                // triggers `Err` above. An invocation with no
+                // subcommand also triggers `Err`
+                // (`DisplayHelpOnMissingArgumentOrSubcommand`).
+                // If clap ever accepts something here, treat it
+                // as an internal invariant violation.
+                Ok(_) => unreachable!("StackProbeCli has no valid subcommand to dispatch"),
+            }
+        }
     }
 }
 
@@ -927,11 +829,51 @@ fn quarantine_get_opts(args: TestsQuarantineGetCliArgs) -> TestsQuarantineGetOpt
     }
 }
 
+/// Empty-subcommand-list clap parser used only by
+/// [`dispatch_stack`]'s "unknown subcommand" fallback. Triggering
+/// it on `mergify stack <bogus>` yields clap's "unrecognized
+/// subcommand … did you mean?" formatting and exits 2.
+#[derive(Parser)]
+#[command(
+    name = "stack",
+    about = "Manage stacked pull requests",
+    disable_help_subcommand = true
+)]
+struct StackProbeCli {
+    #[command(subcommand)]
+    command: StackProbeSubcommand,
+}
+
+#[derive(Subcommand)]
+enum StackProbeSubcommand {
+    // Names mirror the real handlers so clap's Levenshtein
+    // suggestions point at actually-supported names instead of
+    // an empty list. The variants are intentionally `Empty` — we
+    // never construct one; we only want clap's parser to know
+    // what's a valid subcommand for suggestion purposes.
+    Checkout,
+    Drop,
+    Edit,
+    Fixup,
+    Hooks,
+    List,
+    Move,
+    New,
+    Note,
+    Open,
+    Push,
+    Reorder,
+    Reword,
+    Setup,
+    Squash,
+    Sync,
+}
+
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
-    let debug = parsed.debug;
+    let _ = parsed.debug; // global flag — consulted by command impls, not here
     match parsed.command {
-        Subcommands::Stack(ShimmedArgs { args }) => dispatch_stack(debug, args),
+        Subcommands::Stack(ShimmedArgs { args }) => dispatch_stack(args),
         Subcommands::Internal(InternalArgs {
             command:
                 InternalSubcommand::StackLocalCommits(InternalStackLocalCommitsArgs {
@@ -4148,13 +4090,13 @@ mod tests {
             .iter()
             .map(|c| c["source"].as_str().expect("source"))
             .collect();
-        assert!(
-            sources.contains("native"),
-            "native stack subcommands missing"
-        );
-        assert!(
-            sources.contains("python-shim"),
-            "pending-python stack subcommands missing"
+        // Pure-Rust binary: every stack subcommand is native. Locked
+        // in so a regression that quietly re-introduces a non-native
+        // source (e.g. a hand-grafted shim) shows up here.
+        assert_eq!(
+            sources,
+            std::collections::BTreeSet::from(["native"]),
+            "expected only `native` stack subcommands",
         );
     }
 
@@ -4251,31 +4193,13 @@ mod tests {
         assert!(parsed.debug);
     }
 
-    #[test]
-    fn shimmed_dispatch_reinjects_debug_at_argv_head() {
-        // Clap consumes the root `--debug`; without re-injection,
-        // the Python side (which declares its own root `--debug`)
-        // would never see the flag. Drive this through an
-        // unrecognised stack subcommand so the dispatcher falls
-        // through to the shim — every concrete stack subcommand
-        // now dispatches natively.
-        let parsed = parse(&["--debug", "stack", "unknown-subcommand"]);
-        let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
-            panic!("an unrecognised stack subcommand must shim");
-        };
-        assert_eq!(argv, vec!["--debug", "stack", "unknown-subcommand"]);
-    }
-
-    #[test]
-    fn shimmed_dispatch_omits_debug_when_not_set() {
-        let parsed = parse(&["stack", "unknown-subcommand"]);
-        let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
-            panic!("an unrecognised stack subcommand must shim");
-        };
-        // No `--debug` prefix when the user didn't pass one — we
-        // don't want to silently flip Python into verbose mode.
-        assert_eq!(argv, vec!["stack", "unknown-subcommand"]);
-    }
+    // Note: the previous shimmed-dispatch tests verified that
+    // unknown stack subcommands fell through to a Python shim
+    // with the `--debug` flag re-injected. The shim is gone;
+    // unknown subcommands now exit via `clap::Error::exit()`
+    // (process::exit(2) + "did you mean?" output), which can't
+    // be unit-tested without subprocess plumbing. End-to-end
+    // smoke is covered by clap's own conformance tests.
 
     #[test]
     fn ci_junit_upload_dispatches_natively_via_deprecated_alias() {
@@ -4346,15 +4270,33 @@ mod tests {
     }
 
     #[test]
-    fn removed_flat_quarantine_commands_are_not_native() {
+    fn removed_flat_quarantine_commands_are_rejected_by_clap() {
         // The deprecated flat commands were removed; only the
-        // `quarantines` subgroup routes natively now.
-        let native = |argv: &[&str]| {
-            looks_native(&argv.iter().map(|s| (*s).to_string()).collect::<Vec<_>>())
-        };
-        assert!(!native(&["mergify", "tests", "quarantine"]));
-        assert!(!native(&["mergify", "tests", "unquarantine"]));
-        assert!(!native(&["mergify", "tests", "quarantined"]));
-        assert!(native(&["mergify", "tests", "quarantines", "add"]));
+        // `quarantines` subgroup routes natively now. Without the
+        // Python shim there's no fallback — clap rejects the
+        // unknown subcommand at parse time. Use `try_parse_from`
+        // (which returns Err instead of calling process::exit)
+        // so we can assert in-process.
+        for argv in [
+            &["mergify", "tests", "quarantine"][..],
+            &["mergify", "tests", "unquarantine"],
+            &["mergify", "tests", "quarantined"],
+        ] {
+            assert!(
+                CliRoot::try_parse_from(argv).is_err(),
+                "{argv:?} must be rejected by clap (deprecated flat command)",
+            );
+        }
+        // The replacement `quarantines` subgroup still parses
+        // (proving the regression is targeted, not blanket).
+        assert!(
+            CliRoot::try_parse_from(["mergify", "tests", "quarantines", "add", "--help"])
+                .is_err_and(|e| matches!(
+                    e.kind(),
+                    clap::error::ErrorKind::DisplayHelp
+                        | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+                )),
+            "the replacement subgroup must parse (help-display Err counts as parsed)",
+        );
     }
 }

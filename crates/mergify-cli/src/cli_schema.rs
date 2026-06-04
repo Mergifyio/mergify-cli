@@ -14,47 +14,26 @@ use clap::CommandFactory;
 use serde::Serialize;
 
 use crate::CliRoot;
+use crate::StackCheckoutCli;
 use crate::StackDropCli;
 use crate::StackEditCli;
 use crate::StackFixupCli;
+use crate::StackHooksCli;
+use crate::StackListCli;
+use crate::StackMoveCli;
 use crate::StackNewCli;
 use crate::StackNoteCli;
+use crate::StackOpenCli;
+use crate::StackPushCli;
+use crate::StackReorderCli;
+use crate::StackRewordCli;
+use crate::StackSetupCli;
+use crate::StackSquashCli;
+use crate::StackSyncCli;
 
 /// Internal contract version. Bump when a field is renamed or removed
 /// so the docs renderer can move in lockstep.
 const SCHEMA_VERSION: u32 = 1;
-
-/// Stack subcommands still served by the Python shim during the
-/// Python→Rust migration. clap can't see them — the `stack` group is
-/// a `trailing_var_arg` forwarder, so a plain walk of `CliRoot` would
-/// silently drop them from the published reference. Names and help are
-/// the source of truth in `mergify_cli/stack/cli.py`'s `@stack.command`
-/// decorators; delete each entry as its command ports to a native clap
-/// parser, at which point [`stack_subcommands`] picks it up
-/// automatically.
-const PENDING_PYTHON_STACK: &[(&str, &str)] = &[
-    ("hooks", "Show git hooks status and manage installation"),
-    (
-        "setup",
-        "Configure git hooks (alias for 'stack hooks --setup')",
-    ),
-    ("reorder", "Reorder the stack's commits"),
-    ("move", "Move a commit within the stack"),
-    (
-        "push",
-        "Push/sync the pull requests stack. By default, `stack push` skips the rebase when any PR \
-         in the stack has approvals; use --force-rebase to rebase anyway.",
-    ),
-    ("checkout", "Checkout the pull requests stack"),
-    (
-        "sync",
-        "Sync the stack: fetch trunk, remove merged commits, rebase",
-    ),
-    ("list", "List the stack's commits and their associated PRs"),
-    ("open", "Open a PR from the stack in the browser"),
-    ("reword", "Change a commit's message"),
-    ("squash", "Squash commits into a target commit"),
-];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,8 +64,10 @@ struct CommandNode {
     usage: String,
     aliases: Vec<String>,
     subcommand_required: bool,
-    /// `native` (introspected from clap) or `python-shim` (still
-    /// forwarded to Python; name + help only).
+    /// Always `"native"` — every command is introspected from
+    /// clap now that the Python tree is gone. Kept as a field so
+    /// the consumer-side schema doesn't have to special-case its
+    /// removal across `SCHEMA_VERSION` bumps.
     source: &'static str,
     args: Vec<ArgNode>,
     commands: Vec<CommandNode>,
@@ -321,40 +302,36 @@ fn render_usage(cmd: &clap::Command, path: &[String]) -> String {
     usage.strip_prefix("Usage: ").unwrap_or(&usage).to_string()
 }
 
-/// Subcommands of `stack`: the five natively-ported parsers grafted in
-/// (they're side-parsed outside `CliRoot`, so the walk can't reach
-/// them), followed by the still-Python ones from [`PENDING_PYTHON_STACK`].
+/// Subcommands of `stack`: every native parser grafted in. They're
+/// side-parsed outside `CliRoot` (the `stack` group is a
+/// `trailing_var_arg` forwarder for clap's "did you mean?" suggestion
+/// machinery), so a plain walk of `CliRoot` would silently drop them
+/// from the published reference.
 fn stack_subcommands(stack_path: &[String]) -> Vec<CommandNode> {
     let mut out = Vec::new();
 
     for mut native in [
+        StackCheckoutCli::command(),
+        StackDropCli::command(),
+        StackEditCli::command(),
+        StackFixupCli::command(),
+        StackHooksCli::command(),
+        StackListCli::command(),
+        StackMoveCli::command(),
         StackNewCli::command(),
         StackNoteCli::command(),
-        StackEditCli::command(),
-        StackDropCli::command(),
-        StackFixupCli::command(),
+        StackOpenCli::command(),
+        StackPushCli::command(),
+        StackReorderCli::command(),
+        StackRewordCli::command(),
+        StackSetupCli::command(),
+        StackSquashCli::command(),
+        StackSyncCli::command(),
     ] {
         native.build();
         let mut child = stack_path.to_vec();
         child.push(native.get_name().to_string());
         out.push(command_node(&native, child, &BTreeSet::new()));
-    }
-
-    for (name, help) in PENDING_PYTHON_STACK {
-        let mut child = stack_path.to_vec();
-        child.push((*name).to_string());
-        out.push(CommandNode {
-            name: (*name).to_string(),
-            usage: format!("{} {name} [OPTIONS]", stack_path.join(" ")),
-            path: child,
-            about: Some((*help).to_string()),
-            long_about: Some((*help).to_string()),
-            aliases: Vec::new(),
-            subcommand_required: false,
-            source: "python-shim",
-            args: Vec::new(),
-            commands: Vec::new(),
-        });
     }
 
     out
