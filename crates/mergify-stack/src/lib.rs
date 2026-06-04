@@ -51,6 +51,11 @@
 //!   Change-Id + stale Depends-On, append fresh Depends-On)
 //!   and `build_change_tasks` (turn the planned changes into
 //!   the per-PR dependency graph the upserter walks).
+//! - [`pr_upsert`] — the per-PR `Create` (POST `/pulls`) and
+//!   `Update` (PATCH `/pulls/{n}`) upserter plus the orphan
+//!   branch teardown. Ported from
+//!   `mergify_cli/stack/push.py::{create_or_update_pr,
+//!   delete_stack}`.
 
 pub mod approvals;
 pub mod change_id;
@@ -59,6 +64,7 @@ pub mod changes;
 pub mod commands;
 pub mod local_commits;
 pub mod notes_push;
+pub mod pr_upsert;
 pub mod push_helpers;
 pub mod rebase_log;
 pub mod rebase_todo;
