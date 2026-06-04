@@ -61,6 +61,11 @@
 //!   revision history (parse + append + recover-from-corrupt).
 //!   Ported from `mergify_cli/stack/push.py::{_update_comment_for_pull,
 //!   _update_revision_for_pull}`.
+//! - [`plan`] — the layer above `classify` that applies the
+//!   `--next-only` / `--only-update-existing-pulls` overrides
+//!   and decorates each change with the `dest_branch` /
+//!   `base_branch` the upserter needs. Ported from
+//!   `mergify_cli/stack/changes.py::get_changes`.
 
 pub mod approvals;
 pub mod change_id;
@@ -70,6 +75,7 @@ pub mod commands;
 pub mod comment_upsert;
 pub mod local_commits;
 pub mod notes_push;
+pub mod plan;
 pub mod pr_upsert;
 pub mod push_helpers;
 pub mod rebase_log;

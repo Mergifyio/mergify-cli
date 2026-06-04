@@ -126,7 +126,12 @@ pub fn build_change_tasks(local_changes: &[LocalChange]) -> Vec<TaskMeta> {
         let pull_ready_at_start = match action {
             Action::Create => false,
             Action::Update => has_pull,
-            Action::SkipMerged | Action::SkipUpToDate => true,
+            // Skip-* actions don't drive an upsert, so downstream
+            // awaiters don't need to block on them.
+            Action::SkipMerged
+            | Action::SkipUpToDate
+            | Action::SkipCreate
+            | Action::SkipNextOnly => true,
         };
 
         tasks.push(TaskMeta {

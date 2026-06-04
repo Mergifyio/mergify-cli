@@ -151,10 +151,12 @@ pub async fn create_or_update_pr(
             let pull: Value = client.post(&path, &body).await?;
             Ok(pull)
         }
-        Action::SkipMerged | Action::SkipUpToDate => Err(CliError::Generic(format!(
-            "Unhandled action: {:?}",
-            input.action,
-        ))),
+        Action::SkipMerged | Action::SkipUpToDate | Action::SkipCreate | Action::SkipNextOnly => {
+            Err(CliError::Generic(format!(
+                "Unhandled action: {:?}",
+                input.action,
+            )))
+        }
     }
 }
 
