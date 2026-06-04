@@ -3,5 +3,6 @@
 //! main binary dispatches into here for ported subcommands; the
 //! rest still shim to Python.
 
+pub mod edit;
 pub mod new;
 pub mod note;

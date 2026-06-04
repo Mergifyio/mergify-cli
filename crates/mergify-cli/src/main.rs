@@ -156,6 +156,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
+    ("stack", "edit"),
     ("stack", "new"),
     ("stack", "note"),
     // Internal Python migration helpers. Listed so `looks_native`
@@ -164,6 +165,11 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     // the `Subcommands::Internal` variant).
     ("_internal", "stack-local-commits"),
     ("_internal", "stack-remote-changes"),
+    // Self-invocation target for the rebase-todo machinery — set
+    // as `GIT_SEQUENCE_EDITOR` before `git rebase -i` so we can
+    // rewrite the todo file in-process. Not a user-facing
+    // command; not stable.
+    ("_internal", "rebase-todo-rewrite"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -220,6 +226,37 @@ enum NativeCommand {
     /// [--remove]` — attach/append/remove the "why was this commit
     /// amended" note on `refs/notes/mergify/stack`.
     StackNote(StackNoteOpts),
+    /// `mergify stack edit [<commit>]` — pause an interactive
+    /// rebase at the target commit so the user can amend it.
+    StackEdit(StackEditOpts),
+    /// `_internal rebase-todo-rewrite --action <ACTION>
+    /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
+    /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
+    /// subcommands. Reads the rebase-todo at `TODO_PATH`,
+    /// applies the named transformation, writes it back in place.
+    /// Wire format is not stable.
+    InternalRebaseTodoRewrite(InternalRebaseTodoRewriteOpts),
+}
+
+struct StackEditOpts {
+    /// `None` for an interactive rebase (no commit pre-selected);
+    /// `Some(prefix)` to pause the rebase on the matching commit.
+    commit_prefix: Option<String>,
+}
+
+struct InternalRebaseTodoRewriteOpts {
+    /// Which transformation to apply. Today only `edit` is wired
+    /// up; the rest land with their respective port slices.
+    action: InternalRebaseAction,
+    /// Target commit SHA (or SHA prefix).
+    sha: String,
+    /// Path to the rebase-todo file git wrote.
+    todo_path: PathBuf,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum InternalRebaseAction {
+    Edit,
 }
 
 struct StackNoteOpts {
@@ -519,6 +556,13 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             };
             Dispatch::Native(NativeCommand::StackNote(StackNoteOpts::from(parsed)))
         }
+        Some("edit") => {
+            let parsed = match StackEditCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackEdit(StackEditOpts::from(parsed)))
+        }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
 }
@@ -560,6 +604,20 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 repo,
                 stack_prefix,
                 author,
+            },
+        )),
+        Subcommands::Internal(InternalArgs {
+            command:
+                InternalSubcommand::RebaseTodoRewrite(InternalRebaseTodoRewriteArgs {
+                    action,
+                    sha,
+                    todo_path,
+                }),
+        }) => Dispatch::Native(NativeCommand::InternalRebaseTodoRewrite(
+            InternalRebaseTodoRewriteOpts {
+                action,
+                sha,
+                todo_path,
             },
         )),
         Subcommands::Ci(CiArgs {
@@ -1240,6 +1298,53 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackEdit(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let outcome = mergify_stack::commands::edit::run(
+                    &mergify_stack::commands::edit::Options {
+                        repo_dir: None,
+                        commit_prefix: opts.commit_prefix.as_deref(),
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::edit::Outcome::PausedAt { commit } => {
+                        let short = &commit.sha[..commit.sha.len().min(12)];
+                        println!("Editing commit: {short} {subject}", subject = commit.subject);
+                        println!("Amend the commit, then run: git rebase --continue");
+                    }
+                    mergify_stack::commands::edit::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                    mergify_stack::commands::edit::Outcome::InteractiveCompleted => {}
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
+            NativeCommand::InternalRebaseTodoRewrite(opts) => {
+                let action = match opts.action {
+                    InternalRebaseAction::Edit => mergify_stack::rebase_todo::Action::Edit {
+                        sha: opts.sha,
+                    },
+                };
+                let original = std::fs::read_to_string(&opts.todo_path).map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "read rebase-todo at {}: {e}",
+                        opts.todo_path.display()
+                    ))
+                })?;
+                let rewritten = mergify_stack::rebase_todo::rewrite(&original, &action)?;
+                std::fs::write(&opts.todo_path, rewritten).map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "write rebase-todo at {}: {e}",
+                        opts.todo_path.display()
+                    ))
+                })?;
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalStackLocalCommits(opts) => {
                 // Run `git log` for the stack range, parse each
                 // commit's `Change-Id:` trailer, emit a JSON array
@@ -1383,6 +1488,28 @@ enum InternalSubcommand {
     /// regrouping. Not a stable user-facing surface.
     #[command(name = "stack-remote-changes")]
     StackRemoteChanges(InternalStackRemoteChangesArgs),
+    /// Self-invocation target for the rebase-family stack
+    /// subcommands. `mergify stack <cmd>` sets
+    /// `GIT_SEQUENCE_EDITOR` to a command line ending in this
+    /// subcommand before spawning `git rebase -i`; git invokes
+    /// it on the freshly-written rebase-todo file. Not a stable
+    /// user-facing surface.
+    #[command(name = "rebase-todo-rewrite")]
+    RebaseTodoRewrite(InternalRebaseTodoRewriteArgs),
+}
+
+#[derive(clap::Args)]
+struct InternalRebaseTodoRewriteArgs {
+    /// Transformation to apply. Today only `edit` is wired up.
+    #[arg(long, value_enum)]
+    action: InternalRebaseAction,
+    /// Target SHA (or SHA prefix).
+    #[arg(long)]
+    sha: String,
+    /// Path to the rebase-todo file git wrote; positional so it
+    /// catches whatever git's `sh -c "$EDITOR \"$@\"" sh <path>`
+    /// hands us.
+    todo_path: PathBuf,
 }
 
 /// `mergify stack new <name>` — clap definition for the natively-
@@ -1428,6 +1555,25 @@ impl From<StackNewCli> for StackNewOpts {
             // with the Python click flag pair but is a no-op since
             // it matches the default.
             checkout: !cli.no_checkout,
+        }
+    }
+}
+
+/// `mergify stack edit [<commit>]` — clap definition for the
+/// natively-ported `stack edit` subcommand. Same secondary-parse
+/// pattern as `stack new` / `stack note`.
+#[derive(Parser)]
+#[command(name = "edit", about = "Edit the stack history")]
+struct StackEditCli {
+    /// Commit to pause the rebase on. Accepts a SHA prefix or a
+    /// Change-Id prefix; omit for a fully interactive rebase.
+    commit: Option<String>,
+}
+
+impl From<StackEditCli> for StackEditOpts {
+    fn from(cli: StackEditCli) -> Self {
+        Self {
+            commit_prefix: cli.commit,
         }
     }
 }

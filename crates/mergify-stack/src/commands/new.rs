@@ -194,7 +194,7 @@ mod tests {
     }
 
     fn run_in(dir: &Path, args: &[&str]) {
-        let ok = StdCommand::new("git")
+        let ok = crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(args)
@@ -205,7 +205,7 @@ mod tests {
     }
 
     fn run_status(args: &[&str]) {
-        let ok = StdCommand::new("git")
+        let ok = crate::test_env::isolated_git()
             .args(args)
             .status()
             .unwrap()
@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn branch_exists(dir: &Path, name: &str) -> bool {
-        StdCommand::new("git")
+        crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(["rev-parse", "--verify", "--quiet", name])
@@ -224,7 +224,7 @@ mod tests {
     }
 
     fn current_branch(dir: &Path) -> String {
-        let out = StdCommand::new("git")
+        let out = crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(["rev-parse", "--abbrev-ref", "HEAD"])

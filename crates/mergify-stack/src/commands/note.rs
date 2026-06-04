@@ -319,7 +319,6 @@ fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command as StdCommand;
     use tempfile::TempDir;
 
     fn init_repo() -> TempDir {
@@ -335,21 +334,8 @@ mod tests {
         dir
     }
 
-    /// Spawn `git` with the user's global and system config
-    /// neutralised. Parallel tests would otherwise race on
-    /// includes, hooks, or template directories pulled in by
-    /// `~/.gitconfig`; symptom is sporadic `git <op> failed`
-    /// panics in tests that just happen to spawn git as a side
-    /// effect of the production code path under test.
-    fn isolated_git() -> StdCommand {
-        let mut cmd = StdCommand::new("git");
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
-        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-        cmd
-    }
-
     fn run_in(dir: &Path, args: &[&str]) {
-        let ok = isolated_git()
+        let ok = crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(args)
@@ -360,7 +346,7 @@ mod tests {
     }
 
     fn read_note(dir: &Path, sha: &str) -> Option<String> {
-        let out = isolated_git()
+        let out = crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(["notes", "--ref=refs/notes/mergify/stack", "show", sha])
@@ -374,7 +360,7 @@ mod tests {
     }
 
     fn head_sha(dir: &Path) -> String {
-        let out = isolated_git()
+        let out = crate::test_env::isolated_git()
             .arg("-C")
             .arg(dir)
             .args(["rev-parse", "HEAD"])
@@ -556,7 +542,7 @@ mod tests {
         let workdir = tempfile::tempdir().unwrap();
         let upstream = workdir.path().join("up.git");
         let local = workdir.path().join("local");
-        let ok = isolated_git()
+        let ok = crate::test_env::isolated_git()
             .args([
                 "init",
                 "-q",
@@ -610,7 +596,7 @@ mod tests {
         let workdir = tempfile::tempdir().unwrap();
         let upstream = workdir.path().join("up.git");
         let local = workdir.path().join("local");
-        isolated_git()
+        crate::test_env::isolated_git()
             .args([
                 "init",
                 "-q",
