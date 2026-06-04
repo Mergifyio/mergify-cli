@@ -157,6 +157,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "update"),
     ("freeze", "delete"),
     ("stack", "new"),
+    ("stack", "note"),
     // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
     // clap rejects it, but they stay hidden from `--help` (see
@@ -215,6 +216,25 @@ enum NativeCommand {
     /// tracking the resolved trunk. First stack subcommand to land
     /// natively; the rest still shim to Python.
     StackNew(StackNewOpts),
+    /// `mergify stack note [<commit>] [-m <msg>] [--append]
+    /// [--remove]` — attach/append/remove the "why was this commit
+    /// amended" note on `refs/notes/mergify/stack`.
+    StackNote(StackNoteOpts),
+}
+
+struct StackNoteOpts {
+    /// Commit to target — `None` means HEAD. Accepts a SHA prefix,
+    /// a ref (`HEAD~1`, branch name, etc.), or a Change-Id prefix
+    /// (resolved against the stack walk).
+    commit: Option<String>,
+    /// Inline message; `None` means "open `$GIT_EDITOR`". Mutually
+    /// exclusive with `remove`.
+    message: Option<String>,
+    /// Concatenate to the existing note instead of replacing.
+    append: bool,
+    /// Remove the note. Mutually exclusive with `message` /
+    /// `append`.
+    remove: bool,
 }
 
 struct StackNewOpts {
@@ -481,17 +501,26 @@ fn detect_dispatch(argv: &[String]) -> Option<Dispatch> {
 /// subcommands later means adding a branch here and a matching
 /// `NATIVE_COMMANDS` entry.
 fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
-    if args.first().is_some_and(|a| a == "new") {
-        // `args[0]` is `"new"` — clap consumes it as the program
-        // name in the secondary parse, leaving `args[1..]` as the
-        // actual arguments.
-        let parsed = match StackNewCli::try_parse_from(&args) {
-            Ok(parsed) => parsed,
-            Err(err) => err.exit(),
-        };
-        return Dispatch::Native(NativeCommand::StackNew(StackNewOpts::from(parsed)));
+    match args.first().map(String::as_str) {
+        Some("new") => {
+            // `args[0]` is the subcommand — clap consumes it as
+            // the program name in the secondary parse, leaving
+            // `args[1..]` as the actual arguments.
+            let parsed = match StackNewCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackNew(StackNewOpts::from(parsed)))
+        }
+        Some("note") => {
+            let parsed = match StackNoteCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackNote(StackNoteOpts::from(parsed)))
+        }
+        _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
-    Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args)))
 }
 
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
@@ -1169,6 +1198,48 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackNote(opts) => {
+                let action = if opts.remove {
+                    mergify_stack::commands::note::Action::Remove
+                } else if let Some(msg) = opts.message {
+                    if opts.append {
+                        mergify_stack::commands::note::Action::Append(msg)
+                    } else {
+                        mergify_stack::commands::note::Action::Set(msg)
+                    }
+                } else {
+                    mergify_stack::commands::note::Action::FromEditor
+                };
+                let outcome = mergify_stack::commands::note::run(
+                    None,
+                    opts.commit.as_deref(),
+                    action,
+                )?;
+                match outcome {
+                    mergify_stack::commands::note::Outcome::Attached { sha, subject } => {
+                        println!(
+                            "Note attached to {short} {subject}.",
+                            short = &sha[..sha.len().min(12)],
+                        );
+                    }
+                    mergify_stack::commands::note::Outcome::Removed { sha, subject } => {
+                        println!(
+                            "Note removed from {short} {subject}.",
+                            short = &sha[..sha.len().min(12)],
+                        );
+                    }
+                    mergify_stack::commands::note::Outcome::NoNoteToRemove {
+                        sha,
+                        subject,
+                    } => {
+                        println!(
+                            "No note on {short} {subject}.",
+                            short = &sha[..sha.len().min(12)],
+                        );
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalStackLocalCommits(opts) => {
                 // Run `git log` for the stack range, parse each
                 // commit's `Change-Id:` trailer, emit a JSON array
@@ -1357,6 +1428,50 @@ impl From<StackNewCli> for StackNewOpts {
             // with the Python click flag pair but is a no-op since
             // it matches the default.
             checkout: !cli.no_checkout,
+        }
+    }
+}
+
+/// `mergify stack note [<commit>]` — clap definition for the
+/// natively-ported `stack note` subcommand. Same secondary-parse
+/// pattern as `stack new`.
+#[derive(Parser)]
+#[command(
+    name = "note",
+    about = "Attach a 'why was this commit amended' note to a commit"
+)]
+struct StackNoteCli {
+    /// Target commit. Accepts a SHA prefix, a ref (`HEAD~1`,
+    /// branch name, …), or a Change-Id prefix (resolved against
+    /// the stack walk). Defaults to HEAD.
+    commit: Option<String>,
+
+    /// Note message. If omitted, opens `$GIT_EDITOR` /
+    /// `$VISUAL` / `$EDITOR` / `vi` on a tempfile.
+    #[arg(short = 'm', long = "message")]
+    message: Option<String>,
+
+    /// Append to an existing note instead of replacing.
+    #[arg(long = "append", action = clap::ArgAction::SetTrue)]
+    append: bool,
+
+    /// Remove the note on the target commit. Mutually exclusive
+    /// with `--message` and `--append`.
+    #[arg(
+        long = "remove",
+        action = clap::ArgAction::SetTrue,
+        conflicts_with_all = ["message", "append"],
+    )]
+    remove: bool,
+}
+
+impl From<StackNoteCli> for StackNoteOpts {
+    fn from(cli: StackNoteCli) -> Self {
+        Self {
+            commit: cli.commit,
+            message: cli.message,
+            append: cli.append,
+            remove: cli.remove,
         }
     }
 }
