@@ -26,6 +26,11 @@ pub enum Action {
     /// Matching is prefix-based: a todo SHA either starts with
     /// `<sha>` or `<sha>` starts with the todo SHA.
     Edit { sha: String },
+    /// Remove the `pick` lines for every SHA in `shas`. Each SHA
+    /// must match exactly one `pick` line; missing matches surface
+    /// as [`CliError::InvalidState`] so the rebase doesn't quietly
+    /// proceed with a subset of the intended drops.
+    Drop { shas: Vec<String> },
 }
 
 /// Apply `action` to `todo` and return the rewritten contents.
@@ -35,6 +40,7 @@ pub enum Action {
 pub fn rewrite(todo: &str, action: &Action) -> Result<String, CliError> {
     match action {
         Action::Edit { sha } => rewrite_edit(todo, sha),
+        Action::Drop { shas } => rewrite_drop(todo, shas),
     }
 }
 
@@ -63,6 +69,42 @@ fn rewrite_edit(todo: &str, target: &str) -> Result<String, CliError> {
     if !matched {
         return Err(CliError::InvalidState(format!(
             "rebase-todo has no `pick` line for {target}; aborting so the rebase doesn't run unchanged"
+        )));
+    }
+    Ok(out)
+}
+
+fn rewrite_drop(todo: &str, targets: &[String]) -> Result<String, CliError> {
+    if targets.is_empty() {
+        return Err(CliError::InvalidState(
+            "rebase-todo drop: no commits to drop".to_string(),
+        ));
+    }
+    let mut matched: Vec<bool> = vec![false; targets.len()];
+    let mut out = String::with_capacity(todo.len());
+    for line in todo.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if let Some(rest) = trimmed.strip_prefix("pick ") {
+            let (sha, _) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            if let Some(idx) = targets.iter().position(|t| sha_matches(sha, t)) {
+                matched[idx] = true;
+                // Skip this line — drop semantics is "remove the
+                // pick line", same as deleting it in
+                // `git rebase -i`.
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    let missing: Vec<&str> = targets
+        .iter()
+        .zip(matched.iter())
+        .filter_map(|(t, &m)| (!m).then_some(t.as_str()))
+        .collect();
+    if !missing.is_empty() {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo has no `pick` line for: {}; aborting so the rebase doesn't run with a partial drop",
+            missing.join(", ")
         )));
     }
     Ok(out)
@@ -205,5 +247,84 @@ exec cargo test
             out,
             "edit 1a2b3c4d feat\nfixup deadbeef hotfix\nexec cargo test\n"
         );
+    }
+
+    #[test]
+    fn drop_removes_targeted_pick_lines() {
+        let out = rewrite(
+            TODO,
+            &Action::Drop {
+                shas: vec!["deadbeef".to_string()],
+            },
+        )
+        .unwrap();
+        assert!(!out.contains("deadbeef"));
+        assert!(out.contains("pick 1a2b3c4d feat: add foo\n"));
+        assert!(out.contains("pick cafe1234 fix: typo\n"));
+        assert!(out.contains("# Rebase abc..def onto abc (3 commands)\n"));
+    }
+
+    #[test]
+    fn drop_handles_multiple_shas() {
+        let out = rewrite(
+            TODO,
+            &Action::Drop {
+                shas: vec!["1a2b3c4d".to_string(), "cafe1234".to_string()],
+            },
+        )
+        .unwrap();
+        assert!(!out.contains("1a2b3c4d"));
+        assert!(!out.contains("cafe1234"));
+        assert!(out.contains("pick deadbeef chore: bump deps\n"));
+    }
+
+    #[test]
+    fn drop_with_no_match_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::Drop {
+                shas: vec!["ffffffff".to_string()],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(msg.contains("ffffffff"), "got: {msg}");
+                assert!(msg.contains("partial drop"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drop_with_partial_match_errors_and_lists_missing() {
+        // Half-and-half: one valid SHA, one missing. Python
+        // skipped the valid drop and aborted — we do too, and we
+        // name the missing ones to make the failure actionable.
+        let err = rewrite(
+            TODO,
+            &Action::Drop {
+                shas: vec!["deadbeef".to_string(), "ffffffff".to_string()],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(msg.contains("ffffffff"), "got: {msg}");
+                assert!(!msg.contains("deadbeef"), "got: {msg}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drop_with_empty_target_list_errors() {
+        let err = rewrite(TODO, &Action::Drop { shas: vec![] }).unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(msg.contains("no commits to drop"), "got: {msg}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

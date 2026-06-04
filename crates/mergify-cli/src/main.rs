@@ -156,6 +156,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
+    ("stack", "drop"),
     ("stack", "edit"),
     ("stack", "new"),
     ("stack", "note"),
@@ -229,6 +230,9 @@ enum NativeCommand {
     /// `mergify stack edit [<commit>]` — pause an interactive
     /// rebase at the target commit so the user can amend it.
     StackEdit(StackEditOpts),
+    /// `mergify stack drop <COMMIT>... [--dry-run]` — drop one or
+    /// more commits from the stack via the rebase-todo machinery.
+    StackDrop(StackDropOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -244,12 +248,21 @@ struct StackEditOpts {
     commit_prefix: Option<String>,
 }
 
+struct StackDropOpts {
+    commit_prefixes: Vec<String>,
+    dry_run: bool,
+}
+
 struct InternalRebaseTodoRewriteOpts {
-    /// Which transformation to apply. Today only `edit` is wired
-    /// up; the rest land with their respective port slices.
+    /// Which transformation to apply. New variants land with the
+    /// respective port slices (today: `edit`, `drop`).
     action: InternalRebaseAction,
-    /// Target commit SHA (or SHA prefix).
-    sha: String,
+    /// Target commit SHA — used by `edit`. Required for any
+    /// single-target action.
+    sha: Option<String>,
+    /// Comma-separated commit SHAs — used by `drop`. Required
+    /// for multi-target actions.
+    shas: Option<String>,
     /// Path to the rebase-todo file git wrote.
     todo_path: PathBuf,
 }
@@ -257,6 +270,7 @@ struct InternalRebaseTodoRewriteOpts {
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum InternalRebaseAction {
     Edit,
+    Drop,
 }
 
 struct StackNoteOpts {
@@ -563,6 +577,13 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             };
             Dispatch::Native(NativeCommand::StackEdit(StackEditOpts::from(parsed)))
         }
+        Some("drop") => {
+            let parsed = match StackDropCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackDrop(StackDropOpts::from(parsed)))
+        }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
 }
@@ -611,12 +632,14 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 InternalSubcommand::RebaseTodoRewrite(InternalRebaseTodoRewriteArgs {
                     action,
                     sha,
+                    shas,
                     todo_path,
                 }),
         }) => Dispatch::Native(NativeCommand::InternalRebaseTodoRewrite(
             InternalRebaseTodoRewriteOpts {
                 action,
                 sha,
+                shas,
                 todo_path,
             },
         )),
@@ -1324,11 +1347,68 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackDrop(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let outcome = mergify_stack::commands::drop::run(
+                    &mergify_stack::commands::drop::Options {
+                        repo_dir: None,
+                        commit_prefixes: &opts.commit_prefixes,
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::drop::Outcome::Dropped { dropped } => {
+                        for c in &dropped {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("Dropping: {short} {subject}", subject = c.subject);
+                        }
+                        println!("Commits dropped successfully.");
+                    }
+                    mergify_stack::commands::drop::Outcome::DryRun { plan } => {
+                        println!("Drop plan:");
+                        for c in &plan {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("  drop {short} {subject}", subject = c.subject);
+                        }
+                        println!("Dry run — no changes made");
+                    }
+                    mergify_stack::commands::drop::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
-                    InternalRebaseAction::Edit => mergify_stack::rebase_todo::Action::Edit {
-                        sha: opts.sha,
-                    },
+                    InternalRebaseAction::Edit => {
+                        let sha = opts.sha.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action edit requires --sha"
+                                    .to_string(),
+                            )
+                        })?;
+                        mergify_stack::rebase_todo::Action::Edit { sha }
+                    }
+                    InternalRebaseAction::Drop => {
+                        let raw = opts.shas.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action drop requires --shas"
+                                    .to_string(),
+                            )
+                        })?;
+                        let shas = raw
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        mergify_stack::rebase_todo::Action::Drop { shas }
+                    }
                 };
                 let original = std::fs::read_to_string(&opts.todo_path).map_err(|e| {
                     mergify_core::CliError::Generic(format!(
@@ -1500,12 +1580,16 @@ enum InternalSubcommand {
 
 #[derive(clap::Args)]
 struct InternalRebaseTodoRewriteArgs {
-    /// Transformation to apply. Today only `edit` is wired up.
+    /// Transformation to apply. New variants land with the
+    /// respective port slices (today: `edit`, `drop`).
     #[arg(long, value_enum)]
     action: InternalRebaseAction,
-    /// Target SHA (or SHA prefix).
+    /// Target SHA — required when `--action edit`.
     #[arg(long)]
-    sha: String,
+    sha: Option<String>,
+    /// Comma-separated SHAs — required when `--action drop`.
+    #[arg(long)]
+    shas: Option<String>,
     /// Path to the rebase-todo file git wrote; positional so it
     /// catches whatever git's `sh -c "$EDITOR \"$@\"" sh <path>`
     /// hands us.
@@ -1574,6 +1658,30 @@ impl From<StackEditCli> for StackEditOpts {
     fn from(cli: StackEditCli) -> Self {
         Self {
             commit_prefix: cli.commit,
+        }
+    }
+}
+
+/// `mergify stack drop <COMMIT>... [--dry-run]` — clap definition
+/// for the natively-ported `stack drop` subcommand.
+#[derive(Parser)]
+#[command(name = "drop", about = "Drop commits from the stack")]
+struct StackDropCli {
+    /// Commits to drop. Each accepts a SHA prefix or a Change-Id
+    /// prefix.
+    #[arg(required = true)]
+    commits: Vec<String>,
+
+    /// Show the plan without dropping.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+impl From<StackDropCli> for StackDropOpts {
+    fn from(cli: StackDropCli) -> Self {
+        Self {
+            commit_prefixes: cli.commits,
+            dry_run: cli.dry_run,
         }
     }
 }
