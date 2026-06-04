@@ -66,6 +66,12 @@
 //!   and decorates each change with the `dest_branch` /
 //!   `base_branch` the upserter needs. Ported from
 //!   `mergify_cli/stack/changes.py::get_changes`.
+//! - [`commands::push`] — the native `stack push` orchestrator
+//!   that wires every leaf above into the end-to-end flow.
+//!   Ported from `mergify_cli/stack/push.py::stack_push`. Runs
+//!   per-PR upserts sequentially (typical 2–5 PR stacks make
+//!   the latency difference negligible vs. the GitHub round-
+//!   trip cost).
 
 pub mod approvals;
 pub mod change_id;
