@@ -15,5 +15,6 @@ pub mod note;
 pub mod open;
 pub mod reorder;
 pub mod reword;
+pub mod setup;
 pub mod squash;
 pub mod sync;
