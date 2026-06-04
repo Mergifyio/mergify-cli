@@ -16,8 +16,14 @@
 //! - [`commands::new`] — the native implementation of
 //!   `mergify stack new`. First stack subcommand to land natively
 //!   (the rest still shim to Python).
+//! - [`change_type`] — patch-id-based rebase-vs-content
+//!   classification for force-pushed PR heads, plus the
+//!   `refs/pull/<n>/head` fetch helper. Leaf-only port from
+//!   `mergify_cli/stack/push.py`; the bridge that lets Python
+//!   consume it ships in a follow-up.
 
 pub mod change_id;
+pub mod change_type;
 pub mod changes;
 pub mod commands;
 pub mod local_commits;
