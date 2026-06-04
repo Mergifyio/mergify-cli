@@ -1,11 +1,12 @@
-//! Test-only helpers shared between `detector` and `scopes_send`.
+//! Test-only helpers shared across the CI-aware command modules
+//! (`detector`, `scopes_send`, `tests_show`, `tests_quarantine`).
 //!
-//! Both modules test CI-provider-aware code paths and need to scrub
+//! These modules test CI-provider-aware code paths and need to scrub
 //! the host's CI env vars before running each case — otherwise a
 //! test running on a real Buildkite/Actions/Circle/Jenkins host
 //! inherits provider state and the detector picks the wrong branch.
 //! Two flavors: a sync `with_ci_env` and an async `with_ci_env_async`
-//! (used by the `#[tokio::test]` cases in `scopes_send`).
+//! (used by the `#[tokio::test]` cases).
 
 use std::future::Future;
 

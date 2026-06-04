@@ -69,7 +69,7 @@ pub async fn run(
     let api_url = Url::parse(&api_url_raw)
         .map_err(|e| CliError::Configuration(format!("--api-url is not a valid URL: {e}")))?;
     let token = resolve_token(opts.token)?;
-    let repository = resolve_repository(opts.repository)?;
+    let repository = detector::resolve_repository(opts.repository)?;
     let tests_target_branch = resolve_tests_target_branch(opts.tests_target_branch)?;
     let test_exit_code = resolve_test_exit_code(opts.test_exit_code)?;
     let files = expand_files(opts.files)?;
@@ -244,18 +244,6 @@ fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
                 "--token not provided and MERGIFY_TOKEN env var is empty".to_string(),
             )
         })
-}
-
-fn resolve_repository(explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(v) = explicit.filter(|s| !s.is_empty()) {
-        return Ok(v.to_string());
-    }
-    detector::get_github_repository().ok_or_else(|| {
-        CliError::Configuration(
-            "--repository not provided and could not be detected from the CI environment"
-                .to_string(),
-        )
-    })
 }
 
 fn resolve_tests_target_branch(explicit: Option<&str>) -> Result<String, CliError> {

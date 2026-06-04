@@ -18,12 +18,15 @@ use mergify_core::auth;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::detector::resolve_repository;
 use crate::detector::split_owner_repo;
 
 const DETAILS_FANOUT: usize = 5;
 
 pub struct TestsShowOptions<'a> {
-    pub repository: &'a str,
+    /// Explicit `--repository owner/repo`, or `None` to detect it
+    /// from the CI environment.
+    pub repository: Option<&'a str>,
     pub test_names: &'a [String],
     pub token: Option<&'a str>,
     pub api_url: Option<&'a str>,
@@ -40,7 +43,8 @@ pub async fn run(
     opts: TestsShowOptions<'_>,
     output: &mut dyn Output,
 ) -> Result<ExitCode, CliError> {
-    let (owner, repo) = split_owner_repo(opts.repository)?;
+    let repository = resolve_repository(opts.repository)?;
+    let (owner, repo) = split_owner_repo(&repository)?;
     let token = auth::resolve_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = Arc::new(HttpClient::new(api_url, token, ApiFlavor::Mergify)?);
@@ -386,6 +390,7 @@ mod tests {
     use wiremock::matchers::path as path_matcher;
 
     use super::*;
+    use crate::testing::with_ci_env_async;
 
     type SharedBytes = Arc<Mutex<Vec<u8>>>;
 
@@ -487,7 +492,7 @@ mod tests {
 
     fn options<'a>(api_url: &'a str, names: &'a [String]) -> TestsShowOptions<'a> {
         TestsShowOptions {
-            repository: "owner/repo",
+            repository: Some("owner/repo"),
             test_names: names,
             token: Some("test-token"),
             api_url: Some(api_url),
@@ -522,6 +527,41 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&stdout).unwrap(),
             json!({"tests": []})
         );
+    }
+
+    #[tokio::test]
+    async fn detects_repository_from_ci_env() {
+        // With no `--repository`, the command resolves the repository
+        // from the CI environment — here GitHub Actions'
+        // `GITHUB_REPOSITORY` — and queries that repository's endpoint.
+        with_ci_env_async(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_REPOSITORY", Some("owner/repo")),
+            ],
+            async {
+                let server = MockServer::start().await;
+                mount_search(&server, json!({"tests": []})).await;
+
+                let mut cap = captured(OutputMode::Json);
+                let api_url = server.uri();
+                let names = vec!["ghost".to_string()];
+                let opts = TestsShowOptions {
+                    repository: None,
+                    test_names: &names,
+                    token: Some("test-token"),
+                    api_url: Some(&api_url),
+                    pipeline_name: &[],
+                    pipeline_name_exclude: &[],
+                    job_name: &[],
+                    job_name_exclude: &[],
+                    per_page: None,
+                };
+                let exit = run(opts, &mut cap.output).await.unwrap();
+                assert_eq!(exit, ExitCode::Success);
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -855,7 +895,7 @@ mod tests {
         let job_excludes = vec!["lint".to_string()];
 
         let opts = TestsShowOptions {
-            repository: "owner/repo",
+            repository: Some("owner/repo"),
             test_names: &names,
             token: Some("t"),
             api_url: Some(&api_url),
@@ -928,7 +968,7 @@ mod tests {
         let mut cap = captured(OutputMode::Human);
         let names = vec!["a".to_string()];
         let opts = TestsShowOptions {
-            repository: "not-a-slash-pair",
+            repository: Some("not-a-slash-pair"),
             test_names: &names,
             token: Some("t"),
             api_url: Some("https://example.invalid"),

@@ -335,7 +335,7 @@ struct FreezeListOpts {
 }
 
 struct TestsShowOpts {
-    repository: String,
+    repository: Option<String>,
     test_names: Vec<String>,
     token: Option<String>,
     api_url: Option<String>,
@@ -348,7 +348,7 @@ struct TestsShowOpts {
 }
 
 struct TestsQuarantineOpts {
-    repository: String,
+    repository: Option<String>,
     test_name: String,
     reason: String,
     branch: Option<String>,
@@ -358,7 +358,7 @@ struct TestsQuarantineOpts {
 }
 
 struct TestsUnquarantineOpts {
-    repository: String,
+    repository: Option<String>,
     name_or_id: String,
     token: Option<String>,
     api_url: Option<String>,
@@ -366,7 +366,7 @@ struct TestsUnquarantineOpts {
 }
 
 struct TestsQuarantinedOpts {
-    repository: String,
+    repository: Option<String>,
     token: Option<String>,
     api_url: Option<String>,
     json: bool,
@@ -1010,7 +1010,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::TestsShow(opts) => {
                 mergify_ci::tests_show::run(
                     TestsShowOptions {
-                        repository: &opts.repository,
+                        repository: opts.repository.as_deref(),
                         test_names: &opts.test_names,
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
@@ -1027,7 +1027,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::TestsQuarantine(opts) => {
                 mergify_ci::tests_quarantine::quarantine(
                     QuarantineOptions {
-                        repository: &opts.repository,
+                        repository: opts.repository.as_deref(),
                         test_name: &opts.test_name,
                         reason: &opts.reason,
                         branch: opts.branch.as_deref(),
@@ -1041,7 +1041,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::TestsUnquarantine(opts) => {
                 mergify_ci::tests_quarantine::unquarantine(
                     UnquarantineOptions {
-                        repository: &opts.repository,
+                        repository: opts.repository.as_deref(),
                         name_or_id: &opts.name_or_id,
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
@@ -1053,7 +1053,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             NativeCommand::TestsQuarantined(opts) => {
                 mergify_ci::tests_quarantine::quarantined(
                     QuarantinedOptions {
-                        repository: &opts.repository,
+                        repository: opts.repository.as_deref(),
                         token: opts.token.as_deref(),
                         api_url: opts.api_url.as_deref(),
                     },
@@ -1660,8 +1660,8 @@ struct ScopesCliArgs {
 
 #[derive(clap::Args)]
 struct ScopesSendCliArgs {
-    /// Repository full name (owner/repo). Falls back to
-    /// ``GITHUB_REPOSITORY`` env var.
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
     #[arg(long, short = 'r')]
     repository: Option<String>,
 
@@ -1715,8 +1715,8 @@ struct JunitProcessCliArgs {
     #[arg(long, short = 't')]
     token: Option<String>,
 
-    /// Repository full name (owner/repo). Auto-detected from the
-    /// CI environment when omitted.
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
     #[arg(long, short = 'r')]
     repository: Option<String>,
 
@@ -1783,14 +1783,14 @@ struct TestsShowCliArgs {
     #[arg(value_name = "NAME", required = true, num_args = 1..)]
     test_names: Vec<String>,
 
-    /// Repository full name (owner/repo).
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
     #[arg(
         long,
         short = 'r',
-        required = true,
         value_parser = mergify_ci::detector::parse_owner_repo,
     )]
-    repository: String,
+    repository: Option<String>,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
     /// then ``GITHUB_TOKEN`` env vars.
@@ -1834,14 +1834,14 @@ struct TestsQuarantineCliArgs {
     #[arg(value_name = "NAME")]
     test_name: String,
 
-    /// Repository full name (owner/repo).
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
     #[arg(
         long,
         short = 'r',
-        required = true,
         value_parser = mergify_ci::detector::parse_owner_repo,
     )]
-    repository: String,
+    repository: Option<String>,
 
     /// Reason recorded for quarantining the test.
     #[arg(long)]
@@ -1874,14 +1874,14 @@ struct TestsUnquarantineCliArgs {
     #[arg(value_name = "NAME_OR_ID")]
     name_or_id: String,
 
-    /// Repository full name (owner/repo).
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
     #[arg(
         long,
         short = 'r',
-        required = true,
         value_parser = mergify_ci::detector::parse_owner_repo,
     )]
-    repository: String,
+    repository: Option<String>,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
     /// then ``GITHUB_TOKEN`` env vars.
@@ -1900,14 +1900,14 @@ struct TestsUnquarantineCliArgs {
 
 #[derive(clap::Args)]
 struct TestsQuarantinedCliArgs {
-    /// Repository full name (owner/repo).
+    /// Repository full name (owner/repo). Detected from the CI
+    /// environment or the local git remote when omitted.
     #[arg(
         long,
         short = 'r',
-        required = true,
         value_parser = mergify_ci::detector::parse_owner_repo,
     )]
-    repository: String,
+    repository: Option<String>,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
     /// then ``GITHUB_TOKEN`` env vars.
