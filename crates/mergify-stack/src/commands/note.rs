@@ -10,8 +10,10 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+use crate::git::{resolve_repo_toplevel, run_git_capture as run_git};
 
 use mergify_core::CliError;
 
@@ -198,11 +200,6 @@ fn resolve_change_id_prefix(repo_dir: Option<&Path>, prefix: &str) -> Result<Str
     }
 }
 
-fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<PathBuf, CliError> {
-    let raw = run_git(repo_dir, &["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(raw))
-}
-
 /// Open the user's editor on a tempfile pre-filled with the
 /// comment template, then read it back and strip comment lines.
 /// Mirrors Python's `_read_note_from_editor`.
@@ -291,29 +288,6 @@ fn invoke_editor(editor: &OsString, path: &str) -> Result<std::process::ExitStat
         .args(["/C", &cmd_line])
         .status()
         .map_err(|e| CliError::Generic(format!("spawn editor: {e}")))
-}
-
-fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    let output = cmd
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })?;
-    Ok(stdout.trim_end().to_string())
 }
 
 #[cfg(test)]

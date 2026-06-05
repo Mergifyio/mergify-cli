@@ -28,7 +28,8 @@
 //! a `tokio::sync::Notify` graph.
 
 use std::path::Path;
-use std::process::Command;
+
+use crate::git::{resolve_repo_toplevel, run_git_capture, run_git_silent};
 
 use chrono::Utc;
 use mergify_core::{CliError, HttpClient};
@@ -141,7 +142,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
 
     // Pre-push: trunk fetch + notes fetch. Both are required
     // before merge-base / push can run.
-    run_git_silent(&repo_dir, &["fetch", remote, base_branch])?;
+    run_git_silent(Some(&repo_dir), &["fetch", remote, base_branch])?;
     let notes_ref_fetched = notes_push::fetch_notes_ref(Some(&repo_dir), remote)?;
 
     let trunk_ref = format!("{remote}/{base_branch}");
@@ -567,48 +568,4 @@ fn git_count_behind(repo_dir: &Path, trunk_ref: &str) -> Result<u32, CliError> {
             "`git rev-list --count` returned non-integer {out:?}: {e}"
         ))
     })
-}
-
-fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<std::path::PathBuf, CliError> {
-    let raw = run_git_capture(repo_dir, &["rev-parse", "--show-toplevel"])?;
-    Ok(std::path::PathBuf::from(raw))
-}
-
-fn git_cmd(repo_dir: Option<&Path>) -> Command {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.env("LC_ALL", "C").env("LANG", "C").env("LANGUAGE", "C");
-    cmd
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let output = git_cmd(repo_dir)
-        .args(args)
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn run_git_silent(repo_dir: &Path, args: &[&str]) -> Result<(), CliError> {
-    let status = git_cmd(Some(repo_dir))
-        .args(args)
-        .status()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !status.success() {
-        return Err(CliError::Generic(format!(
-            "`git {}` exited {status}",
-            args.join(" "),
-        )));
-    }
-    Ok(())
 }

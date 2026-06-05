@@ -3,7 +3,8 @@
 //! Port of `mergify_cli/stack/new.py::stack_new`.
 
 use std::path::Path;
-use std::process::Command;
+
+use crate::git::run_git_silent as run_git;
 
 use mergify_core::CliError;
 
@@ -120,26 +121,6 @@ pub fn run(
         base_refspec: base_ref,
         checked_out: checkout,
     })
-}
-
-fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<(), CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    let output = cmd
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
