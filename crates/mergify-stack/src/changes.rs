@@ -16,7 +16,9 @@ use crate::local_commits::LocalCommit;
 use crate::remote_changes::RemoteChange;
 
 /// Action attached to each local commit. Matches Python's
-/// `ActionT` literal union.
+/// `ActionT` literal union, including the two orchestrator-only
+/// overrides (`SkipCreate`, `SkipNextOnly`) that [`classify`]
+/// never produces but [`plan`] can.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Action {
@@ -29,6 +31,15 @@ pub enum Action {
     Create,
     /// Commit has an open PR whose head differs — would be updated.
     Update,
+    /// `--only-update-existing-pulls` flag turns `Create` into
+    /// `SkipCreate` so the planner can surface "would-be-created"
+    /// PRs without actually opening them.
+    SkipCreate,
+    /// `--next-only` flag turns every change after the first into
+    /// `SkipNextOnly` so only the bottom of the stack gets pushed.
+    /// Pull is preserved when one already existed — the orchestrator
+    /// just doesn't touch it this run.
+    SkipNextOnly,
 }
 
 /// One commit's classification result.
