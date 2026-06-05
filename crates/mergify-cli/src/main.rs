@@ -49,6 +49,8 @@ use mergify_queue::show::ShowOptions;
 use mergify_queue::status::StatusOptions;
 use mergify_queue::unpause::UnpauseOptions;
 
+mod cli_schema;
+
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
 
@@ -172,6 +174,9 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     // rewrite the todo file in-process. Not a user-facing
     // command; not stable.
     ("_internal", "rebase-todo-rewrite"),
+    // Emits the machine-readable CLI schema the docs site renders
+    // into the command reference. Hidden; not a stable surface.
+    ("_internal", "dump-cli-schema"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -249,6 +254,10 @@ enum NativeCommand {
     /// applies the named transformation, writes it back in place.
     /// Wire format is not stable.
     InternalRebaseTodoRewrite(InternalRebaseTodoRewriteOpts),
+    /// `_internal dump-cli-schema` — serialize the clap command tree
+    /// to JSON for the docs site. Pure introspection; no async, no I/O
+    /// beyond stdout.
+    InternalDumpCliSchema,
 }
 
 struct StackEditOpts {
@@ -737,6 +746,9 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                 todo_path,
             },
         )),
+        Subcommands::Internal(InternalArgs {
+            command: InternalSubcommand::DumpCliSchema,
+        }) => Dispatch::Native(NativeCommand::InternalDumpCliSchema),
         Subcommands::Ci(CiArgs {
             command:
                 CiSubcommand::Scopes(ScopesCliArgs {
@@ -1035,6 +1047,12 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
 
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn run_native(cmd: NativeCommand) -> ExitCode {
+    // Pure introspection — no async runtime, network, or shared output
+    // machinery. Handle it before spinning up tokio.
+    if matches!(cmd, NativeCommand::InternalDumpCliSchema) {
+        return cli_schema::run();
+    }
+
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1061,6 +1079,10 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 
     let result: Result<mergify_core::ExitCode, mergify_core::CliError> = rt.block_on(async {
         match cmd {
+            // Handled above, before the runtime was built.
+            NativeCommand::InternalDumpCliSchema => {
+                unreachable!("dump-cli-schema is handled before the runtime starts")
+            }
             NativeCommand::ConfigValidate { config_file } => {
                 mergify_config::validate::run(config_file.as_deref(), &mut output)
                     .await
@@ -1763,6 +1785,12 @@ enum InternalSubcommand {
     /// user-facing surface.
     #[command(name = "rebase-todo-rewrite")]
     RebaseTodoRewrite(InternalRebaseTodoRewriteArgs),
+    /// Emit the machine-readable CLI schema (the JSON the docs site
+    /// renders into the command reference) to stdout. Walks the clap
+    /// command tree so every description and flag is sourced from the
+    /// code, never hand-maintained. Not a stable user-facing surface.
+    #[command(name = "dump-cli-schema")]
+    DumpCliSchema,
 }
 
 #[derive(clap::Args)]
@@ -2669,6 +2697,50 @@ mod tests {
             std::iter::once("mergify".to_string()).chain(argv.iter().map(|s| (*s).to_string())),
         )
         .expect("argv parses")
+    }
+
+    /// The schema is published as a release asset (not committed), so
+    /// guard the generator structurally rather than against a golden
+    /// file: it must serialize to valid JSON, expose every top-level
+    /// group, surface both stack sources, and never leak the hidden
+    /// `_internal` machinery into the public reference.
+    #[test]
+    fn cli_schema_is_well_formed() {
+        let v: serde_json::Value =
+            serde_json::from_str(&cli_schema::dump()).expect("schema is valid JSON");
+
+        let groups: Vec<&str> = v["command"]["commands"]
+            .as_array()
+            .expect("commands array")
+            .iter()
+            .map(|c| c["name"].as_str().expect("group name"))
+            .collect();
+        assert_eq!(
+            groups,
+            ["config", "ci", "tests", "queue", "freeze", "stack"]
+        );
+        assert!(!groups.contains(&"_internal"), "hidden group leaked");
+
+        let stack = v["command"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "stack")
+            .expect("stack group");
+        let sources: std::collections::BTreeSet<&str> = stack["commands"]
+            .as_array()
+            .expect("stack subcommands")
+            .iter()
+            .map(|c| c["source"].as_str().expect("source"))
+            .collect();
+        assert!(
+            sources.contains("native"),
+            "native stack subcommands missing"
+        );
+        assert!(
+            sources.contains("python-shim"),
+            "pending-python stack subcommands missing"
+        );
     }
 
     #[test]
