@@ -1,0 +1,1 @@
+Address review: seed command.path[0] from root.get_name() instead of a hard-coded "mergify" so it can't drift from cli.name.
