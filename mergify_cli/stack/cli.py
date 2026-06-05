@@ -553,20 +553,6 @@ async def open_cmd(
     )
 
 
-@stack.command(help="Fixup commits into their parent (drops their messages)")
-@click.argument("commits", nargs=-1, required=True)
-@click.option(
-    "--dry-run",
-    "-n",
-    is_flag=True,
-    default=False,
-    help="Show the plan without rebasing",
-)
-@utils.run_with_asyncio
-async def fixup(*, commits: tuple[str, ...], dry_run: bool) -> None:
-    await stack_squash_mod.stack_fixup(list(commits), dry_run=dry_run)
-
-
 @stack.command(help="Change a commit's message")
 @click.argument("commit")
 @click.option(
