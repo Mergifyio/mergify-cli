@@ -34,6 +34,18 @@ pub enum Action {
     /// Rewrite the `pick` lines for every SHA in `shas` as
     /// `fixup`. Same partial-match guard as [`Action::Drop`].
     Fixup { shas: Vec<String> },
+    /// Mark `<sha>` as `reword` so git stops at that commit and
+    /// runs `git commit --amend`, opening `$GIT_EDITOR` for the
+    /// message rewrite. Interactive; pair with an `-m` argument
+    /// on the orchestrator to stay non-interactive (it'll use
+    /// [`Action::ExecAfter`] instead).
+    Reword { sha: String },
+    /// Inject an `exec <command>` line right after the matching
+    /// `pick` line. Used to run `git commit --amend -F <file>`
+    /// while HEAD still points at the target commit (non-
+    /// interactive reword), and as one half of `stack squash`'s
+    /// custom-message path.
+    ExecAfter { sha: String, command: String },
 }
 
 /// Apply `action` to `todo` and return the rewritten contents.
@@ -45,6 +57,8 @@ pub fn rewrite(todo: &str, action: &Action) -> Result<String, CliError> {
         Action::Edit { sha } => rewrite_edit(todo, sha),
         Action::Drop { shas } => rewrite_drop(todo, shas),
         Action::Fixup { shas } => rewrite_replace_verb(todo, shas, "fixup"),
+        Action::Reword { sha } => rewrite_replace_verb(todo, std::slice::from_ref(sha), "reword"),
+        Action::ExecAfter { sha, command } => rewrite_exec_after(todo, sha, command),
     }
 }
 
@@ -168,6 +182,40 @@ fn rewrite_replace_verb(todo: &str, targets: &[String], verb: &str) -> Result<St
         return Err(CliError::InvalidState(format!(
             "rebase-todo has no `pick` line for: {}; aborting so the rebase doesn't run with a partial {verb}",
             missing.join(", ")
+        )));
+    }
+    Ok(out)
+}
+
+fn rewrite_exec_after(todo: &str, target: &str, command: &str) -> Result<String, CliError> {
+    let mut matched = false;
+    let mut out = String::with_capacity(todo.len() + command.len() + 8);
+    for line in todo.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        out.push_str(line);
+        if matched {
+            continue;
+        }
+        // Match against the *current* line — if it's a pick for the
+        // target, emit the `exec` line right after.
+        if let Some(rest) = trimmed.strip_prefix("pick ") {
+            let (sha, _) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            if sha_matches(sha, target) {
+                let terminator = &line[trimmed.len()..];
+                out.push_str("exec ");
+                out.push_str(command);
+                out.push_str(if terminator.is_empty() {
+                    "\n"
+                } else {
+                    terminator
+                });
+                matched = true;
+            }
+        }
+    }
+    if !matched {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo has no `pick` line for {target}; aborting so the exec doesn't run unanchored"
         )));
     }
     Ok(out)
@@ -432,6 +480,74 @@ exec cargo test
             CliError::InvalidState(msg) => {
                 assert!(msg.contains("ffffffff"), "got: {msg}");
                 assert!(msg.contains("partial fixup"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reword_marks_matching_pick() {
+        let out = rewrite(
+            TODO,
+            &Action::Reword {
+                sha: "deadbeef".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(out.contains("reword deadbeef chore: bump deps\n"));
+        assert!(out.contains("pick 1a2b3c4d feat: add foo\n"));
+    }
+
+    #[test]
+    fn reword_with_no_match_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::Reword {
+                sha: "ffffffff".to_string(),
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => assert!(msg.contains("partial reword"), "got: {msg}"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exec_after_injects_line_below_target() {
+        let out = rewrite(
+            TODO,
+            &Action::ExecAfter {
+                sha: "deadbeef".to_string(),
+                command: "git commit --amend -F /tmp/msg.txt".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "pick 1a2b3c4d feat: add foo\n\
+             pick deadbeef chore: bump deps\n\
+             exec git commit --amend -F /tmp/msg.txt\n\
+             pick cafe1234 fix: typo\n\
+             \n\
+             # Rebase abc..def onto abc (3 commands)\n"
+        );
+    }
+
+    #[test]
+    fn exec_after_with_no_match_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::ExecAfter {
+                sha: "ffffffff".to_string(),
+                command: "true".to_string(),
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(msg.contains("ffffffff"), "got: {msg}");
+                assert!(msg.contains("unanchored"));
             }
             other => panic!("unexpected: {other:?}"),
         }
