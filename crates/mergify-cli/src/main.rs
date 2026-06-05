@@ -157,6 +157,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "delete"),
     ("stack", "drop"),
     ("stack", "edit"),
+    ("stack", "fixup"),
     ("stack", "new"),
     ("stack", "note"),
     // Internal Python migration helpers. Listed so `looks_native`
@@ -233,6 +234,10 @@ enum NativeCommand {
     /// `mergify stack drop <COMMIT>... [--dry-run]` — drop one or
     /// more commits from the stack via the rebase-todo machinery.
     StackDrop(StackDropOpts),
+    /// `mergify stack fixup <COMMIT>... [--dry-run]` — fold one
+    /// or more commits into their parents via the rebase-todo
+    /// machinery.
+    StackFixup(StackFixupOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -249,6 +254,11 @@ struct StackEditOpts {
 }
 
 struct StackDropOpts {
+    commit_prefixes: Vec<String>,
+    dry_run: bool,
+}
+
+struct StackFixupOpts {
     commit_prefixes: Vec<String>,
     dry_run: bool,
 }
@@ -271,6 +281,7 @@ struct InternalRebaseTodoRewriteOpts {
 enum InternalRebaseAction {
     Edit,
     Drop,
+    Fixup,
 }
 
 struct StackNoteOpts {
@@ -591,6 +602,13 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
                 Err(err) => err.exit(),
             };
             Dispatch::Native(NativeCommand::StackDrop(StackDropOpts::from(parsed)))
+        }
+        Some("fixup") => {
+            let parsed = match StackFixupCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackFixup(StackFixupOpts::from(parsed)))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
@@ -1415,6 +1433,42 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackFixup(opts) => {
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+                let outcome = mergify_stack::commands::fixup::run(
+                    &mergify_stack::commands::fixup::Options {
+                        repo_dir: None,
+                        commit_prefixes: &opts.commit_prefixes,
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )?;
+                match outcome {
+                    mergify_stack::commands::fixup::Outcome::Squashed { fixed_up } => {
+                        for c in &fixed_up {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("Fixing up: {short} {subject}", subject = c.subject);
+                        }
+                        println!("Commits squashed successfully.");
+                    }
+                    mergify_stack::commands::fixup::Outcome::DryRun { plan } => {
+                        println!("Fixup plan:");
+                        for c in &plan {
+                            let short = &c.sha[..c.sha.len().min(12)];
+                            println!("  fixup {short} {subject}", subject = c.subject);
+                        }
+                        println!("Dry run — no changes made");
+                    }
+                    mergify_stack::commands::fixup::Outcome::EmptyStack => {
+                        println!("No commits in the stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -1440,6 +1494,21 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                             .map(str::to_string)
                             .collect();
                         mergify_stack::rebase_todo::Action::Drop { shas }
+                    }
+                    InternalRebaseAction::Fixup => {
+                        let raw = opts.shas.ok_or_else(|| {
+                            mergify_core::CliError::InvalidState(
+                                "_internal rebase-todo-rewrite --action fixup requires --shas"
+                                    .to_string(),
+                            )
+                        })?;
+                        let shas = raw
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        mergify_stack::rebase_todo::Action::Fixup { shas }
                     }
                 };
                 let original = std::fs::read_to_string(&opts.todo_path).map_err(|e| {
@@ -1711,6 +1780,30 @@ struct StackDropCli {
 
 impl From<StackDropCli> for StackDropOpts {
     fn from(cli: StackDropCli) -> Self {
+        Self {
+            commit_prefixes: cli.commits,
+            dry_run: cli.dry_run,
+        }
+    }
+}
+
+/// `mergify stack fixup <COMMIT>... [--dry-run]` — clap definition.
+#[derive(Parser)]
+#[command(
+    name = "fixup",
+    about = "Fixup commits into their parent (drops their messages)"
+)]
+struct StackFixupCli {
+    #[arg(required = true)]
+    commits: Vec<String>,
+
+    /// Show the plan without rebasing.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+impl From<StackFixupCli> for StackFixupOpts {
+    fn from(cli: StackFixupCli) -> Self {
         Self {
             commit_prefixes: cli.commits,
             dry_run: cli.dry_run,

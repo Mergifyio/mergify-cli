@@ -31,6 +31,9 @@ pub enum Action {
     /// as [`CliError::InvalidState`] so the rebase doesn't quietly
     /// proceed with a subset of the intended drops.
     Drop { shas: Vec<String> },
+    /// Rewrite the `pick` lines for every SHA in `shas` as
+    /// `fixup`. Same partial-match guard as [`Action::Drop`].
+    Fixup { shas: Vec<String> },
 }
 
 /// Apply `action` to `todo` and return the rewritten contents.
@@ -41,6 +44,7 @@ pub fn rewrite(todo: &str, action: &Action) -> Result<String, CliError> {
     match action {
         Action::Edit { sha } => rewrite_edit(todo, sha),
         Action::Drop { shas } => rewrite_drop(todo, shas),
+        Action::Fixup { shas } => rewrite_replace_verb(todo, shas, "fixup"),
     }
 }
 
@@ -104,6 +108,65 @@ fn rewrite_drop(todo: &str, targets: &[String]) -> Result<String, CliError> {
     if !missing.is_empty() {
         return Err(CliError::InvalidState(format!(
             "rebase-todo has no `pick` line for: {}; aborting so the rebase doesn't run with a partial drop",
+            missing.join(", ")
+        )));
+    }
+    Ok(out)
+}
+
+/// Generalised `pick → <verb>` rewriter for actions that swap the
+/// command keyword instead of removing the line (today: `fixup`;
+/// `reword` and friends slot in the same way). Every target must
+/// match exactly one `pick` line — missing matches surface as
+/// [`CliError::InvalidState`] so the rebase doesn't run with only
+/// a subset of the intended changes, and ambiguous matches (a
+/// SHA prefix that resolves to multiple `pick` lines) error out
+/// for the same reason: silently rewriting two commits when the
+/// caller meant one would corrupt the rebase.
+fn rewrite_replace_verb(todo: &str, targets: &[String], verb: &str) -> Result<String, CliError> {
+    if targets.is_empty() {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo {verb}: no commits to {verb}"
+        )));
+    }
+    let mut match_count: Vec<usize> = vec![0; targets.len()];
+    let mut out = String::with_capacity(todo.len());
+    for line in todo.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if let Some(rest) = trimmed.strip_prefix("pick ") {
+            let (sha, _) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            if let Some(idx) = targets.iter().position(|t| sha_matches(sha, t)) {
+                match_count[idx] += 1;
+                out.push_str(verb);
+                out.push(' ');
+                out.push_str(rest);
+                let terminator = &line[trimmed.len()..];
+                out.push_str(terminator);
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    let ambiguous: Vec<&str> = targets
+        .iter()
+        .zip(match_count.iter())
+        .filter_map(|(t, &n)| (n > 1).then_some(t.as_str()))
+        .collect();
+    if !ambiguous.is_empty() {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo {verb}: target(s) {} matched multiple `pick` lines; pass a longer SHA prefix",
+            ambiguous.join(", "),
+        )));
+    }
+    let matched: Vec<bool> = match_count.iter().map(|&n| n > 0).collect();
+    let missing: Vec<&str> = targets
+        .iter()
+        .zip(matched.iter())
+        .filter_map(|(t, &m)| (!m).then_some(t.as_str()))
+        .collect();
+    if !missing.is_empty() {
+        return Err(CliError::InvalidState(format!(
+            "rebase-todo has no `pick` line for: {}; aborting so the rebase doesn't run with a partial {verb}",
             missing.join(", ")
         )));
     }
@@ -323,6 +386,52 @@ exec cargo test
         match err {
             CliError::InvalidState(msg) => {
                 assert!(msg.contains("no commits to drop"), "got: {msg}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixup_rewrites_targeted_pick_to_fixup() {
+        let out = rewrite(
+            TODO,
+            &Action::Fixup {
+                shas: vec!["deadbeef".to_string()],
+            },
+        )
+        .unwrap();
+        assert!(out.contains("fixup deadbeef chore: bump deps\n"));
+        assert!(out.contains("pick 1a2b3c4d feat: add foo\n"));
+        assert!(out.contains("pick cafe1234 fix: typo\n"));
+    }
+
+    #[test]
+    fn fixup_handles_multiple_shas() {
+        let out = rewrite(
+            TODO,
+            &Action::Fixup {
+                shas: vec!["1a2b3c4d".to_string(), "cafe1234".to_string()],
+            },
+        )
+        .unwrap();
+        assert!(out.contains("fixup 1a2b3c4d feat: add foo\n"));
+        assert!(out.contains("fixup cafe1234 fix: typo\n"));
+        assert!(out.contains("pick deadbeef chore: bump deps\n"));
+    }
+
+    #[test]
+    fn fixup_with_no_match_errors() {
+        let err = rewrite(
+            TODO,
+            &Action::Fixup {
+                shas: vec!["ffffffff".to_string()],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(msg.contains("ffffffff"), "got: {msg}");
+                assert!(msg.contains("partial fixup"));
             }
             other => panic!("unexpected: {other:?}"),
         }
