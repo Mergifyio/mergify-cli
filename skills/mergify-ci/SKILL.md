@@ -19,9 +19,10 @@ mergify ci scopes --config PATH           # Detect scopes impacted by changed fi
 mergify ci scopes-send -s SCOPE           # Send scopes tied to a pull request to Mergify
 mergify ci queue-info                     # Output merge queue batch metadata from the current PR event
 mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
-mergify tests quarantine NAME             # Add a test to the CI Insights quarantine
-mergify tests unquarantine NAME           # Remove a test from the CI Insights quarantine
-mergify tests quarantined                 # List the tests currently in the CI Insights quarantine
+mergify tests quarantines add NAME        # Add a test to the CI Insights quarantine
+mergify tests quarantines remove NAME     # Remove a test from the CI Insights quarantine
+mergify tests quarantines get NAME        # Print a single quarantine by test name or id
+mergify tests quarantines list            # List the tests currently in the CI Insights quarantine
 ```
 
 ## JUnit Processing (`junit-process`)
@@ -179,7 +180,7 @@ mergify tests show -r owner/repo \
 - `1` -- At least one test is `flaky`.
 - `6` -- At least one test is `broken` (consistently failing).
 
-## Tests Quarantine (`tests quarantine`)
+## Tests Quarantines Add (`tests quarantines add`)
 
 Adds a test to the repository's CI Insights quarantine, so its failures stop
 blocking the CI verdict. Takes a single fully qualified test name; a `--reason`
@@ -187,12 +188,12 @@ is required.
 
 ```bash
 # Quarantine on all branches.
-mergify tests quarantine -r owner/repo \
+mergify tests quarantines add -r owner/repo \
   --reason 'flaky — tracked in MRGFY-1234' \
   'test_login'
 
 # Scope the quarantine to one branch (or branch pattern), JSON output.
-mergify tests quarantine -r owner/repo \
+mergify tests quarantines add -r owner/repo \
   --reason 'broken on release branch' --branch 'release/*' --json \
   'test_logout'
 ```
@@ -209,19 +210,19 @@ mergify tests quarantine -r owner/repo \
 - `0` -- Test quarantined.
 - `6` -- Mergify API error (e.g. the test is already quarantined).
 
-## Tests Unquarantine (`tests unquarantine`)
+## Tests Quarantines Remove (`tests quarantines remove`)
 
 Removes a test from the quarantine. Accepts either the fully qualified test
 name (resolved to its quarantine id via the list endpoint) or the quarantine
-id directly (as printed by `tests quarantine`). A UUID-shaped argument is
-treated as the id and deleted without a lookup.
+id directly (as printed by `tests quarantines add`). A UUID-shaped argument
+is treated as the id and deleted without a lookup.
 
 ```bash
 # By test name.
-mergify tests unquarantine -r owner/repo 'test_login'
+mergify tests quarantines remove -r owner/repo 'test_login'
 
-# By quarantine id (the value `tests quarantine` printed).
-mergify tests unquarantine -r owner/repo 12345678-1234-5678-1234-567812345678
+# By quarantine id (the value `tests quarantines add` printed).
+mergify tests quarantines remove -r owner/repo 12345678-1234-5678-1234-567812345678
 ```
 
 **Key options:**
@@ -235,20 +236,46 @@ mergify tests unquarantine -r owner/repo 12345678-1234-5678-1234-567812345678
 - `0` -- Test unquarantined.
 - `6` -- Mergify API error (e.g. the test is not quarantined).
 
-## Tests Quarantined (`tests quarantined`)
+## Tests Quarantines Get (`tests quarantines get`)
+
+Prints a single quarantine, addressed by the fully qualified test name or the
+quarantine id (a UUID-shaped argument is matched against the id). The output
+mirrors one record of `tests quarantines list`.
+
+```bash
+# By test name.
+mergify tests quarantines get -r owner/repo 'test_login'
+
+# By quarantine id, JSON output.
+mergify tests quarantines get -r owner/repo --json \
+  12345678-1234-5678-1234-567812345678
+```
+
+**Key options:**
+- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
+- `--json` -- Emit the record (`id`, `test_name`, `reason`, `branch`, `created_at`,
+  `source`, `is_recovered`) to stdout.
+
+**Exit codes:**
+- `0` -- Quarantine found and printed.
+- `6` -- Mergify API error (e.g. no matching quarantine).
+
+## Tests Quarantines List (`tests quarantines list`)
 
 Lists every test currently in the repository's CI Insights quarantine. Takes no
 test argument -- it prints the whole quarantine. Human output is one indented
 block per record -- the test name on its own line (never wrapped mid-name),
-then its id (the value `unquarantine` accepts), branch, source, recovered, and
+then its id (the value `delete` accepts), branch, source, recovered, and
 reason. `--json` emits the full records.
 
 ```bash
 # Human output (one block per record).
-mergify tests quarantined -r owner/repo
+mergify tests quarantines list -r owner/repo
 
 # JSON for jq -- e.g. names of quarantines an auto-recover run flagged.
-mergify tests quarantined -r owner/repo --json \
+mergify tests quarantines list -r owner/repo --json \
   | jq -r '.quarantined_tests[] | select(.is_recovered) | .test_name'
 ```
 
