@@ -397,6 +397,7 @@ async def test_stack_update_no_rebase(
             "html_url": "",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "previous_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -504,6 +505,7 @@ async def test_stack_update(
             "html_url": "",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "previous_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -604,6 +606,7 @@ async def test_stack_update_keep_title_and_body(
             "html_url": "",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "previous_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -738,6 +741,7 @@ async def test_stack_dry_run_behind_flips_up_to_date_to_update(
         json={
             "html_url": "",
             "number": "42",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "commit1_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -1325,6 +1329,7 @@ async def test_create_revision_comment_on_update(
             "html_url": "https://github.com/user/repo/pull/123",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "old_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -1428,6 +1433,7 @@ async def test_create_revision_comment_with_replay_sha_renders_dual_link(
             "html_url": "https://github.com/user/repo/pull/123",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "old_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -1538,6 +1544,7 @@ async def test_stack_push_survives_replay_for_revision_raising(
             "html_url": "https://github.com/user/repo/pull/123",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "old_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -1689,6 +1696,7 @@ async def test_no_revision_history_flag_skips_revision_comments(
             "html_url": "",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "old_commit_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -1774,6 +1782,7 @@ async def test_revision_comment_updated_on_second_push(
             "html_url": "https://github.com/user/repo/pull/123",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "second_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -2462,6 +2471,7 @@ async def test_revision_comment_includes_reason_from_local_change(
             "html_url": "https://github.com/user/repo/pull/123",
             "number": "123",
             "title": "Title",
+            "base": {"sha": "base_sha", "ref": "main"},
             "head": {
                 "sha": "second_sha",
                 "ref": "current-branch/I29617d37762fd69809c255d7e7073cb11f8fbf50",
@@ -3156,3 +3166,330 @@ async def test_create_or_update_revision_comments_passes_replay_sha(
         b"oldshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         b"...replayshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     ) in body
+
+
+def _pull_request(
+    number: int,
+    *,
+    base_ref: str,
+    head_ref: str,
+) -> github_types.PullRequest:
+    return {
+        "html_url": f"https://github.com/user/repo/pull/{number}",
+        "number": str(number),
+        "title": "title",
+        "body": "body",
+        "base": {"sha": "base_sha", "ref": base_ref},
+        "head": {"sha": "head_sha", "ref": head_ref},
+        "state": "open",
+        "draft": False,
+        "node_id": "",
+        "merged_at": None,
+        "merge_commit_sha": None,
+        "mergeable": True,
+    }
+
+
+@pytest.mark.respx(base_url="https://api.github.com/", assert_all_called=False)
+async def test_neutralize_stale_bases_reorder(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """A reordered PR whose stale base would come to contain its head must be
+    repointed to the trunk *before* the force-push.
+
+    Reproduces the bug where reordering two stacked PRs and repushing made
+    GitHub spuriously mark the new-bottom PR as merged: after the atomic
+    force-push, that PR's head became an ancestor of its still-stale base
+    branch, which GitHub auto-closes as merged.
+    """
+    a_branch = "current-branch/a--aaaaaaaa"
+    b_branch = "current-branch/b--bbbbbbbb"
+
+    # New order after reordering: B at the bottom (new base = trunk), A on top
+    # (new base = B's branch). On GitHub the PRs still carry the OLD bases:
+    # A was the bottom (base main), B was on top of A (base = A's branch).
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("bbbbbbbb"),
+            pull=_pull_request(200, base_ref=a_branch, head_ref=b_branch),
+            commit_sha="b_sha",
+            title="B",
+            message="B",
+            base_branch="main",
+            dest_branch=b_branch,
+            action="update",
+        ),
+        changes.LocalChange(
+            id=changes.ChangeId("aaaaaaaa"),
+            pull=_pull_request(100, base_ref="main", head_ref=a_branch),
+            commit_sha="a_sha",
+            title="A",
+            message="A",
+            base_branch=b_branch,
+            dest_branch=a_branch,
+            action="update",
+        ),
+    ]
+
+    patch_200 = respx_mock.patch("/repos/user/repo/pulls/200").respond(200, json={})
+    patch_100 = respx_mock.patch("/repos/user/repo/pulls/100").respond(200, json={})
+
+    async with utils.get_github_http_client("https://api.github.com/", "") as client:
+        await push.neutralize_stale_bases(
+            client,
+            "user",
+            "repo",
+            local_changes,
+            "main",
+        )
+
+    # #200 (B): remote base is A's branch but the new base is the trunk — it is
+    # at risk, so it must be neutralized to the trunk before the force-push.
+    assert len(patch_200.calls) == 1
+    assert json.loads(patch_200.calls.last.request.content) == {"base": "main"}
+
+    # #100 (A): its remote base is already the trunk, so the force-push can
+    # never make its head an ancestor of its base — nothing to neutralize.
+    assert len(patch_100.calls) == 0
+
+
+@pytest.mark.respx(base_url="https://api.github.com/", assert_all_called=False)
+async def test_neutralize_stale_bases_noop_on_plain_update(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """A plain content update (no base change) issues no neutralization PATCH."""
+    a_branch = "current-branch/a--aaaaaaaa"
+    b_branch = "current-branch/b--bbbbbbbb"
+
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("aaaaaaaa"),
+            pull=_pull_request(100, base_ref="main", head_ref=a_branch),
+            commit_sha="a_sha",
+            title="A",
+            message="A",
+            base_branch="main",
+            dest_branch=a_branch,
+            action="update",
+        ),
+        changes.LocalChange(
+            id=changes.ChangeId("bbbbbbbb"),
+            pull=_pull_request(200, base_ref=a_branch, head_ref=b_branch),
+            commit_sha="b_sha",
+            title="B",
+            message="B",
+            base_branch=a_branch,
+            dest_branch=b_branch,
+            action="update",
+        ),
+    ]
+
+    patch_100 = respx_mock.patch("/repos/user/repo/pulls/100").respond(200, json={})
+    patch_200 = respx_mock.patch("/repos/user/repo/pulls/200").respond(200, json={})
+
+    async with utils.get_github_http_client("https://api.github.com/", "") as client:
+        await push.neutralize_stale_bases(
+            client,
+            "user",
+            "repo",
+            local_changes,
+            "main",
+        )
+
+    assert len(patch_100.calls) == 0
+    assert len(patch_200.calls) == 0
+
+
+@pytest.mark.respx(base_url="https://api.github.com/", assert_all_called=False)
+async def test_neutralize_stale_bases_multi_pr_full_reverse(
+    respx_mock: respx.MockRouter,
+) -> None:
+    """A full 3-PR reversal neutralizes every at-risk PR concurrently.
+
+    Original order A->B->C reversed to C->B->A. The two PRs whose stale base
+    is another feature branch (B and C) must be repointed to the trunk; the
+    new-bottom PR (A), already based on the trunk, must be left alone.
+    """
+    a_branch = "current-branch/a--aaaaaaaa"
+    b_branch = "current-branch/b--bbbbbbbb"
+    c_branch = "current-branch/c--cccccccc"
+
+    # New order bottom->top: C (base main), B (base C-branch), A (base B-branch).
+    # On GitHub the PRs still carry the OLD bases: A on main, B on A, C on B.
+    local_changes = [
+        changes.LocalChange(
+            id=changes.ChangeId("cccccccc"),
+            pull=_pull_request(300, base_ref=b_branch, head_ref=c_branch),
+            commit_sha="c_sha",
+            title="C",
+            message="C",
+            base_branch="main",
+            dest_branch=c_branch,
+            action="update",
+        ),
+        changes.LocalChange(
+            id=changes.ChangeId("bbbbbbbb"),
+            pull=_pull_request(200, base_ref=a_branch, head_ref=b_branch),
+            commit_sha="b_sha",
+            title="B",
+            message="B",
+            base_branch=c_branch,
+            dest_branch=b_branch,
+            action="update",
+        ),
+        changes.LocalChange(
+            id=changes.ChangeId("aaaaaaaa"),
+            pull=_pull_request(100, base_ref="main", head_ref=a_branch),
+            commit_sha="a_sha",
+            title="A",
+            message="A",
+            base_branch=b_branch,
+            dest_branch=a_branch,
+            action="update",
+        ),
+    ]
+
+    patch_300 = respx_mock.patch("/repos/user/repo/pulls/300").respond(200, json={})
+    patch_200 = respx_mock.patch("/repos/user/repo/pulls/200").respond(200, json={})
+    patch_100 = respx_mock.patch("/repos/user/repo/pulls/100").respond(200, json={})
+
+    async with utils.get_github_http_client("https://api.github.com/", "") as client:
+        await push.neutralize_stale_bases(
+            client,
+            "user",
+            "repo",
+            local_changes,
+            "main",
+        )
+
+    # C (#300) and B (#200) both have a feature-branch base that would come to
+    # contain their head after the force-push — both neutralized to the trunk.
+    assert len(patch_300.calls) == 1
+    assert json.loads(patch_300.calls.last.request.content) == {"base": "main"}
+    assert len(patch_200.calls) == 1
+    assert json.loads(patch_200.calls.last.request.content) == {"base": "main"}
+
+    # A (#100) is already based on the trunk — left alone.
+    assert len(patch_100.calls) == 0
+
+
+@pytest.mark.respx(base_url="https://api.github.com/")
+async def test_stack_push_reorder_neutralizes_base_before_force_push(
+    git_mock: test_utils.GitMock,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """End-to-end ordering guard: on a reorder, the at-risk PR's base is
+    repointed to the trunk *before* the atomic force-push.
+
+    This is the invariant the fix depends on — if the neutralizing PATCH ever
+    ran after (or instead of) the force-push, GitHub would auto-close the
+    new-bottom PR as merged again. We drive the full ``stack_push`` and assert
+    the recorded order of side effects.
+    """
+    import httpx
+
+    # Change-Ids: A == ...f50 (was the bottom), B == ...f51 (was on top of A).
+    a_changeid = "I29617d37762fd69809c255d7e7073cb11f8fbf50"
+    b_changeid = "I29617d37762fd69809c255d7e7073cb11f8fbf51"
+    a_branch = f"current-branch/{a_changeid}"
+    b_branch = f"current-branch/{b_changeid}"
+
+    # Local commits in the NEW (reordered) order, bottom->top: B then A.
+    git_mock.commit(
+        test_utils.Commit(
+            sha="b_new_sha",
+            title="B",
+            message="B",
+            change_id=b_changeid,
+            head_ref=b_branch,
+        ),
+    )
+    git_mock.commit(
+        test_utils.Commit(
+            sha="a_new_sha",
+            title="A",
+            message="A",
+            change_id=a_changeid,
+            head_ref=a_branch,
+        ),
+    )
+    git_mock.finalize(
+        remote_shas={b_changeid: "b_old_sha", a_changeid: "a_old_sha"},
+    )
+
+    respx_mock.get("/user").respond(200, json={"login": "author"})
+    respx_mock.get("/search/issues").respond(
+        200,
+        json={
+            "items": [
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/100",
+                    },
+                },
+                {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/user/repo/pulls/200",
+                    },
+                },
+            ],
+        },
+    )
+    # On GitHub the PRs still carry the OLD bases (A at the bottom on main, B
+    # stacked on top of A) — exactly the stale state that triggers the bug.
+    respx_mock.get("/repos/user/repo/pulls/100").respond(
+        200,
+        json=_pull_request(100, base_ref="main", head_ref=a_branch)
+        | {"head": {"sha": "a_old_sha", "ref": a_branch}},
+    )
+    respx_mock.get("/repos/user/repo/pulls/200").respond(
+        200,
+        json=_pull_request(200, base_ref=a_branch, head_ref=b_branch)
+        | {"head": {"sha": "b_old_sha", "ref": b_branch}},
+    )
+
+    events: list[str] = []
+
+    def _record_patch(request: httpx.Request) -> httpx.Response:
+        number = request.url.path.rsplit("/", 1)[-1]
+        body = json.loads(request.content)
+        kind = "neutralize" if set(body) == {"base"} else "update"
+        events.append(f"{kind}-{number}")
+        return httpx.Response(200, json={})
+
+    respx_mock.patch("/repos/user/repo/pulls/100").mock(side_effect=_record_patch)
+    respx_mock.patch("/repos/user/repo/pulls/200").mock(side_effect=_record_patch)
+
+    original_push_branches = push.push_branches
+
+    async def _recording_push_branches(
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> None:
+        events.append("push")
+        await original_push_branches(*args, **kwargs)
+
+    with (
+        mock.patch.object(push, "push_branches", _recording_push_branches),
+        mock.patch.object(push, "create_or_update_comments"),
+    ):
+        await push.stack_push(
+            github_server="https://api.github.com/",
+            token="",
+            skip_rebase=True,
+            next_only=False,
+            branch_prefix="",
+            dry_run=False,
+            trunk=("origin", "main"),
+            revision_history=False,
+        )
+
+    # The new-bottom PR (#200, commit B) carried a stale base of A's branch, so
+    # it is the only one neutralized — and the neutralizing PATCH lands before
+    # the force-push.
+    assert events[0] == "neutralize-200"
+    assert events[1] == "push"
+    # The trunk-based PR (#100) is never neutralized.
+    assert "neutralize-100" not in events
+    # The real bases are set only after the force-push, once branches are final.
+    assert sorted(events[2:]) == ["update-100", "update-200"]
