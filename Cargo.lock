@@ -1167,6 +1167,7 @@ dependencies = [
  "mergify-queue",
  "mergify-stack",
  "regex",
+ "serde",
  "serde_json",
  "serde_yaml_ng",
  "temp-env",
