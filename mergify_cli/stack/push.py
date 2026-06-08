@@ -210,6 +210,53 @@ async def push_branches(
         os.environ.pop("MERGIFY_STACK_PUSH", None)
 
 
+async def neutralize_stale_bases(
+    client: httpx.AsyncClient,
+    user: str,
+    repo: str,
+    local_changes: list[changes.LocalChange],
+    trunk_base: str,
+) -> None:
+    """Repoint at-risk PR bases onto the trunk before the force-push.
+
+    When commits are reordered, a PR's branch can move *below* a commit that
+    used to sit beneath it. The atomic force-push then rewrites every head
+    branch at once, while the PRs on GitHub still carry their pre-reorder
+    bases. During that window a PR's head branch can become an ancestor of
+    its own (stale) base branch — for example the new-bottom PR's head ends
+    up contained in the branch that now holds the commit stacked on top of
+    it. GitHub interprets "head is an ancestor of base" as "merged" and
+    irreversibly auto-closes the PR (and closes its dependents).
+
+    To avoid that, any PR whose base is moving is first repointed to the
+    trunk: a head branch is never an ancestor of the trunk, so the upcoming
+    force-push cannot trigger the spurious merge. The real new base is set
+    afterwards by ``create_or_update_pr`` once every branch holds its final
+    content (where each head is strictly ahead of its parent again).
+
+    PRs already based on the trunk, or whose base is unchanged, are left
+    alone — the common non-reorder push issues no extra API calls.
+    """
+    sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+
+    async def _neutralize(pull: github_types.PullRequest) -> None:
+        async with sem:
+            await client.patch(
+                f"/repos/{user}/{repo}/pulls/{pull['number']}",
+                json={"base": trunk_base},
+            )
+
+    tasks = [
+        _neutralize(change.pull)
+        for change in local_changes
+        if change.action == "update"
+        and change.pull is not None
+        and change.pull["base"]["ref"] != trunk_base
+        and change.pull["base"]["ref"] != change.base_branch
+    ]
+    await asyncio.gather(*tasks)
+
+
 async def _git_patch_id(sha: str) -> str:
     """Get the patch-id of a commit, stable across rebases."""
     diff = await utils.git("show", sha)
@@ -625,6 +672,20 @@ async def stack_push(
                         change.pull_head_sha,
                         change.commit_sha,
                     )
+
+        # Before force-pushing, repoint any PR whose base is moving onto the
+        # trunk. Reordering can make a PR's head branch momentarily an ancestor
+        # of its stale base branch once the atomic force-push lands, which
+        # GitHub would irreversibly auto-close as "merged". See
+        # neutralize_stale_bases for the full rationale.
+        with console.status("Neutralizing reordered pull request bases..."):
+            await neutralize_stale_bases(
+                client,
+                user,
+                repo,
+                planned_changes.locals,
+                base_branch,
+            )
 
         with console.status("Pushing stacked branches..."):
             await push_branches(
