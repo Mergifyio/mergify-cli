@@ -415,7 +415,7 @@ mod tests {
         let cfg = tmp.path().join("mergify.yml");
         std::fs::write(
             &cfg,
-            "scopes:\n  source:\n    files:\n      a:\n        include: ['*']\n      b:\n        include: ['*']\n",
+            "scopes:\n  source:\n    files:\n      aa:\n        include: ['*']\n      bb:\n        include: ['*']\n",
         )
         .unwrap();
         let out = tmp.path().join("detected.json");
@@ -438,6 +438,6 @@ mod tests {
         // `merge_queue_scope` lands in `all_scopes` regardless.
         // But `scopes_hit` only includes it when the refs source
         // is MergeQueue, which isn't the case here.
-        assert_eq!(raw, r#"{"scopes":["a","b"]}"#);
+        assert_eq!(raw, r#"{"scopes":["aa","bb"]}"#);
     }
 }

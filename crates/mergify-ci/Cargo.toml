@@ -15,6 +15,7 @@ flate2 = "1"
 getrandom = "0.4"
 glob = "0.3"
 globset = "0.4"
+jsonschema = { version = "0.46", default-features = false }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
