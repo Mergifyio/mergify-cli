@@ -1136,6 +1136,7 @@ dependencies = [
  "getrandom 0.4.2",
  "glob",
  "globset",
+ "jsonschema",
  "mergify-config",
  "mergify-core",
  "mergify-test-support",
