@@ -24,7 +24,6 @@ import tempfile
 
 from mergify_cli import console
 from mergify_cli import console_error
-from mergify_cli import utils
 from mergify_cli.exit_codes import ExitCode
 from mergify_cli.stack.changes import CHANGEID_RE
 from mergify_cli.stack.changes import is_change_id_prefix
@@ -230,57 +229,3 @@ def display_action_plan(
                 tag = f" [{act}]"
                 break
         console.log(f"  {idx}. {sha[:12]} {subject}{cid_display}{tag}")
-
-
-async def stack_reorder(
-    commit_prefixes: list[str],
-    *,
-    dry_run: bool,
-) -> None:
-    os.chdir(await utils.git("rev-parse", "--show-toplevel"))
-    trunk = await utils.get_trunk()
-    base = await utils.git("merge-base", trunk, "HEAD")
-    commits = get_stack_commits(base)
-
-    if not commits:
-        console.print("No commits in the stack", style="green")
-        return
-
-    if len(commit_prefixes) != len(commits):
-        console_error(
-            f"expected {len(commits)} commits but got {len(commit_prefixes)} prefixes",
-        )
-        sys.exit(ExitCode.INVALID_STATE)
-
-    # Match each prefix to a commit
-    matched = [match_commit(p, commits) for p in commit_prefixes]
-
-    # Check for duplicates
-    matched_shas = [c[0] for c in matched]
-    if len(set(matched_shas)) != len(matched_shas):
-        seen: set[str] = set()
-        for prefix, sha in zip(commit_prefixes, matched_shas, strict=True):
-            if sha in seen:
-                console_error(
-                    f"duplicate — prefix '{prefix}' resolves to the same commit as another prefix",
-                )
-                sys.exit(ExitCode.INVALID_STATE)
-            seen.add(sha)
-
-    # Check if already in order
-    current_shas = [c[0] for c in commits]
-    if matched_shas == current_shas:
-        console.print(
-            "Stack is already in the requested order",
-            style="green",
-        )
-        return
-
-    display_plan("Reorder plan:", matched)
-
-    if dry_run:
-        console.print("Dry run — no changes made", style="green")
-        return
-
-    run_rebase(base, matched_shas)
-    console.print("Stack reordered successfully.", style="green")
