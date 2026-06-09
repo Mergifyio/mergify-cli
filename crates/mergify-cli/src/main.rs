@@ -167,6 +167,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "reorder"),
     ("stack", "reword"),
     ("stack", "squash"),
+    ("stack", "sync"),
     // Internal Python migration helpers. Listed so `looks_native`
     // routes `mergify _internal …` past the shim fallback when
     // clap rejects it, but they stay hidden from `--help` (see
@@ -265,6 +266,9 @@ enum NativeCommand {
     /// requests from GitHub and create a local branch tracking
     /// the leaf head.
     StackCheckout(StackCheckoutOpts),
+    /// `mergify stack sync [--dry-run]` — rebase the stack onto
+    /// trunk, dropping commits whose PR has merged.
+    StackSync(StackSyncOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -339,6 +343,15 @@ struct StackCheckoutOpts {
     trunk: Option<(String, String)>,
     /// GitHub token; resolved via `mergify_core::auth::resolve_token`
     /// when None.
+    token: Option<String>,
+}
+
+struct StackSyncOpts {
+    author: Option<String>,
+    repository: Option<String>,
+    branch_prefix: Option<String>,
+    dry_run: bool,
+    trunk: Option<(String, String)>,
     token: Option<String>,
 }
 
@@ -742,6 +755,13 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
             Dispatch::Native(NativeCommand::StackCheckout(StackCheckoutOpts::from(
                 parsed,
             )))
+        }
+        Some("sync") => {
+            let parsed = match StackSyncCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackSync(StackSyncOpts::from(parsed)))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
@@ -1869,6 +1889,118 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackSync(opts) => {
+                let token = mergify_core::auth::resolve_token(opts.token.as_deref())?;
+                let github_server = mergify_stack::stack_context::resolve_github_server(None)?;
+                let client =
+                    mergify_stack::remote_changes::default_client(github_server, &token)?;
+
+                let trunk = if let Some((remote, branch)) = opts.trunk {
+                    (remote, branch)
+                } else {
+                    let t = mergify_stack::trunk::get_trunk(None).map_err(|e| {
+                        mergify_core::CliError::StackNotFound(format!(
+                            "could not determine trunk branch ({e}). Pass --trunk REMOTE/BRANCH."
+                        ))
+                    })?;
+                    (t.remote, t.branch)
+                };
+                let slug = mergify_stack::stack_context::resolve_repo(
+                    None,
+                    opts.repository.as_deref(),
+                    &trunk.0,
+                )?;
+                let author = if let Some(a) = opts.author.as_deref() {
+                    a.to_string()
+                } else {
+                    let user_payload: serde_json::Value = client.get("/user").await?;
+                    user_payload
+                        .get("login")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            mergify_core::CliError::GitHubApi(
+                                "/user response missing `login`".to_string(),
+                            )
+                        })?
+                };
+                let branch_prefix = opts.branch_prefix.unwrap_or_else(|| {
+                    mergify_stack::stack_context::resolve_default_branch_prefix(None, &author)
+                });
+
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
+                    ))
+                })?;
+
+                let outcome = mergify_stack::commands::sync::run(
+                    &mergify_stack::commands::sync::Options {
+                        repo_dir: None,
+                        client: &client,
+                        user: &slug.owner,
+                        repo: &slug.repo,
+                        author: &author,
+                        branch_prefix: &branch_prefix,
+                        trunk: (&trunk.0, &trunk.1),
+                        dry_run: opts.dry_run,
+                        mergify_binary: &mergify_binary,
+                    },
+                )
+                .await?;
+
+                match outcome {
+                    mergify_stack::commands::sync::Outcome::DryRun(status) => {
+                        if status.all_merged() {
+                            println!(
+                                "All commits in the stack have been merged into {trunk_branch}.",
+                                trunk_branch = trunk.1,
+                            );
+                            println!(
+                                "You can switch to {trunk_branch} with: git checkout {trunk_branch}",
+                                trunk_branch = trunk.1,
+                            );
+                        } else if status.up_to_date() {
+                            println!("Stack is up to date.");
+                        } else {
+                            println!("Dry run: the following merged commits would be removed:");
+                            for m in &status.merged {
+                                println!("  - {title} (#{num}, merged)", title = m.title, num = m.pull_number);
+                            }
+                            println!(
+                                "\n{} commit(s) would remain in the stack.",
+                                status.remaining.len()
+                            );
+                        }
+                    }
+                    mergify_stack::commands::sync::Outcome::Synced {
+                        status,
+                        dropped_count,
+                    } => {
+                        if status.all_merged() {
+                            println!(
+                                "All commits in the stack have been merged into {trunk_branch}.",
+                                trunk_branch = trunk.1,
+                            );
+                            println!(
+                                "You can switch to {trunk_branch} with: git checkout {trunk_branch}",
+                                trunk_branch = trunk.1,
+                            );
+                        } else if dropped_count == 0 {
+                            println!("Stack is up to date.");
+                        } else {
+                            for m in &status.merged {
+                                println!("  ✓ Dropped: {title} (#{num})", title = m.title, num = m.pull_number);
+                            }
+                            println!(
+                                "Dropped {dropped_count} merged commit(s). {} commit(s) remaining in the stack.",
+                                status.remaining.len()
+                            );
+                        }
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -2442,6 +2574,45 @@ impl From<StackCheckoutCli> for StackCheckoutOpts {
             author: cli.author,
             repository: cli.repository,
             branch: cli.branch,
+            branch_prefix: cli.branch_prefix,
+            dry_run: cli.dry_run,
+            trunk: cli.trunk,
+            token: cli.token,
+        }
+    }
+}
+
+/// `mergify stack sync [--dry-run]`.
+#[derive(Parser)]
+#[command(
+    name = "sync",
+    about = "Sync the stack: fetch trunk, remove merged commits, rebase"
+)]
+struct StackSyncCli {
+    #[arg(long)]
+    author: Option<String>,
+
+    #[arg(long = "repository", alias = "repo")]
+    repository: Option<String>,
+
+    #[arg(long = "branch-prefix")]
+    branch_prefix: Option<String>,
+
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+
+    #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
+    trunk: Option<(String, String)>,
+
+    #[arg(long)]
+    token: Option<String>,
+}
+
+impl From<StackSyncCli> for StackSyncOpts {
+    fn from(cli: StackSyncCli) -> Self {
+        Self {
+            author: cli.author,
+            repository: cli.repository,
             branch_prefix: cli.branch_prefix,
             dry_run: cli.dry_run,
             trunk: cli.trunk,
