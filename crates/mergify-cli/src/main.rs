@@ -161,9 +161,11 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("stack", "drop"),
     ("stack", "edit"),
     ("stack", "fixup"),
+    ("stack", "list"),
     ("stack", "move"),
     ("stack", "new"),
     ("stack", "note"),
+    ("stack", "open"),
     ("stack", "reorder"),
     ("stack", "reword"),
     ("stack", "squash"),
@@ -269,6 +271,13 @@ enum NativeCommand {
     /// `mergify stack sync [--dry-run]` — rebase the stack onto
     /// trunk, dropping commits whose PR has merged.
     StackSync(StackSyncOpts),
+    /// `mergify stack list [--json] [--verbose]` — show each
+    /// commit in the current stack with its PR + CI + review
+    /// state.
+    StackList(StackListOpts),
+    /// `mergify stack open [<commit>]` — open the PR for a stack
+    /// commit in the default browser.
+    StackOpen(StackOpenOpts),
     /// `_internal rebase-todo-rewrite --action <ACTION>
     /// --sha <SHA> <TODO_PATH>` — self-invocation target set as
     /// `GIT_SEQUENCE_EDITOR` by the rebase-family stack
@@ -351,6 +360,25 @@ struct StackSyncOpts {
     repository: Option<String>,
     branch_prefix: Option<String>,
     dry_run: bool,
+    trunk: Option<(String, String)>,
+    token: Option<String>,
+}
+
+struct StackListOpts {
+    author: Option<String>,
+    repository: Option<String>,
+    branch_prefix: Option<String>,
+    trunk: Option<(String, String)>,
+    token: Option<String>,
+    json: bool,
+    verbose: bool,
+}
+
+struct StackOpenOpts {
+    commit: Option<String>,
+    author: Option<String>,
+    repository: Option<String>,
+    branch_prefix: Option<String>,
     trunk: Option<(String, String)>,
     token: Option<String>,
 }
@@ -673,6 +701,7 @@ fn detect_dispatch(argv: &[String]) -> Option<Dispatch> {
 /// including the Python-only subcommands. Adding new native stack
 /// subcommands later means adding a branch here and a matching
 /// `NATIVE_COMMANDS` entry.
+#[allow(clippy::too_many_lines)] // one mechanical arm per native subcommand
 fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
     match args.first().map(String::as_str) {
         Some("new") => {
@@ -762,6 +791,20 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
                 Err(err) => err.exit(),
             };
             Dispatch::Native(NativeCommand::StackSync(StackSyncOpts::from(parsed)))
+        }
+        Some("list") => {
+            let parsed = match StackListCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackList(StackListOpts::from(parsed)))
+        }
+        Some("open") => {
+            let parsed = match StackOpenCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackOpen(StackOpenOpts::from(parsed)))
         }
         _ => Dispatch::Shim(inject_global_flags(debug, prepend_one("stack", args))),
     }
@@ -1171,6 +1214,125 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
 }
 
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
+/// Resolved bundle of the shared per-command preamble the GitHub-
+/// API-backed stack subcommands (`list`, `open`, `sync`,
+/// `checkout`, and eventually `push`) all need. Built by
+/// [`resolve_stack_context`] from the per-command CLI flags.
+struct StackContext {
+    client: mergify_core::HttpClient,
+    slug: mergify_stack::stack_context::RepoSlug,
+    author: String,
+    branch_prefix: String,
+    trunk: (String, String),
+}
+
+async fn resolve_stack_context(
+    token: Option<&str>,
+    author: Option<&str>,
+    repository: Option<&str>,
+    trunk: Option<(String, String)>,
+    branch_prefix: Option<String>,
+) -> Result<StackContext, mergify_core::CliError> {
+    let token = mergify_core::auth::resolve_token(token)?;
+    let github_server = mergify_stack::stack_context::resolve_github_server(None)?;
+    let client = mergify_stack::remote_changes::default_client(github_server, &token)?;
+    let trunk = if let Some((remote, branch)) = trunk {
+        (remote, branch)
+    } else {
+        let t = mergify_stack::trunk::get_trunk(None).map_err(|e| {
+            mergify_core::CliError::StackNotFound(format!(
+                "could not determine trunk branch ({e}). Pass --trunk REMOTE/BRANCH."
+            ))
+        })?;
+        (t.remote, t.branch)
+    };
+    let slug = mergify_stack::stack_context::resolve_repo(None, repository, &trunk.0)?;
+    let author = if let Some(a) = author {
+        a.to_string()
+    } else {
+        let user_payload: serde_json::Value = client.get("/user").await?;
+        user_payload
+            .get("login")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                mergify_core::CliError::GitHubApi("/user response missing `login`".to_string())
+            })?
+    };
+    let branch_prefix = branch_prefix.unwrap_or_else(|| {
+        mergify_stack::stack_context::resolve_default_branch_prefix(None, &author)
+    });
+    Ok(StackContext {
+        client,
+        slug,
+        author,
+        branch_prefix,
+        trunk,
+    })
+}
+
+/// Render `stack list` output to stdout in human-readable form.
+/// Port of Python's `display_stack_list`. No colour codes — we
+/// keep it plain so log scrapers don't have to strip ANSI; users
+/// who want colour pipe through `bat -p` etc.
+fn render_stack_list_text(out: &mergify_stack::commands::list::StackListOutput, verbose: bool) {
+    println!("\nStack on {} -> {}:\n", out.branch, out.trunk);
+    if out.entries.is_empty() {
+        println!("  No commits in stack");
+        return;
+    }
+    for entry in &out.entries {
+        let short = &entry.commit_sha[..entry.commit_sha.len().min(7)];
+        let status_label = match entry.status.as_str() {
+            "merged" => "MERGED",
+            "draft" => "DRAFT",
+            "open" => "OPEN",
+            "no_pr" => "NEW",
+            other => other,
+        };
+        let conflict = if entry.mergeable == Some(false) {
+            " (conflicting)"
+        } else {
+            ""
+        };
+        if let Some(num) = entry.pull_number {
+            println!(
+                "  [{status_label}] #{num} {title} ({short}){conflict}",
+                title = entry.title,
+            );
+            if verbose && !entry.ci_checks.is_empty() {
+                let checks = entry
+                    .ci_checks
+                    .iter()
+                    .map(|c| format!("{} {}", c.status, c.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("    CI: {checks}");
+            } else if entry.ci_status != "unknown" {
+                println!("    CI: {}", entry.ci_status);
+            }
+            if verbose && !entry.reviews.is_empty() {
+                let reviewers = entry
+                    .reviews
+                    .iter()
+                    .map(|r| format!("{} {}", r.state, r.user))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("    Review: {reviewers}");
+            } else if entry.review_status != "unknown" {
+                println!("    Review: {}", entry.review_status);
+            }
+            if let Some(url) = &entry.pull_url {
+                println!("    {url}");
+            }
+        } else {
+            println!("  [{status_label}] {title} ({short})", title = entry.title);
+        }
+        println!();
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one match arm per native command
 fn run_native(cmd: NativeCommand) -> ExitCode {
     // Pure introspection — no async runtime, network, or shared output
     // machinery. Handle it before spinning up tokio.
@@ -2001,6 +2163,77 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackList(opts) => {
+                let ctx = resolve_stack_context(
+                    opts.token.as_deref(),
+                    opts.author.as_deref(),
+                    opts.repository.as_deref(),
+                    opts.trunk.clone(),
+                    opts.branch_prefix.clone(),
+                )
+                .await?;
+                let stack = mergify_stack::commands::list::run(
+                    &mergify_stack::commands::list::Options {
+                        repo_dir: None,
+                        client: &ctx.client,
+                        user: &ctx.slug.owner,
+                        repo: &ctx.slug.repo,
+                        author: &ctx.author,
+                        branch_prefix: &ctx.branch_prefix,
+                        trunk: (&ctx.trunk.0, &ctx.trunk.1),
+                        include_status: true,
+                    },
+                )
+                .await?;
+                if opts.json {
+                    let json = serde_json::to_string_pretty(&stack).map_err(|e| {
+                        mergify_core::CliError::Generic(format!(
+                            "serialize stack list: {e}"
+                        ))
+                    })?;
+                    println!("{json}");
+                } else {
+                    render_stack_list_text(&stack, opts.verbose);
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
+            NativeCommand::StackOpen(opts) => {
+                let ctx = resolve_stack_context(
+                    opts.token.as_deref(),
+                    opts.author.as_deref(),
+                    opts.repository.as_deref(),
+                    opts.trunk.clone(),
+                    opts.branch_prefix.clone(),
+                )
+                .await?;
+                let outcome = mergify_stack::commands::open::run(
+                    &mergify_stack::commands::open::Options {
+                        repo_dir: None,
+                        client: &ctx.client,
+                        user: &ctx.slug.owner,
+                        repo: &ctx.slug.repo,
+                        author: &ctx.author,
+                        branch_prefix: &ctx.branch_prefix,
+                        trunk: (&ctx.trunk.0, &ctx.trunk.1),
+                        commit: opts.commit.as_deref(),
+                    },
+                )
+                .await?;
+                match outcome {
+                    mergify_stack::commands::open::Outcome::Opened {
+                        pull_number,
+                        title,
+                        pull_url,
+                    } => {
+                        println!("Opening PR #{pull_number}: {title}");
+                        println!("  {pull_url}");
+                    }
+                    mergify_stack::commands::open::Outcome::EmptyStack => {
+                        println!("No commits in stack");
+                    }
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -2615,6 +2848,86 @@ impl From<StackSyncCli> for StackSyncOpts {
             repository: cli.repository,
             branch_prefix: cli.branch_prefix,
             dry_run: cli.dry_run,
+            trunk: cli.trunk,
+            token: cli.token,
+        }
+    }
+}
+
+/// `mergify stack list [--json] [--verbose]`.
+#[derive(Parser)]
+#[command(
+    name = "list",
+    about = "List the stack's commits and their associated PRs"
+)]
+struct StackListCli {
+    #[arg(long)]
+    author: Option<String>,
+
+    #[arg(long = "repository", alias = "repo")]
+    repository: Option<String>,
+
+    #[arg(long = "branch-prefix")]
+    branch_prefix: Option<String>,
+
+    #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
+    trunk: Option<(String, String)>,
+
+    #[arg(long)]
+    token: Option<String>,
+
+    /// Emit machine-readable JSON.
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    json: bool,
+
+    /// Show per-check / per-reviewer detail.
+    #[arg(short = 'v', long, action = clap::ArgAction::SetTrue)]
+    verbose: bool,
+}
+
+impl From<StackListCli> for StackListOpts {
+    fn from(cli: StackListCli) -> Self {
+        Self {
+            author: cli.author,
+            repository: cli.repository,
+            branch_prefix: cli.branch_prefix,
+            trunk: cli.trunk,
+            token: cli.token,
+            json: cli.json,
+            verbose: cli.verbose,
+        }
+    }
+}
+
+/// `mergify stack open [<commit>]`.
+#[derive(Parser)]
+#[command(name = "open", about = "Open a PR from the stack in the browser")]
+struct StackOpenCli {
+    commit: Option<String>,
+
+    #[arg(long)]
+    author: Option<String>,
+
+    #[arg(long = "repository", alias = "repo")]
+    repository: Option<String>,
+
+    #[arg(long = "branch-prefix")]
+    branch_prefix: Option<String>,
+
+    #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
+    trunk: Option<(String, String)>,
+
+    #[arg(long)]
+    token: Option<String>,
+}
+
+impl From<StackOpenCli> for StackOpenOpts {
+    fn from(cli: StackOpenCli) -> Self {
+        Self {
+            commit: cli.commit,
+            author: cli.author,
+            repository: cli.repository,
+            branch_prefix: cli.branch_prefix,
             trunk: cli.trunk,
             token: cli.token,
         }

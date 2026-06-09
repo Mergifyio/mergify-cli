@@ -11,8 +11,6 @@ from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
-from mergify_cli.stack import list as stack_list_mod
-from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
 from mergify_cli.stack import setup as stack_setup_mod
 
@@ -336,59 +334,4 @@ async def push(
         author=author,
         revision_history=not no_revision_history,
         no_verify=no_verify,
-    )
-
-
-@stack.command(name="list", help="List the stack's commits and their associated PRs")
-@click.pass_context
-@click.option(
-    "--trunk",
-    "-t",
-    type=click.UNPROCESSED,
-    default=lambda: asyncio.run(utils.get_trunk()),
-    callback=trunk_type,
-    help="Change the target branch of the stack.",
-)
-@click.option(
-    "--json",
-    "output_json",
-    is_flag=True,
-    help="Output in JSON format for scripting",
-)
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    help="Show detailed CI check names and reviewer names",
-)
-@utils.run_with_asyncio
-async def list_cmd(
-    ctx: click.Context,
-    *,
-    trunk: tuple[str, str],
-    output_json: bool,
-    verbose: bool,
-) -> None:
-    await stack_list_mod.stack_list(
-        github_server=ctx.obj["github_server"],
-        token=ctx.obj["token"],
-        trunk=trunk,
-        output_json=output_json,
-        verbose=verbose,
-    )
-
-
-@stack.command(name="open", help="Open a PR from the stack in the browser")
-@click.pass_context
-@click.argument("commit", required=False, default=None)
-@utils.run_with_asyncio
-async def open_cmd(
-    ctx: click.Context,
-    *,
-    commit: str | None,
-) -> None:
-    await stack_open_mod.stack_open(
-        github_server=ctx.obj["github_server"],
-        token=ctx.obj["token"],
-        commit=commit,
     )
