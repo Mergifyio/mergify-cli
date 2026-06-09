@@ -42,6 +42,20 @@ static CHANGEID_FULL_RE: LazyLock<Regex> =
 static SHORT_CHANGEID_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(SHORT_CHANGEID_PATTERN).unwrap());
 
+/// Branch-suffix pattern: `/I<40-hex>` at end of a branch name —
+/// the legacy stack-branch naming scheme. Used by
+/// `stack checkout` to strip the suffix from the user-supplied
+/// stack name when the user passes a full leaf-branch ref.
+static BRANCH_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"/{CHANGEID_LOOSE_PATTERN}$")).unwrap());
+
+/// Strip a trailing `/Ixxxx…` Change-Id suffix from a branch
+/// name. Returns the input unchanged when there's no match.
+#[must_use]
+pub fn strip_branch_suffix(name: &str) -> String {
+    BRANCH_SUFFIX_RE.replace(name, "").into_owned()
+}
+
 /// Return `true` if `value` is a strict, full-form Change-Id
 /// (`I` + 40 lowercase hex chars).
 #[must_use]

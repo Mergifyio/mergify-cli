@@ -23,6 +23,7 @@ pub mod local_commits;
 pub mod rebase_todo;
 pub mod remote_changes;
 pub mod slug;
+pub mod stack_context;
 pub mod trunk;
 
 #[cfg(test)]
