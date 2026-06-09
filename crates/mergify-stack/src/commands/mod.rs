@@ -3,6 +3,7 @@
 //! main binary dispatches into here for ported subcommands; the
 //! rest still shim to Python.
 
+pub mod checkout;
 pub mod drop;
 pub mod edit;
 pub mod fixup;

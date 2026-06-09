@@ -11,7 +11,6 @@ from mergify_cli import console
 from mergify_cli import console_error
 from mergify_cli import utils
 from mergify_cli.dym import DYMGroup
-from mergify_cli.stack import checkout as stack_checkout_mod
 from mergify_cli.stack import list as stack_list_mod
 from mergify_cli.stack import open as stack_open_mod
 from mergify_cli.stack import push as stack_push_mod
@@ -338,86 +337,6 @@ async def push(
         author=author,
         revision_history=not no_revision_history,
         no_verify=no_verify,
-    )
-
-
-@stack.command(help="Checkout the pull requests stack")
-@click.pass_context
-@click.argument("name")
-@click.option(
-    "--author",
-    help="Set the author of the stack (default: the author of the token)",
-)
-@click.option(
-    "--repository",
-    "--repo",
-    help="Set the repository where the stack is located (eg: owner/repo)",
-)
-@click.option(
-    "--branch",
-    default=None,
-    help="Local branch name to create. Default: same as NAME.",
-)
-@click.option(
-    "--branch-prefix",
-    default=None,
-    help="Branch prefix used to create stacked PR. "
-    "Default fetched from git config if added with `git config --add mergify-cli.stack-branch-prefix some-prefix`",
-)
-@click.option(
-    "--dry-run",
-    "-n",
-    is_flag=True,
-    help="Only show what is going to be done",
-)
-@click.option(
-    "--trunk",
-    "-t",
-    type=click.UNPROCESSED,
-    default=lambda: asyncio.run(utils.get_trunk()),
-    callback=trunk_type,
-    help="Change the target branch of the stack.",
-)
-@utils.run_with_asyncio
-async def checkout(
-    ctx: click.Context,
-    *,
-    name: str,
-    author: str | None,
-    repository: str | None,
-    branch: str | None,
-    branch_prefix: str | None,
-    dry_run: bool,
-    trunk: tuple[str, str],
-) -> None:
-    remote, _base_branch = trunk
-    if repository is not None:
-        repository_parts = repository.split("/", maxsplit=1)
-        if (
-            len(repository_parts) != 2
-            or not repository_parts[0]
-            or not repository_parts[1]
-        ):
-            raise click.BadParameter(
-                "Repository must be in the format 'owner/repo'",
-                param_hint="--repository",
-            )
-        user, repo = repository_parts
-    else:
-        user, repo = utils.get_slug(
-            await utils.git("config", "--get", f"remote.{remote}.url"),
-        )
-    await stack_checkout_mod.stack_checkout(
-        ctx.obj["github_server"],
-        ctx.obj["token"],
-        user=user,
-        repo=repo,
-        branch_prefix=branch_prefix,
-        name=name,
-        branch=branch,
-        author=author,
-        trunk=trunk,
-        dry_run=dry_run,
     )
 
 
