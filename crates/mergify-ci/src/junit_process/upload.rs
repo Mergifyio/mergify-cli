@@ -26,6 +26,22 @@ pub struct UploadError {
     pub message: String,
 }
 
+impl UploadError {
+    /// True when the server understood the request and refused it —
+    /// a permanent rejection (bad token, missing ingest permission,
+    /// unknown repository) that no retry will fix. Follows OTLP
+    /// retryability semantics: 4xx is final except 408 (timeout)
+    /// and 429 (throttling); 5xx and transport errors are
+    /// transient.
+    #[must_use]
+    pub fn is_rejection(&self) -> bool {
+        match self.status {
+            Some(status) => (400..500).contains(&status) && status != 408 && status != 429,
+            None => false,
+        }
+    }
+}
+
 impl std::fmt::Display for UploadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(status) = self.status {
@@ -223,6 +239,27 @@ mod tests {
         )
         .await
         .expect("upload succeeds");
+    }
+
+    #[test]
+    fn rejections_are_4xx_except_timeout_and_throttling() {
+        let err = |status: Option<u16>| UploadError {
+            status,
+            message: String::new(),
+        };
+        // Permanent rejections: the server understood the request
+        // and refused it — retrying or waiting won't help.
+        assert!(err(Some(400)).is_rejection());
+        assert!(err(Some(401)).is_rejection());
+        assert!(err(Some(403)).is_rejection());
+        assert!(err(Some(404)).is_rejection());
+        // Transient per OTLP retryability semantics.
+        assert!(!err(Some(408)).is_rejection());
+        assert!(!err(Some(429)).is_rejection());
+        assert!(!err(Some(500)).is_rejection());
+        assert!(!err(Some(503)).is_rejection());
+        // No status at all — network error, timeout, gzip failure.
+        assert!(!err(None).is_rejection());
     }
 
     #[tokio::test]

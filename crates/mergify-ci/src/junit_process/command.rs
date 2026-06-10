@@ -5,9 +5,14 @@
 //! with `cicd.test.quarantined`) → upload them, then render the
 //! human-facing report the way Python's `process_junit_files`
 //! does. Errors during quarantine or upload are *non-fatal* by
-//! design — the report calls them out but the overall exit code
-//! is driven by the failing-tests-not-quarantined count plus the
-//! silent-failure detection.
+//! design — Mergify-side trouble must never break customer CI, so
+//! the exit code is driven solely by the
+//! failing-tests-not-quarantined count plus the silent-failure
+//! detection. Upload failures are surfaced instead of swallowed
+//! (issue #1571): the report calls them out, and on GitHub
+//! Actions the run emits an `::error::`/`::warning::` annotation
+//! plus a `test_results_upload` step output so workflows can
+//! detect dead ingest programmatically.
 
 // The report builder appends formatted snippets to a single
 // `String`. clippy's `format_push_string` lint suggests `write!`
@@ -49,10 +54,11 @@ pub struct JunitProcessOptions<'a> {
 /// Run the command. Returns an [`ExitCode`] reflecting the final
 /// verdict so the caller can plumb it through to the process
 /// exit. Network failures (quarantine / upload) do NOT propagate
-/// as errors — they print to the report and the run continues.
-/// The only `Err` paths are argument resolution failures (e.g.
-/// missing token) and unrecoverable input errors (no XML, parse
-/// failure on every file).
+/// as errors — they print to the report (and annotate on GitHub
+/// Actions) and the run continues. The only `Err` paths are
+/// argument resolution failures (e.g. missing token) and
+/// unrecoverable input errors (no XML, parse failure on every
+/// file).
 #[allow(clippy::too_many_lines)] // Straight-line orchestration: parse →
 // quarantine → build spans → upload → render. Splitting this into
 // helpers spreads the report builder's ordering across the file
@@ -142,11 +148,10 @@ pub async fn run(
     let built = spans::build_traces(&parsed, &metadata);
 
     let client = upload::default_client();
-    let upload_error =
-        match upload::upload(&client, &api_url_raw, &token, &repository, &built.request).await {
-            Ok(()) => None,
-            Err(err) => Some(err.to_string()),
-        };
+    let upload_error = upload::upload(&client, &api_url_raw, &token, &repository, &built.request)
+        .await
+        .err();
+    maybe_write_github_output(upload_status_label(upload_error.as_ref()));
 
     // ── Report sections — order matches Python verbatim.
     write_run_id(&mut report, &built.run_id);
@@ -162,7 +167,11 @@ pub async fn run(
     );
 
     if let Some(err) = &upload_error {
-        write_upload_error_block(&mut report, err);
+        write_upload_error_block(&mut report, &err.to_string(), err.is_rejection());
+        if let Some(annotation) = gha_upload_annotation(err) {
+            report.push_str(&annotation);
+            report.push('\n');
+        }
     }
 
     write_quarantine_section(&mut report, &quarantine_result, quarantine_error.as_deref());
@@ -444,10 +453,91 @@ fn write_upload_summary(
     out.push_str(&format!("      🧪 {tests} tests ({failures_label})\n"));
 }
 
-fn write_upload_error_block(out: &mut String, error: &str) {
+/// `$GITHUB_OUTPUT` key reporting the upload outcome:
+/// `success`, `rejected` (4xx except 408/429 — permanent, e.g.
+/// bad token), or `failed` (transient: 5xx, 408, 429, network).
+/// Lets workflows detect dead ingest programmatically without
+/// parsing the human report (issue #1571).
+const UPLOAD_STATUS_OUTPUT_NAME: &str = "test_results_upload";
+
+fn upload_status_label(error: Option<&upload::UploadError>) -> &'static str {
+    match error {
+        None => "success",
+        Some(e) if e.is_rejection() => "rejected",
+        Some(_) => "failed",
+    }
+}
+
+/// Append `test_results_upload=<status>` to `$GITHUB_OUTPUT` when
+/// the env var is set (GitHub Actions). Best effort — reporting
+/// plumbing must never break the run, so an unwritable file warns
+/// on stderr instead of erroring.
+fn maybe_write_github_output(status: &str) {
+    use std::io::Write as _;
+    let Some(path) = std::env::var("GITHUB_OUTPUT")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let result = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| writeln!(f, "{UPLOAD_STATUS_OUTPUT_NAME}={status}"));
+    if let Err(e) = result {
+        eprintln!(
+            "warning: could not write {UPLOAD_STATUS_OUTPUT_NAME} to GITHUB_OUTPUT ({path}): {e}",
+        );
+    }
+}
+
+/// GitHub Actions workflow-command annotation for an upload
+/// failure, or `None` outside GitHub Actions. The runner parses
+/// the `::error::`/`::warning::` line out of stdout and surfaces
+/// it in the run summary and checks UI without affecting the step
+/// outcome — upload trouble must stay visible but never break
+/// customer CI (issue #1571). Rejections (4xx except 408/429, see
+/// [`upload::UploadError::is_rejection`]) annotate as errors since
+/// they're permanent misconfiguration; transient failures (5xx,
+/// 408, 429, network) as warnings.
+fn gha_upload_annotation(error: &upload::UploadError) -> Option<String> {
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return None;
+    }
+    Some(if error.is_rejection() {
+        let status = error.status.expect("a rejection always has an HTTP status");
+        format!(
+            "::error title=Mergify Test Insights::Test results upload rejected (HTTP {status}). \
+             No test data reached Test Insights — check that your token has CI Insights access \
+             to this repository."
+        )
+    } else {
+        format!(
+            "::warning title=Mergify Test Insights::Failed to upload test results to Mergify \
+             Test Insights ({err}). Test data for this run was not recorded.",
+            err = gha_escape_data(&error.to_string()),
+        )
+    })
+}
+
+/// Escape the data section of a GHA workflow command. A multi-line
+/// value (e.g. an HTTP response body inside the error message)
+/// would otherwise terminate the command at the first newline.
+fn gha_escape_data(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+fn write_upload_error_block(out: &mut String, error: &str, rejected: bool) {
     out.push_str("\n  ⚠️ Failed to upload test results\n");
     out.push_str("    Mergify CI Insights won't process these test results.\n");
     out.push_str("    Quarantine status and CI outcome are unaffected.\n");
+    if rejected {
+        out.push_str("    The API rejected the upload — check that your token has\n");
+        out.push_str("    CI Insights access to this repository.\n");
+    }
     out.push('\n');
     out.push_str("      ┌ Details\n");
     for line in error.lines() {
@@ -936,6 +1026,184 @@ mod tests {
                 "{stdout}"
             );
             assert!(stdout.contains("Exit code: 1"), "{stdout}");
+        }
+
+        // Mount a quarantine mock that says "nothing quarantined"
+        // and a traces mock that answers `upload_status`.
+        async fn mount_mocks_with_upload_status(server: &MockServer, upload_status: u16) {
+            Mock::given(method("POST"))
+                .and(path("/v1/ci/owner/repositories/repo/quarantines/check"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "quarantined_tests_names": [],
+                    "non_quarantined_tests_names": [],
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/v1/repos/owner/repo/ci/traces"))
+                .respond_with(
+                    ResponseTemplate::new(upload_status).set_body_string("upload refused"),
+                )
+                .mount(server)
+                .await;
+        }
+
+        const ONE_PASSING_TEST_XML: &str = r#"<?xml version="1.0"?>
+<testsuites>
+  <testsuite name="pytest" tests="1" failures="0">
+    <testcase classname="tests" name="test_one"/>
+  </testsuite>
+</testsuites>"#;
+
+        async fn run_with_gha_env(
+            api_url: &str,
+            file: String,
+            github_output: &std::path::Path,
+        ) -> (ExitCode, String) {
+            let mut cap = captured();
+            let output_path = github_output.to_string_lossy().into_owned();
+            let code = with_ci_env_async(
+                &[
+                    ("GITHUB_ACTIONS", Some("true")),
+                    ("GITHUB_OUTPUT", Some(&output_path)),
+                ],
+                async {
+                    let opts = JunitProcessOptions {
+                        api_url: Some(api_url),
+                        token: Some("secret"),
+                        repository: Some("owner/repo"),
+                        test_framework: None,
+                        test_language: None,
+                        tests_target_branch: Some("main"),
+                        test_exit_code: None,
+                        files: &[file],
+                    };
+                    run(opts, &mut cap.output).await.unwrap()
+                },
+            )
+            .await;
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            (code, stdout)
+        }
+
+        // Issue #1571: a rejected upload (e.g. token without ingest
+        // permission → 403) must stay visible without failing the
+        // run — upload trouble must never break customer CI, even
+        // when it's a permanent misconfiguration. On GitHub Actions
+        // the run surfaces it as an `::error::` annotation plus a
+        // `test_results_upload=rejected` step output so workflows
+        // can detect dead ingest programmatically.
+        #[tokio::test]
+        async fn rejected_upload_keeps_run_green_and_annotates() {
+            let server = MockServer::start().await;
+            mount_mocks_with_upload_status(&server, 403).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", ONE_PASSING_TEST_XML);
+            let github_output = tmp.path().join("github_output");
+
+            let (code, stdout) = run_with_gha_env(&server.uri(), file, &github_output).await;
+
+            assert_eq!(code, ExitCode::Success);
+            assert!(stdout.contains("✅ OK — all tests passed"), "{stdout}");
+            assert!(stdout.contains("Exit code: 0"), "{stdout}");
+            assert!(
+                stdout.contains("⚠️ Failed to upload test results"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains(
+                    "::error title=Mergify Test Insights::Test results upload rejected (HTTP 403)"
+                ),
+                "{stdout}"
+            );
+            let outputs = std::fs::read_to_string(&github_output).unwrap();
+            assert!(
+                outputs.contains("test_results_upload=rejected"),
+                "{outputs}"
+            );
+        }
+
+        // Transient backend trouble (5xx, network) keeps the
+        // best-effort behavior too, but annotates as a warning and
+        // reports `test_results_upload=failed`.
+        #[tokio::test]
+        async fn transient_upload_error_keeps_run_green_and_warns() {
+            let server = MockServer::start().await;
+            mount_mocks_with_upload_status(&server, 503).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", ONE_PASSING_TEST_XML);
+            let github_output = tmp.path().join("github_output");
+
+            let (code, stdout) = run_with_gha_env(&server.uri(), file, &github_output).await;
+
+            assert_eq!(code, ExitCode::Success);
+            assert!(stdout.contains("✅ OK — all tests passed"), "{stdout}");
+            assert!(
+                stdout.contains("⚠️ Failed to upload test results"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains("::warning title=Mergify Test Insights::Failed to upload"),
+                "{stdout}"
+            );
+            let outputs = std::fs::read_to_string(&github_output).unwrap();
+            assert!(outputs.contains("test_results_upload=failed"), "{outputs}");
+        }
+
+        // A successful upload reports `test_results_upload=success`
+        // so workflows get a stable key to branch on, and emits no
+        // annotation.
+        #[tokio::test]
+        async fn successful_upload_writes_success_output_and_no_annotation() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", ONE_PASSING_TEST_XML);
+            let github_output = tmp.path().join("github_output");
+
+            let (code, stdout) = run_with_gha_env(&server.uri(), file, &github_output).await;
+
+            assert_eq!(code, ExitCode::Success);
+            assert!(!stdout.contains("::error"), "{stdout}");
+            assert!(!stdout.contains("::warning"), "{stdout}");
+            let outputs = std::fs::read_to_string(&github_output).unwrap();
+            assert!(outputs.contains("test_results_upload=success"), "{outputs}");
+        }
+
+        // Outside GitHub Actions there is no workflow-command
+        // protocol — the report must stay free of `::error::` noise
+        // and no GITHUB_OUTPUT file appears.
+        #[tokio::test]
+        async fn rejected_upload_outside_gha_emits_no_annotation() {
+            let server = MockServer::start().await;
+            mount_mocks_with_upload_status(&server, 403).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", ONE_PASSING_TEST_XML);
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            let code = with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run(opts, &mut cap.output).await.unwrap()
+            })
+            .await;
+
+            assert_eq!(code, ExitCode::Success);
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            assert!(
+                stdout.contains("⚠️ Failed to upload test results"),
+                "{stdout}"
+            );
+            assert!(!stdout.contains("::error"), "{stdout}");
         }
 
         #[tokio::test]
