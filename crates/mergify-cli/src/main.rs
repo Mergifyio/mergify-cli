@@ -273,6 +273,11 @@ enum NativeCommand {
     /// `mergify stack sync [--dry-run]` — rebase the stack onto
     /// trunk, dropping commits whose PR has merged.
     StackSync(StackSyncOpts),
+    /// `mergify stack push [flags...]` — upsert the stack's PRs
+    /// on GitHub. Full orchestrator: walks local commits, plans
+    /// actions, optionally rebases on trunk, pushes branches,
+    /// upserts PRs + comments, and tears down orphans.
+    StackPush(StackPushOpts),
     /// `mergify stack list [--json] [--verbose]` — show each
     /// commit in the current stack with its PR + CI + review
     /// state.
@@ -371,6 +376,33 @@ struct StackSyncOpts {
     dry_run: bool,
     trunk: Option<(String, String)>,
     token: Option<String>,
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the Python CLI's flag surface 1:1"
+)]
+struct StackPushOpts {
+    author: Option<String>,
+    repository: Option<String>,
+    branch_prefix: Option<String>,
+    trunk: Option<(String, String)>,
+    token: Option<String>,
+    skip_rebase: bool,
+    force_rebase: bool,
+    next_only: bool,
+    dry_run: bool,
+    /// `None` = fall back to git config
+    /// `mergify-cli.stack-create-as-draft` at dispatch time.
+    create_as_draft: Option<bool>,
+    /// `None` = fall back to git config
+    /// `mergify-cli.stack-keep-pr-title-body` at dispatch time.
+    keep_pull_request_title_and_body: Option<bool>,
+    only_update_existing_pulls: bool,
+    /// `None` = fall back to git config
+    /// `mergify-cli.stack-revision-history` at dispatch time.
+    revision_history: Option<bool>,
+    no_verify: bool,
 }
 
 struct StackListOpts {
@@ -810,6 +842,13 @@ fn dispatch_stack(debug: bool, args: Vec<String>) -> Dispatch {
                 Err(err) => err.exit(),
             };
             Dispatch::Native(NativeCommand::StackSync(StackSyncOpts::from(parsed)))
+        }
+        Some("push") => {
+            let parsed = match StackPushCli::try_parse_from(&args) {
+                Ok(p) => p,
+                Err(err) => err.exit(),
+            };
+            Dispatch::Native(NativeCommand::StackPush(StackPushOpts::from(parsed)))
         }
         Some("list") => {
             let parsed = match StackListCli::try_parse_from(&args) {
@@ -2283,6 +2322,66 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::StackPush(opts) => {
+                let ctx = resolve_stack_context(
+                    opts.token.as_deref(),
+                    opts.author.as_deref(),
+                    opts.repository.as_deref(),
+                    opts.trunk.clone(),
+                    opts.branch_prefix.clone(),
+                )
+                .await?;
+                let github_server = mergify_stack::stack_context::resolve_github_server(None)?;
+                let mergify_binary = std::env::current_exe().map_err(|e| {
+                    mergify_core::CliError::Generic(format!(
+                        "could not locate current binary path: {e}"
+                    ))
+                })?;
+                let github_server_str = github_server.as_str().trim_end_matches('/').to_string();
+                let create_as_draft = opts.create_as_draft.unwrap_or_else(|| {
+                    mergify_stack::stack_context::resolve_default_create_as_draft(None)
+                });
+                let keep_pull_request_title_and_body =
+                    opts.keep_pull_request_title_and_body.unwrap_or_else(|| {
+                        mergify_stack::stack_context::resolve_default_keep_pr_title_body(None)
+                    });
+                let revision_history = opts.revision_history.unwrap_or_else(|| {
+                    mergify_stack::stack_context::resolve_default_revision_history(None)
+                });
+                let outcome = mergify_stack::commands::push::run(
+                    &mergify_stack::commands::push::Options {
+                        repo_dir: None,
+                        client: &ctx.client,
+                        mergify_binary: &mergify_binary,
+                        github_server: &github_server_str,
+                        trunk: (&ctx.trunk.0, &ctx.trunk.1),
+                        author: &ctx.author,
+                        branch_prefix: &ctx.branch_prefix,
+                        user: &ctx.slug.owner,
+                        repo: &ctx.slug.repo,
+                        skip_rebase: opts.skip_rebase,
+                        force_rebase: opts.force_rebase,
+                        next_only: opts.next_only,
+                        dry_run: opts.dry_run,
+                        create_as_draft,
+                        keep_pull_request_title_and_body,
+                        only_update_existing_pulls: opts.only_update_existing_pulls,
+                        revision_history,
+                        no_verify: opts.no_verify,
+                    },
+                )
+                .await?;
+                let log_lines = match outcome {
+                    mergify_stack::commands::push::Outcome::DryRun { log_lines, .. }
+                    | mergify_stack::commands::push::Outcome::Pushed { log_lines, .. } => {
+                        log_lines
+                    }
+                };
+                for line in log_lines {
+                    println!("{line}");
+                }
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::StackList(opts) => {
                 let ctx = resolve_stack_context(
                     opts.token.as_deref(),
@@ -2988,6 +3087,123 @@ impl From<StackSyncCli> for StackSyncOpts {
             dry_run: cli.dry_run,
             trunk: cli.trunk,
             token: cli.token,
+        }
+    }
+}
+
+/// `mergify stack push [flags...]` — full orchestrator. The
+/// flag set mirrors the Python `stack push` click command 1:1
+/// so a user's muscle memory survives the port.
+#[derive(Parser)]
+#[command(name = "push", about = "Push/sync the stack's pull requests on GitHub")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the Python CLI's flag surface 1:1"
+)]
+struct StackPushCli {
+    #[arg(long)]
+    author: Option<String>,
+
+    #[arg(long = "repository", alias = "repo")]
+    repository: Option<String>,
+
+    #[arg(long = "branch-prefix")]
+    branch_prefix: Option<String>,
+
+    #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
+    trunk: Option<(String, String)>,
+
+    #[arg(long)]
+    token: Option<String>,
+
+    /// Skip the rebase step. By default `stack push` rebases on
+    /// trunk before pushing when there are no approvals to
+    /// dismiss.
+    #[arg(short = 'R', long = "skip-rebase", action = clap::ArgAction::SetTrue)]
+    skip_rebase: bool,
+
+    /// Force the rebase even when PRs are approved (the rebase
+    /// will dismiss the reviews). Mutually exclusive with
+    /// `--skip-rebase`.
+    #[arg(
+        long = "force-rebase",
+        action = clap::ArgAction::SetTrue,
+        conflicts_with = "skip_rebase"
+    )]
+    force_rebase: bool,
+
+    /// Only push the bottom commit of the stack.
+    #[arg(short = 'x', long = "next-only", action = clap::ArgAction::SetTrue)]
+    next_only: bool,
+
+    /// Dry-run: render the plan + the rebase decision and exit.
+    #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
+    dry_run: bool,
+
+    /// Open new PRs as drafts. Default falls back to git config
+    /// `mergify-cli.stack-create-as-draft` (`false` when unset).
+    #[arg(
+        short = 'd',
+        long = "draft",
+        num_args = 0,
+        default_missing_value = "true"
+    )]
+    create_as_draft: Option<bool>,
+
+    /// Don't rewrite the PR title + body from the commit
+    /// message; only update the rendered Depends-On chain in
+    /// the body. Default falls back to git config
+    /// `mergify-cli.stack-keep-pr-title-body` (`false` when unset).
+    #[arg(
+        short = 'k',
+        long = "keep-pull-request-title-and-body",
+        num_args = 0,
+        default_missing_value = "true"
+    )]
+    keep_pull_request_title_and_body: Option<bool>,
+
+    /// Don't create new PRs; surface would-be-created ones in
+    /// the plan instead.
+    #[arg(
+        short = 'u',
+        long = "only-update-existing-pulls",
+        action = clap::ArgAction::SetTrue
+    )]
+    only_update_existing_pulls: bool,
+
+    /// Suppress the revision-history sticky comment update.
+    /// Default falls back to git config
+    /// `mergify-cli.stack-revision-history` (`true` when unset).
+    #[arg(
+        long = "no-revision-history",
+        num_args = 0,
+        default_missing_value = "false"
+    )]
+    revision_history: Option<bool>,
+
+    /// Pass `--no-verify` to `git push` (skips local pre-push
+    /// hooks).
+    #[arg(long = "no-verify", action = clap::ArgAction::SetTrue)]
+    no_verify: bool,
+}
+
+impl From<StackPushCli> for StackPushOpts {
+    fn from(cli: StackPushCli) -> Self {
+        Self {
+            author: cli.author,
+            repository: cli.repository,
+            branch_prefix: cli.branch_prefix,
+            trunk: cli.trunk,
+            token: cli.token,
+            skip_rebase: cli.skip_rebase,
+            force_rebase: cli.force_rebase,
+            next_only: cli.next_only,
+            dry_run: cli.dry_run,
+            create_as_draft: cli.create_as_draft,
+            keep_pull_request_title_and_body: cli.keep_pull_request_title_and_body,
+            only_update_existing_pulls: cli.only_update_existing_pulls,
+            revision_history: cli.revision_history,
+            no_verify: cli.no_verify,
         }
     }
 }
@@ -4039,23 +4255,26 @@ mod tests {
     fn shimmed_dispatch_reinjects_debug_at_argv_head() {
         // Clap consumes the root `--debug`; without re-injection,
         // the Python side (which declares its own root `--debug`)
-        // would never see the flag.
-        let parsed = parse(&["--debug", "stack", "push"]);
+        // would never see the flag. Drive this through an
+        // unrecognised stack subcommand so the dispatcher falls
+        // through to the shim — every concrete stack subcommand
+        // now dispatches natively.
+        let parsed = parse(&["--debug", "stack", "unknown-subcommand"]);
         let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
-            panic!("stack must dispatch to the Python shim");
+            panic!("an unrecognised stack subcommand must shim");
         };
-        assert_eq!(argv, vec!["--debug", "stack", "push"]);
+        assert_eq!(argv, vec!["--debug", "stack", "unknown-subcommand"]);
     }
 
     #[test]
     fn shimmed_dispatch_omits_debug_when_not_set() {
-        let parsed = parse(&["stack", "push"]);
+        let parsed = parse(&["stack", "unknown-subcommand"]);
         let Dispatch::Shim(argv) = dispatch_from_parsed(parsed) else {
-            panic!("stack must dispatch to the Python shim");
+            panic!("an unrecognised stack subcommand must shim");
         };
         // No `--debug` prefix when the user didn't pass one — we
         // don't want to silently flip Python into verbose mode.
-        assert_eq!(argv, vec!["stack", "push"]);
+        assert_eq!(argv, vec!["stack", "unknown-subcommand"]);
     }
 
     #[test]
