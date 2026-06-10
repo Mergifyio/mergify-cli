@@ -190,6 +190,42 @@ pub fn resolve_default_branch_prefix(repo_dir: Option<&Path>, author: &str) -> S
     }
 }
 
+/// `mergify-cli.stack-create-as-draft`, defaulting to `false`.
+/// Mirrors `utils.get_default_create_as_draft` — only treats the
+/// literal string `"true"` as true so a value like `1` won't
+/// silently flip the default.
+#[must_use]
+pub fn resolve_default_create_as_draft(repo_dir: Option<&Path>) -> bool {
+    run_git_capture(
+        repo_dir,
+        &["config", "--get", "mergify-cli.stack-create-as-draft"],
+    )
+    .is_ok_and(|v| v == "true")
+}
+
+/// `mergify-cli.stack-keep-pr-title-body`, defaulting to `false`.
+/// Mirrors `utils.get_default_keep_pr_title_body`.
+#[must_use]
+pub fn resolve_default_keep_pr_title_body(repo_dir: Option<&Path>) -> bool {
+    run_git_capture(
+        repo_dir,
+        &["config", "--get", "mergify-cli.stack-keep-pr-title-body"],
+    )
+    .is_ok_and(|v| v == "true")
+}
+
+/// `mergify-cli.stack-revision-history`, defaulting to `true`.
+/// Mirrors `utils.get_default_revision_history` — opt-out: only
+/// the literal string `"false"` disables the feature.
+#[must_use]
+pub fn resolve_default_revision_history(repo_dir: Option<&Path>) -> bool {
+    run_git_capture(
+        repo_dir,
+        &["config", "--get", "mergify-cli.stack-revision-history"],
+    )
+    .map_or(true, |v| v != "false")
+}
+
 fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
     let mut cmd = Command::new("git");
     if let Some(dir) = repo_dir {
