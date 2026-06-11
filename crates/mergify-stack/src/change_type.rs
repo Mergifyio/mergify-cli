@@ -22,7 +22,9 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::git::{git_cmd, run_git_capture, run_git_silent};
 
 use mergify_core::CliError;
 use serde::{Deserialize, Serialize};
@@ -167,50 +169,6 @@ pub fn fetch_old_pr_heads(
     }
     let args: Vec<&str> = owned.iter().map(String::as_str).collect();
     run_git_silent(repo_dir, &args)
-}
-
-fn git_cmd(repo_dir: Option<&Path>) -> Command {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    // Force C locale: callers may match git error messages by
-    // English substring, which breaks under translated locales.
-    // Mirrors `utils.subprocess_env` on the Python side.
-    cmd.env("LC_ALL", "C").env("LANG", "C").env("LANGUAGE", "C");
-    cmd
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let output = git_cmd(repo_dir)
-        .args(args)
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })
-}
-
-fn run_git_silent(repo_dir: Option<&Path>, args: &[&str]) -> Result<(), CliError> {
-    let status = git_cmd(repo_dir)
-        .args(args)
-        .status()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !status.success() {
-        return Err(CliError::Generic(format!(
-            "`git {}` exited {status}",
-            args.join(" ")
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -79,6 +79,7 @@ pub mod change_type;
 pub mod changes;
 pub mod commands;
 pub mod comment_upsert;
+pub mod git;
 pub mod local_commits;
 pub mod notes_push;
 pub mod plan;
