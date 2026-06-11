@@ -27,6 +27,13 @@ use crate::error::CliError;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+/// User-Agent header sent on every request. GitHub's REST API
+/// rejects requests without one (`403 Request forbidden by
+/// administrative rules`), so this is non-negotiable. Cargo's
+/// package version is fine here — calver vs semver doesn't
+/// matter to GitHub, only that the header is present and
+/// identifies the client.
+const USER_AGENT: &str = concat!("mergify-cli/", env!("CARGO_PKG_VERSION"));
 /// Cap on how many bytes of an error response body we surface in
 /// `CliError`. A misbehaving server can return arbitrarily large
 /// payloads; truncating keeps the CLI output sane and bounds memory
@@ -111,6 +118,7 @@ impl Client {
         let token_opt = (!token_str.is_empty()).then_some(token_str);
         let inner = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            .user_agent(USER_AGENT)
             .build()
             .map_err(|e| CliError::Generic(format!("build HTTP client: {e}")))?;
         Ok(Self {
@@ -477,6 +485,29 @@ mod tests {
         let client = fast_client(&server, ApiFlavor::Mergify);
         let got: Foo = client.get("/foo").await.unwrap();
         assert_eq!(got, Foo { bar: 42 });
+    }
+
+    #[tokio::test]
+    async fn requests_carry_user_agent_header() {
+        // GitHub's REST API rejects requests with no User-Agent
+        // ("403 Request forbidden by administrative rules"). The
+        // reqwest builder doesn't set one by default, so dropping
+        // the explicit `.user_agent(...)` call would silently
+        // break every GitHub-backed command. Pin the header value
+        // to `mergify-cli/<crate-version>` so a regression here
+        // surfaces as a test failure, not as a prod outage.
+        let server = MockServer::start().await;
+        let expected_ua = format!("mergify-cli/{}", env!("CARGO_PKG_VERSION"));
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .and(header("User-Agent", expected_ua.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Foo { bar: 1 }))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::GitHub);
+        let _: Foo = client.get("/foo").await.unwrap();
     }
 
     #[tokio::test]
