@@ -39,6 +39,14 @@ use mergify_queue::unpause::UnpauseOptions;
 
 mod cli_schema;
 
+/// User-visible CLI version. `build.rs` normalises the
+/// `MERGIFY_RELEASE_VERSION` env var the release workflow sets
+/// from `$GITHUB_REF` (unset or empty => `CARGO_PKG_VERSION`,
+/// i.e. the `0.0.0` placeholder), and writes the result to the
+/// `MERGIFY_CLI_VERSION` rustc-env. Reading the normalised var
+/// directly means this side can't surface an empty string.
+const VERSION: &str = env!("MERGIFY_CLI_VERSION");
+
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
 
@@ -2607,8 +2615,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 }
 
 #[derive(Parser)]
-#[command(name = "mergify", disable_help_subcommand = true)]
-#[command(disable_version_flag = true)]
+#[command(name = "mergify", disable_help_subcommand = true, version = VERSION)]
 struct CliRoot {
     /// Enable verbose debug logging. Mirrors the Python CLI's
     /// top-level `--debug` flag so the same invocations work
@@ -4097,6 +4104,44 @@ mod tests {
             sources,
             std::collections::BTreeSet::from(["native"]),
             "expected only `native` stack subcommands",
+        );
+    }
+
+    #[test]
+    fn version_const_matches_release_env_or_falls_back_to_cargo_pkg_version() {
+        // Mirror `build.rs` exactly: empty `MERGIFY_RELEASE_VERSION`
+        // is treated the same as unset, both collapse to
+        // `CARGO_PKG_VERSION`. The release path is exercised in
+        // `build-wheels.yml`'s stamp step (sets a non-empty calver,
+        // expects it in `--version`); this test pins both fallback
+        // branches so build.rs's normalisation can't drift.
+        let expected = match option_env!("MERGIFY_RELEASE_VERSION") {
+            Some(v) if !v.is_empty() => v,
+            _ => env!("CARGO_PKG_VERSION"),
+        };
+        assert_eq!(VERSION, expected);
+    }
+
+    #[test]
+    fn cli_root_exposes_version_flag() {
+        // Locked-in regression: a previous incarnation had
+        // `disable_version_flag = true` because the version source
+        // was wrong; switching to the env-driven const lets clap
+        // render `--version` properly. If a future refactor
+        // removes the `version = VERSION` attribute, `--version`
+        // silently becomes an unknown flag and this catches it.
+        //
+        // `try_parse_from(...).err().expect(...)` over `expect_err`
+        // because the Ok variant is `CliRoot` which doesn't
+        // implement `Debug` (and shouldn't — it carries no debug
+        // intent).
+        let err = CliRoot::try_parse_from(["mergify", "--version"])
+            .err()
+            .expect("--version exits");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(
+            err.to_string().contains(VERSION),
+            "version output should contain VERSION ({VERSION}), got: {err}",
         );
     }
 

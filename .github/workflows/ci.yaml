@@ -85,6 +85,23 @@ jobs:
         shell: bash
         run: mergify --help
 
+      # Lock the dev-build version fallback in. Release builds get
+      # `MERGIFY_RELEASE_VERSION` from the stamp step in
+      # `build-wheels.yml`; PR smoke builds don't, so the binary
+      # must report `Cargo.toml`'s `0.0.0` placeholder. If this
+      # ever changes silently, every release-version assumption
+      # downstream (PyPI install reporting, support diagnostics)
+      # rests on the same code path — catch the drift here.
+      - name: mergify --version reports placeholder on unstamped build
+        shell: bash
+        run: |
+          out=$(mergify --version)
+          echo "$out"
+          [[ "$out" == "mergify 0.0.0" ]] || {
+            echo "expected 'mergify 0.0.0', got '$out'"
+            exit 1
+          }
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:

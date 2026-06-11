@@ -117,7 +117,7 @@ pub fn build() -> CliSchema {
         generator: "mergify _internal dump-cli-schema",
         cli: CliInfo {
             name: root.get_name().to_string(),
-            version: env!("CARGO_PKG_VERSION"),
+            version: crate::VERSION,
             about: root.get_about().map(ToString::to_string),
         },
         command,
