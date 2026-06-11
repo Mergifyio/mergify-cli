@@ -25,7 +25,8 @@
 //!   falls back to the plain `old…new` three-dot URL.
 
 use std::path::Path;
-use std::process::Command;
+
+use crate::git::run_git_capture;
 
 use mergify_core::{CliError, HttpClient};
 use serde::{Deserialize, Serialize};
@@ -296,38 +297,11 @@ fn short(sha: &str) -> &str {
     if sha.len() > 7 { &sha[..7] } else { sha }
 }
 
-fn git_cmd(repo_dir: Option<&Path>) -> Command {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.env("LC_ALL", "C").env("LANG", "C").env("LANGUAGE", "C");
-    cmd
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let output = git_cmd(repo_dir)
-        .args(args)
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })?;
-    Ok(stdout.trim().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
 
     use tempfile::TempDir;
 

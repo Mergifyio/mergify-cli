@@ -9,12 +9,12 @@
 //! matches the current order, we short-circuit with an "already
 //! in order" outcome and don't spawn a rebase.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use mergify_core::CliError;
 
 use crate::change_id;
+use crate::git::{resolve_repo_toplevel, run_git_capture, shell_quote, spawn_rebase};
 use crate::local_commits::{self, LocalCommit};
 use crate::trunk;
 
@@ -145,54 +145,5 @@ fn spawn_reorder_rebase(
     let bin = shell_quote(&mergify_binary.to_string_lossy());
     let shas = shell_quote(&ordered_shas.join(","));
     let editor = format!("{bin} _internal rebase-todo-rewrite --action reorder --shas {shas}");
-    spawn_rebase(repo_dir, base, &editor)
-}
-
-fn shell_quote(value: &str) -> String {
-    let escaped = value.replace('\'', "'\\''");
-    format!("'{escaped}'")
-}
-
-fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<PathBuf, CliError> {
-    let raw = run_git_capture(repo_dir, &["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(raw))
-}
-
-fn spawn_rebase(repo_dir: &Path, base: &str, sequence_editor: &str) -> Result<(), CliError> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(["rebase", "-i", base])
-        .env("GIT_SEQUENCE_EDITOR", sequence_editor)
-        .status()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git rebase -i`: {e}")))?;
-    if !status.success() {
-        return Err(CliError::Generic(format!(
-            "`git rebase -i {base}` exited {status}"
-        )));
-    }
-    Ok(())
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    let output = cmd
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })?;
-    Ok(stdout.trim_end().to_string())
+    spawn_rebase(repo_dir, base, Some(&editor))
 }

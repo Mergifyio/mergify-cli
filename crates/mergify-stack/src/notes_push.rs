@@ -16,7 +16,8 @@
 //! `_merge_remote_notes`, `fetch_notes_ref`, `push_branches`.
 
 use std::path::Path;
-use std::process::Command;
+
+use crate::git::{git_cmd, run_git_capture, run_git_silent};
 
 use mergify_core::CliError;
 
@@ -207,50 +208,11 @@ pub fn push_branches(
     Ok(())
 }
 
-fn git_cmd(repo_dir: Option<&Path>) -> Command {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.env("LC_ALL", "C").env("LANG", "C").env("LANGUAGE", "C");
-    cmd
-}
-
-fn run_git_silent(repo_dir: Option<&Path>, args: &[&str]) -> Result<(), CliError> {
-    let output = git_cmd(repo_dir)
-        .args(args)
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    Ok(())
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let output = git_cmd(repo_dir)
-        .args(args)
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
     use tempfile::TempDir;
 
     fn init_repo() -> TempDir {

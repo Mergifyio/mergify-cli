@@ -22,7 +22,8 @@
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use crate::git::run_git_capture;
 
 use mergify_core::CliError;
 
@@ -292,29 +293,6 @@ fn resolve_hooks_dir(repo_dir: Option<&Path>) -> Result<PathBuf, CliError> {
     // chdir.
     let toplevel = run_git_capture(repo_dir, &["rev-parse", "--show-toplevel"])?;
     Ok(PathBuf::from(toplevel).join(path))
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    let output = cmd
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })?;
-    Ok(stdout.trim_end().to_string())
 }
 
 #[cfg(test)]

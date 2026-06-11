@@ -9,12 +9,12 @@
 //! binary's `_internal rebase-todo-rewrite` subcommand, set as
 //! `GIT_SEQUENCE_EDITOR` before spawning `git rebase -i <base>`.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use mergify_core::CliError;
 
 use crate::change_id;
+use crate::git::{resolve_repo_toplevel, run_git_capture, shell_quote, spawn_rebase};
 use crate::local_commits;
 use crate::trunk;
 
@@ -140,67 +140,6 @@ fn build_sequence_editor(binary: &Path, sha: &str) -> String {
     let bin = shell_quote(&binary.to_string_lossy());
     let sha = shell_quote(sha);
     format!("{bin} _internal rebase-todo-rewrite --action edit --sha {sha}")
-}
-
-fn shell_quote(value: &str) -> String {
-    // Conservative single-quote escaping for sh: wrap in `'…'`,
-    // escape embedded `'` as `'\''`. Good enough for the binary
-    // path and a SHA — both are safe ASCII payloads in practice
-    // but we never want a path-with-spaces to break the rebase.
-    let escaped = value.replace('\'', "'\\''");
-    format!("'{escaped}'")
-}
-
-fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<PathBuf, CliError> {
-    let raw = run_git_capture(repo_dir, &["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(raw))
-}
-
-fn spawn_rebase(
-    repo_dir: &Path,
-    base: &str,
-    sequence_editor: Option<&str>,
-) -> Result<(), CliError> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo_dir).args(["rebase", "-i", base]);
-    if let Some(editor) = sequence_editor {
-        cmd.env("GIT_SEQUENCE_EDITOR", editor);
-    }
-    let status = cmd
-        .status()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git rebase -i`: {e}")))?;
-    if !status.success() {
-        // The rebase itself printed whatever it had to print on
-        // stderr — surface a short generic error and let the
-        // user follow up with `git status` / `git rebase --abort`.
-        return Err(CliError::Generic(format!(
-            "`git rebase -i {base}` exited {status}"
-        )));
-    }
-    Ok(())
-}
-
-fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    let output = cmd
-        .output()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(CliError::Generic(if stderr.is_empty() {
-            format!("`git {}` failed", args.join(" "))
-        } else {
-            stderr
-        }));
-    }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })?;
-    Ok(stdout.trim_end().to_string())
 }
 
 #[cfg(test)]

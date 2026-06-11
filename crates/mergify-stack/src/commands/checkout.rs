@@ -19,8 +19,9 @@
 //!    head, `git checkout -b <local>` on it, set upstream
 //!    tracking to the root's base.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
+
+use crate::git::run_git_silent as run_git;
 
 use mergify_core::CliError;
 use mergify_core::HttpClient;
@@ -222,46 +223,6 @@ fn summary_from(pull: &Value) -> Result<PullSummary, CliError> {
         base_ref: pull_field(pull, "base", "ref")?,
         head_ref: pull_field(pull, "head", "ref")?,
     })
-}
-
-fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<(), CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    let status = cmd
-        .status()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git {}`: {e}", args.join(" "))))?;
-    if !status.success() {
-        return Err(CliError::Generic(format!(
-            "`git {}` exited {status}",
-            args.join(" ")
-        )));
-    }
-    Ok(())
-}
-
-// Unused but kept so future commands (sync, list) can reuse the
-// same toplevel-resolution.
-#[allow(dead_code)]
-fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<PathBuf, CliError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = repo_dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(["rev-parse", "--show-toplevel"]);
-    let output = cmd
-        .output()
-        .map_err(|e| CliError::Generic(format!("spawn git rev-parse: {e}")))?;
-    if !output.status.success() {
-        return Err(CliError::Generic(
-            "git rev-parse --show-toplevel failed".into(),
-        ));
-    }
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&output.stdout).trim().to_string(),
-    ))
 }
 
 #[cfg(test)]
