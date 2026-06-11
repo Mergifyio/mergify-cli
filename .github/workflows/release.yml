@@ -1,67 +1,55 @@
-name: upload release to PyPI + GitHub Release
+name: release
 
-# Builds the platform-tagged wheel matrix (delegated to
-# `build-wheels.yml`) plus an sdist with the wheel version stamped
-# from the git tag, then ships them through two channels in
-# parallel:
+# Two-stage release flow, forced by GitHub's immutable-releases
+# policy (assets can't be added after publish — PR #1569 dropped a
+# prior `gh release upload` job for the same reason):
 #
-#   - PyPI Trusted-Publisher upload (the historic channel; what
-#     `pip install mergify-cli` consumes).
-#   - GitHub Release asset upload (standalone binaries + a
-#     `SHA256SUMS` file the `install.sh` one-liner consumes).
+# 1. `release: created` with `draft == true` — maintainer clicks
+#    "Save draft" in the UI. We build wheels, extract the binary
+#    from each, and attach `mergify-<target>.{tar.gz,zip}` +
+#    `SHA256SUMS` to the still-mutable draft. The assets appear in
+#    the draft's asset list within a few minutes.
 #
-# `build-wheels.yml` is shared with `ci.yaml`; the only release-
-# specific behaviour lives here (version stamping + the two publish
-# steps). Adding a new platform target in `build-wheels.yml`
-# automatically extends both release channels.
+# 2. `release: published` — maintainer reviews the now-asset-laden
+#    draft and clicks "Publish release". We assert the expected
+#    asset names are attached (blocks the PyPI step with a clear
+#    error if the maintainer bypassed the draft flow and published
+#    directly — the release is then immutable and binaries can't be
+#    backfilled), then build wheels again and publish to PyPI.
+#
+# Yes, wheels are built twice (once per stage). The alternative —
+# stash wheels somewhere between runs — adds storage plumbing for
+# ~5 min of CI savings; not worth it. `build-wheels.yml` is shared
+# with `ci.yaml` so adding a new platform target there extends both
+# stages automatically.
 
 on:
   release:
-    types:
-      - published
+    types: [created, published]
 
 jobs:
-  build:
+  # ---------------- Draft stage: attach binaries ----------------
+
+  build-wheels-for-draft:
+    name: build wheels (draft stage)
+    if: github.event.action == 'created' && github.event.release.draft
     uses: ./.github/workflows/build-wheels.yml
     with:
       stamp-version: true
 
-  publish:
-    name: publish to PyPI
-    runs-on: ubuntu-24.04
-    needs:
-      - build
-    environment: release
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: wheel-*
-          merge-multiple: true
-          path: dist
-
-      - name: Confirm collected artifacts
-        run: ls -la dist
-
-      - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
-
   upload-binaries:
-    name: upload binaries to GitHub Release
+    name: attach binaries to the draft release
+    if: github.event.action == 'created' && github.event.release.draft
+    needs: build-wheels-for-draft
     runs-on: ubuntu-24.04
-    needs:
-      - build
     permissions:
       # `gh release upload` writes to the release.
       contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
-          # Skip `wheel-sdist`; it has no compiled binary inside.
+          # Skip `wheel-sdist` (single dash); each wheel artifact is
+          # `wheel-<target>` with multiple dashes in the target.
           pattern: wheel-*-*
           path: artifacts
 
@@ -97,12 +85,100 @@ jobs:
           echo "Built release assets:"
           ls -la dist
 
-      - name: Upload assets to the GitHub Release
+      - name: Upload assets to the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # `--clobber` so a re-run of the workflow (e.g. after a
-          # transient PyPI failure forces a retry) replaces stale
-          # assets instead of erroring out.
-          gh release upload "${GITHUB_REF#refs/tags/}" dist/* --clobber
+          # `--clobber` so re-saving the draft (which can re-fire
+          # `release: created`) replaces stale assets instead of
+          # erroring out.
+          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+
+  # ---------------- Publish stage: assert + PyPI ----------------
+
+  assert-binaries-present:
+    name: assert binary assets attached
+    if: github.event.action == 'published'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check expected assets are on the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          mapfile -t attached < <(gh release view "$tag" --json assets --jq '.assets[].name')
+          echo "Assets on $tag:"
+          printf '  %s\n' "${attached[@]}"
+
+          expected=(
+            mergify-x86_64-unknown-linux-gnu.tar.gz
+            mergify-aarch64-unknown-linux-gnu.tar.gz
+            mergify-x86_64-apple-darwin.tar.gz
+            mergify-aarch64-apple-darwin.tar.gz
+            mergify-x86_64-pc-windows-msvc.zip
+            SHA256SUMS
+          )
+          missing=()
+          for asset in "${expected[@]}"; do
+            printf '%s\n' "${attached[@]}" | grep -qx "$asset" || missing+=("$asset")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            cat <<EOF >&2
+          ::error::Release $tag is missing assets: ${missing[*]}
+
+          Binaries are attached by the 'upload-binaries' job, which only runs when
+          a release is saved as a *draft* (release: created event). It looks like
+          this release was published directly without first being saved as a
+          draft. Because release metadata is now immutable, the assets can't be
+          backfilled — the PyPI publish is being blocked so the package and the
+          binary distributions don't diverge.
+
+          Recovery: delete this release, then re-create it via the UI making sure
+          to click "Save draft" first. Wait for the binaries to appear in the
+          draft's asset list before clicking "Publish".
+          EOF
+            exit 1
+          fi
+          echo "All expected assets present — proceeding."
+
+  build-wheels-for-publish:
+    name: build wheels (publish stage)
+    if: github.event.action == 'published'
+    needs: assert-binaries-present
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      stamp-version: true
+
+  publish:
+    name: publish to PyPI
+    if: github.event.action == 'published'
+    runs-on: ubuntu-24.04
+    needs:
+      - assert-binaries-present
+      - build-wheels-for-publish
+    environment: release
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          # `wheel-*` covers both `wheel-<target>` artifacts and
+          # `wheel-sdist` — PyPI gets both.
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist
+
+      - name: Confirm collected artifacts
+        run: ls -la dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
