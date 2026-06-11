@@ -223,6 +223,103 @@ jobs:
               kill "$(cat /tmp/server.pid)" || true
           fi
 
+  # Same fixture pattern as `install-script-smoke`, but exercises
+  # `mergify self-update`. Builds the release binary, packages it
+  # like a real release would, points the binary at a localhost
+  # fixture via `MERGIFY_BASE_URL`, and runs the full download +
+  # verify + atomic-swap path. Plus a negative case proving a
+  # tampered `SHA256SUMS` reject (binary must stay untouched).
+  self-update-smoke:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: self-update-${{ matrix.os }}
+
+      - name: Build release binary
+        run: cargo build --release -p mergify-cli
+
+      # Same fixture shape `self_update::endpoints` expects in
+      # `MERGIFY_BASE_URL` mode: a flat dir holding
+      # `latest-release.json` (the API stub), the asset tarball,
+      # and `SHA256SUMS`.
+      - name: Pack self-update fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          echo "Building fixture for target: ${target}"
+          mkdir -p fixture/su
+          # Pretend a far-future release is available so the
+          # `current == latest` short-circuit doesn't fire.
+          echo '{"tag_name":"2099.1.1.1"}' > fixture/su/latest-release.json
+          tar -C target/release -czf "fixture/su/mergify-${target}.tar.gz" mergify
+          (cd fixture/su && shasum -a 256 "mergify-${target}.tar.gz" > SHA256SUMS)
+          ls -la fixture/su
+
+      - name: Serve fixture
+        shell: bash
+        run: |
+          cd fixture/su
+          python3 -m http.server 8766 --bind 127.0.0.1 > /tmp/su-server.log 2>&1 &
+          echo $! > /tmp/su-server.pid
+          for _ in $(seq 1 50); do
+              curl -fsS http://127.0.0.1:8766/SHA256SUMS > /dev/null && break
+              sleep 0.1
+          done
+
+      - name: self-update --check reports both versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=$(MERGIFY_BASE_URL=http://127.0.0.1:8766 target/release/mergify self-update --check)
+          echo "$out"
+          echo "$out" | grep -q 'Current: 0.0.0'
+          echo "$out" | grep -q 'Latest:  2099.1.1.1'
+
+      - name: self-update happy path swaps the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp target/release/mergify /tmp/mergify-su
+          MERGIFY_BASE_URL=http://127.0.0.1:8766 /tmp/mergify-su self-update
+          # Sanity: the swapped binary still runs.
+          /tmp/mergify-su --version
+
+      - name: self-update rejects tampered SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          cp target/release/mergify /tmp/mergify-su-tamper
+          before=$(shasum -a 256 /tmp/mergify-su-tamper | awk '{print $1}')
+          # Replace SHA256SUMS with a wrong-but-well-formed hash.
+          printf '%064d  mergify-%s.tar.gz\n' 0 "${target}" > fixture/su/SHA256SUMS
+          ! MERGIFY_BASE_URL=http://127.0.0.1:8766 /tmp/mergify-su-tamper self-update \
+              > /tmp/su-tamper.log 2>&1
+          grep -q 'checksum mismatch' /tmp/su-tamper.log
+          # The binary must NOT have been swapped.
+          after=$(shasum -a 256 /tmp/mergify-su-tamper | awk '{print $1}')
+          [ "$before" = "$after" ] || { echo "binary was tampered!"; exit 1; }
+
+      - name: Stop fixture server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/su-server.pid ]; then
+              kill "$(cat /tmp/su-server.pid)" || true
+          fi
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
@@ -230,6 +327,7 @@ jobs:
       - wheels
       - smoke-test-binary
       - install-script-smoke
+      - self-update-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded
