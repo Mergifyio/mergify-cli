@@ -5,6 +5,17 @@ CI insights, merge queue, scheduled freezes, and configuration management.
 
 ## Installation
 
+Standalone binary (Linux + macOS, x86_64 and aarch64):
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
+```
+
+Installs to `~/.local/bin/mergify`. Override with `MERGIFY_INSTALL_DIR=/usr/local/bin`
+or pin a version with `MERGIFY_VERSION=2026.4.23.1`.
+
+Or via Python packaging (any OS):
+
 ```shell
 uv tool install mergify-cli
 # or

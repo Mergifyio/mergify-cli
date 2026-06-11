@@ -1,14 +1,19 @@
-name: upload release to PyPI
+name: upload release to PyPI + GitHub Release
 
 # Builds the platform-tagged wheel matrix (delegated to
 # `build-wheels.yml`) plus an sdist with the wheel version stamped
-# from the git tag, then publishes everything to PyPI in a single
-# Trusted-Publisher upload.
+# from the git tag, then ships them through two channels in
+# parallel:
+#
+#   - PyPI Trusted-Publisher upload (the historic channel; what
+#     `pip install mergify-cli` consumes).
+#   - GitHub Release asset upload (standalone binaries + a
+#     `SHA256SUMS` file the `install.sh` one-liner consumes).
 #
 # `build-wheels.yml` is shared with `ci.yaml`; the only release-
-# specific behaviour lives here (version stamping, the publish
-# step itself). Adding a new platform target in `build-wheels.yml`
-# automatically extends the release matrix.
+# specific behaviour lives here (version stamping + the two publish
+# steps). Adding a new platform target in `build-wheels.yml`
+# automatically extends both release channels.
 
 on:
   release:
@@ -44,3 +49,60 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+
+  upload-binaries:
+    name: upload binaries to GitHub Release
+    runs-on: ubuntu-24.04
+    needs:
+      - build
+    permissions:
+      # `gh release upload` writes to the release.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          # Skip `wheel-sdist`; it has no compiled binary inside.
+          pattern: wheel-*-*
+          path: artifacts
+
+      # Each `wheel-<target>` artifact is a maturin-built wheel with
+      # the `mergify` binary at `<dist>.data/scripts/mergify[.exe]`.
+      # Extract it, normalise into `mergify-<target>.{tar.gz,zip}`,
+      # then hash the lot with sha256 so the installer can verify
+      # what it pulled. Stable names (no embedded version) so the
+      # `releases/latest/download/...` redirect keeps working for
+      # the `install.sh` consumers — the version is still observable
+      # via `mergify --version` after install.
+      - name: Extract binaries and repack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for dir in artifacts/wheel-*; do
+            target="${dir#artifacts/wheel-}"
+            whl=$(ls "${dir}"/*.whl | head -1)
+            workdir=$(mktemp -d)
+            # `-j` flattens, `-o` overwrites — the wheel layout is
+            # `<dist>.data/scripts/<bin>`; we only want `<bin>`.
+            unzip -joq "${whl}" '*/scripts/mergify' '*/scripts/mergify.exe' -d "${workdir}"
+            if [[ "${target}" == *windows* ]]; then
+              (cd "${workdir}" && zip -q "${OLDPWD}/dist/mergify-${target}.zip" mergify.exe)
+            else
+              chmod +x "${workdir}/mergify"
+              tar -C "${workdir}" -czf "dist/mergify-${target}.tar.gz" mergify
+            fi
+            rm -rf "${workdir}"
+          done
+          (cd dist && sha256sum mergify-* > SHA256SUMS)
+          echo "Built release assets:"
+          ls -la dist
+
+      - name: Upload assets to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # `--clobber` so a re-run of the workflow (e.g. after a
+          # transient PyPI failure forces a retry) replaces stale
+          # assets instead of erroring out.
+          gh release upload "${GITHUB_REF#refs/tags/}" dist/* --clobber
