@@ -39,6 +39,7 @@ use mergify_queue::status::StatusOptions;
 use mergify_queue::unpause::UnpauseOptions;
 
 mod cli_schema;
+mod self_update;
 
 /// User-visible CLI version. `build.rs` normalises the
 /// `MERGIFY_RELEASE_VERSION` env var the release workflow sets
@@ -263,6 +264,9 @@ enum NativeCommand {
     /// to JSON for the docs site. Pure introspection; no async, no I/O
     /// beyond stdout.
     InternalDumpCliSchema,
+    /// `mergify self-update [--force] [--check]` — replace the
+    /// running binary with the latest release.
+    SelfUpdate(self_update::Options),
 }
 
 struct StackEditOpts {
@@ -888,6 +892,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
     let _ = parsed.debug; // global flag — consulted by command impls, not here
     match parsed.command {
         Subcommands::Stack(ShimmedArgs { args }) => dispatch_stack(args),
+        Subcommands::SelfUpdate(cli) => Dispatch::Native(NativeCommand::SelfUpdate(cli.into())),
         Subcommands::Internal(InternalArgs {
             command:
                 InternalSubcommand::StackLocalCommits(InternalStackLocalCommitsArgs {
@@ -2440,6 +2445,10 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::SelfUpdate(opts) => {
+                self_update::run(&opts).await?;
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -2663,6 +2672,11 @@ enum Subcommands {
     Freeze(FreezeArgs),
     /// Manage stacked pull requests.
     Stack(ShimmedArgs),
+    /// Replace the running binary with the latest release. Verifies
+    /// the download against `SHA256SUMS` before swap, matching the
+    /// curl|sh installer's contract.
+    #[command(name = "self-update")]
+    SelfUpdate(SelfUpdateCli),
     /// Internal helpers the Python side of the wheel calls during
     /// the Python→Rust migration. Hidden from `--help` because it
     /// is not part of the user-facing CLI; the wire format is not
@@ -3302,6 +3316,34 @@ impl From<StackSetupCli> for StackSetupOpts {
         Self {
             force: cli.force,
             check: cli.check,
+        }
+    }
+}
+
+/// `mergify self-update [--force] [--check]`.
+#[derive(Parser)]
+#[command(
+    name = "self-update",
+    about = "Replace the running binary with the latest release"
+)]
+struct SelfUpdateCli {
+    /// Re-download and re-install even when the running binary
+    /// already matches the latest release tag. Useful for
+    /// repairing a corrupted install without bumping the version.
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    force: bool,
+
+    /// Print the current and latest release tags and exit without
+    /// touching the binary.
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    check: bool,
+}
+
+impl From<SelfUpdateCli> for self_update::Options {
+    fn from(cli: SelfUpdateCli) -> Self {
+        Self {
+            force: cli.force,
+            check_only: cli.check,
         }
     }
 }
@@ -4115,7 +4157,15 @@ mod tests {
             .collect();
         assert_eq!(
             groups,
-            ["config", "ci", "tests", "queue", "freeze", "stack"]
+            [
+                "config",
+                "ci",
+                "tests",
+                "queue",
+                "freeze",
+                "stack",
+                "self-update"
+            ]
         );
         assert!(!groups.contains(&"_internal"), "hidden group leaked");
 

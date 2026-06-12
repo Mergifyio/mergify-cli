@@ -12,7 +12,8 @@ curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.
 ```
 
 Installs to `~/.local/bin/mergify`. Override with `MERGIFY_INSTALL_DIR=/usr/local/bin`
-or pin a version with `MERGIFY_VERSION=2026.4.23.1`.
+or pin a version with `MERGIFY_VERSION=2026.4.23.1`. Once installed, upgrade with
+`mergify self-update`.
 
 Or via Python packaging (any OS):
 
