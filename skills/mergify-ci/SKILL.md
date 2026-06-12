@@ -296,14 +296,24 @@ A null `branch` renders as `*` (the quarantine applies to all branches).
 
 ## Queue Info (`queue-info`)
 
-Outputs merge queue batch metadata from the current pull request event. Only works on merge queue draft pull requests. Writes output to `GITHUB_OUTPUT` when running in GitHub Actions.
+Outputs merge queue batch metadata as JSON. Only works on merge queue draft pull requests; exits `INVALID_STATE` (7) otherwise.
+
+Two ways to point it at a PR:
 
 ```bash
+# In CI: read the MQ draft PR from the GitHub Actions event payload.
+# Also writes the metadata to GITHUB_OUTPUT when running in GitHub Actions.
 mergify ci queue-info
-# Output: JSON with batch metadata
+
+# Anywhere: fetch the PR via the GitHub API by URL. Does NOT write
+# GITHUB_OUTPUT (it's a local/interactive lookup). The URL host drives
+# the API base (github.com or a GitHub Enterprise Server host).
+mergify ci queue-info https://github.com/owner/repo/pull/1234
 ```
 
-This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch.
+The URL form needs a GitHub token: `--token`/`-t`, else `MERGIFY_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`. It errors clearly when none is available.
+
+This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch, and for inspecting a batch by URL from your laptop.
 
 ## Common Patterns
 
