@@ -1,8 +1,10 @@
 //! `mergify tests show` — resolve test identities by name and fetch
 //! full health/metrics details for each match.
 //!
-//! Exit code `2` is intentionally skipped: the CLI-wide contract
-//! reserves it for clap argument errors.
+//! `show` is a read-only command: it always exits `0` once it has
+//! rendered the matched tests, regardless of their health. Callers
+//! that need to gate on health consume the structured output instead
+//! (e.g. `--json | jq`). Real failures surface as [`CliError`].
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -37,8 +39,8 @@ pub struct TestsShowOptions<'a> {
     pub per_page: Option<u32>,
 }
 
-/// Run the command and return the exit code that reflects the
-/// aggregate test health.
+/// Run the command, rendering every matched test. Returns
+/// [`ExitCode::Success`] on success; failures surface as [`CliError`].
 pub async fn run(
     opts: TestsShowOptions<'_>,
     output: &mut dyn Output,
@@ -68,11 +70,9 @@ pub async fn run(
     let details = fetch_all_details(client.clone(), owner, repo, &identities).await?;
 
     let payload = TestsShowPayload::new(identities, details);
-    let exit_code = aggregate_exit_code(payload.tests.iter().map(|t| t.details.health_status));
-
     output.emit(&payload, &mut |w| render_human(w, &payload))?;
 
-    Ok(exit_code)
+    Ok(ExitCode::Success)
 }
 
 async fn search(
@@ -156,18 +156,6 @@ async fn fetch_all_details(
         .into_iter()
         .map(|slot| slot.expect("slot filled by JoinSet loop"))
         .collect())
-}
-
-fn aggregate_exit_code(statuses: impl IntoIterator<Item = HealthStatus>) -> ExitCode {
-    let mut max = ExitCode::Success;
-    for status in statuses {
-        match status {
-            HealthStatus::Broken => return ExitCode::MergifyApiError,
-            HealthStatus::Flaky if max == ExitCode::Success => max = ExitCode::GenericError,
-            _ => {}
-        }
-    }
-    max
 }
 
 #[derive(Deserialize)]
@@ -675,7 +663,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exit_code_promotes_for_flaky_then_broken() {
+    async fn unhealthy_tests_still_exit_success() {
+        // `show` is a read command: broken and flaky tests are part of
+        // a successful display, not a command failure. Health is read
+        // from the payload, never from the exit code.
         let server = MockServer::start().await;
         let id_a = test_id(1);
         let id_b = test_id(2);
@@ -719,37 +710,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             exit,
-            ExitCode::MergifyApiError,
-            "broken must promote past flaky"
+            ExitCode::Success,
+            "displaying unhealthy tests is still a successful show"
         );
     }
 
     #[tokio::test]
-    async fn exit_code_is_generic_error_when_only_flaky() {
-        let server = MockServer::start().await;
-        let id = test_id(1);
-        mount_search(
-            &server,
-            json!({
-                "tests": [
-                    {"test_id": id, "test_name": "a", "pipeline_name": "ci", "job_name": "j"},
-                ]
-            }),
-        )
-        .await;
-        mount_details(&server, &id, details_template(&id, "a", "flaky", "passed")).await;
-
-        let mut cap = captured(OutputMode::Json);
-        let api_url = server.uri();
-        let names = vec!["a".to_string()];
-        let exit = run(options(&api_url, &names), &mut cap.output)
-            .await
-            .unwrap();
-        assert_eq!(exit, ExitCode::GenericError);
-    }
-
-    #[tokio::test]
-    async fn unknown_health_status_does_not_promote_severity() {
+    async fn unknown_health_status_renders_and_exits_success() {
         let server = MockServer::start().await;
         let id = test_id(1);
         mount_search(
@@ -774,11 +741,7 @@ mod tests {
         let exit = run(options(&api_url, &names), &mut cap.output)
             .await
             .unwrap();
-        assert_eq!(
-            exit,
-            ExitCode::Success,
-            "unknown enum must not promote severity"
-        );
+        assert_eq!(exit, ExitCode::Success);
         let mut cap = captured(OutputMode::Human);
         run(options(&api_url, &names), &mut cap.output)
             .await
