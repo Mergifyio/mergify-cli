@@ -22,6 +22,19 @@ mergify-core = { path = "../mergify-core" }
 mergify-freeze = { path = "../mergify-freeze" }
 mergify-queue = { path = "../mergify-queue" }
 mergify-stack = { path = "../mergify-stack" }
+# `mergify self-update`: hits the GitHub Releases API for the
+# latest tag, downloads the asset matching the current target,
+# verifies it against `SHA256SUMS` (same format the curl|sh
+# installer trusts), and atomically swaps the running binary. We
+# go through `reqwest` directly here instead of
+# `mergify-core::HttpClient` because the latter wraps GitHub-API
+# auth + retry, neither of which apply to unauthenticated public
+# release downloads. `self_replace` handles the Windows
+# can't-rename-over-a-running-exe dance cross-platform.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+self-replace = "1"
+sha2 = "0.10"
+tempfile = "3"
 # Backs the `_internal dump-cli-schema` generator (serializing the
 # clap command tree) and the Python-migration helpers (`_internal
 # stack-local-commits` et al.).

@@ -1,0 +1,446 @@
+//! `mergify self-update` — upgrade the running binary in place.
+//!
+//! Targets the `curl | sh` install channel: same release assets,
+//! same `SHA256SUMS` verification, same Rust target triple
+//! mapping. Users on `PyPI` / `Homebrew` should keep using their
+//! package manager — we run a best-effort sanity check on the
+//! binary's install path and warn (not error) when it looks
+//! package-manager-owned.
+//!
+//! Flow:
+//!
+//! 1. GET `/repos/Mergifyio/mergify-cli/releases/latest` for the
+//!    tag.
+//! 2. If `tag == crate::VERSION` and `--force` wasn't passed,
+//!    print "already up to date" and return.
+//! 3. Download `mergify-<target>.tar.gz` + `SHA256SUMS` from the
+//!    matching release.
+//! 4. Verify the asset SHA256 against `SHA256SUMS`. Mirrors
+//!    `install.sh`'s line-shape validation so a malformed
+//!    `SHA256SUMS` can't slip past.
+//! 5. Shell out to `tar -xzf` for extraction (identical to
+//!    `install.sh`; saves a `tar` + `flate2` crate dep).
+//! 6. [`self_replace`] atomically swaps the running binary with
+//!    the freshly extracted one — handles the Windows
+//!    rename-over-a-running-exe case.
+
+use std::path::Path;
+use std::time::Duration;
+
+use mergify_core::CliError;
+use serde::Deserialize;
+use sha2::Digest;
+use sha2::Sha256;
+
+const REPO: &str = "Mergifyio/mergify-cli";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_API_BASE: &str = "https://api.github.com";
+const DEFAULT_DOWNLOAD_BASE: &str = "https://github.com";
+
+/// Env-var override that points all HTTP traffic at a single base
+/// URL. Same lever `install.sh` exposes as `MERGIFY_BASE_URL` —
+/// the CI smoke test sets it to a `python3 -m http.server` fixture
+/// so the full download + verify + swap path runs without hitting
+/// real GitHub. Unset in real use.
+const BASE_URL_ENV: &str = "MERGIFY_BASE_URL";
+
+struct Endpoints {
+    /// `<api>/repos/<REPO>/releases/latest`
+    latest_release: String,
+    /// `<download>/<REPO>/releases/download/<tag>/<asset>`
+    asset_base: String,
+}
+
+fn endpoints(tag: &str) -> Endpoints {
+    if let Ok(base) = std::env::var(BASE_URL_ENV) {
+        // Fixture mode: a single flat directory serves both
+        // `latest-release.json` (the stub for the API call) and
+        // every asset/checksum file by name. No path-routing logic
+        // on the fixture side.
+        return Endpoints {
+            latest_release: format!("{base}/latest-release.json"),
+            asset_base: base,
+        };
+    }
+    Endpoints {
+        latest_release: format!("{DEFAULT_API_BASE}/repos/{REPO}/releases/latest"),
+        asset_base: format!("{DEFAULT_DOWNLOAD_BASE}/{REPO}/releases/download/{tag}"),
+    }
+}
+
+/// Inputs to [`run`]. Construction is owned by the CLI binding in
+/// `main.rs` so this module stays UI-agnostic.
+#[derive(Debug)]
+pub struct Options {
+    /// Re-install even when the running binary already matches the
+    /// latest release. Useful for repairing a corrupted install.
+    pub force: bool,
+    /// Resolve and print the latest release tag, then exit without
+    /// touching the binary.
+    pub check_only: bool,
+}
+
+#[derive(Deserialize)]
+struct LatestRelease {
+    tag_name: String,
+}
+
+pub async fn run(opts: &Options) -> Result<(), CliError> {
+    let current = crate::VERSION;
+    let target = current_target()?;
+    let client = http_client()?;
+    // Fetch the latest tag with placeholder endpoints — the
+    // `asset_base` slot is only consulted after we know the tag.
+    let probe = endpoints("");
+    let latest = fetch_latest_tag(&client, &probe.latest_release).await?;
+
+    if opts.check_only {
+        println!("Current: {current}");
+        println!("Latest:  {latest}");
+        return Ok(());
+    }
+    if current == latest && !opts.force {
+        println!("mergify is up to date ({current})");
+        return Ok(());
+    }
+    println!("Updating mergify: {current} -> {latest}");
+
+    // Windows ships `.zip`, every other target `.tar.gz`. The
+    // release workflow packages assets the same way, so the
+    // extension is determined by `cfg!(windows)` here, not by
+    // target string-sniffing.
+    let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
+    let asset = format!("mergify-{target}.{ext}");
+    let ep = endpoints(&latest);
+    let archive = download(&client, &format!("{}/{asset}", ep.asset_base)).await?;
+    let sums = download_text(&client, &format!("{}/SHA256SUMS", ep.asset_base)).await?;
+    verify_checksum(&archive, &asset, &sums)?;
+
+    // Stage the extracted binary in a sibling temp dir next to the
+    // current binary. Same filesystem keeps the final `rename` in
+    // [`self_replace`] atomic — on Linux/macOS a cross-fs rename
+    // would silently copy + delete and lose the "no half-written
+    // binary on disk" guarantee.
+    let current_exe = std::env::current_exe()
+        .map_err(|e| CliError::Generic(format!("locate current binary: {e}")))?;
+    let install_dir = current_exe
+        .parent()
+        .ok_or_else(|| CliError::Generic("current binary has no parent dir".to_string()))?;
+    warn_if_package_manager_owned(install_dir);
+
+    let workdir = tempfile::tempdir_in(install_dir)
+        .map_err(|e| CliError::Generic(format!("create temp dir near binary: {e}")))?;
+    let archive_path = workdir.path().join(&asset);
+    std::fs::write(&archive_path, &archive)
+        .map_err(|e| CliError::Generic(format!("write archive: {e}")))?;
+
+    extract(&archive_path, workdir.path())?;
+    let bin_name = if cfg!(windows) {
+        "mergify.exe"
+    } else {
+        "mergify"
+    };
+    let new_bin = workdir.path().join(bin_name);
+    if !new_bin.exists() {
+        return Err(CliError::Generic(format!(
+            "archive {asset} did not contain the expected binary {bin_name}"
+        )));
+    }
+
+    // `self_replace::self_replace` does the atomic swap. On Unix
+    // this is a `rename(new, current)` over the running binary
+    // (kernel keeps the in-use inode alive). On Windows it renames
+    // the current binary aside, then renames the new one into
+    // place — there's no truly atomic `rename`-over-a-running-exe
+    // on Windows, but the orphaned `.old` file is cleaned up on
+    // the next process exit.
+    self_replace::self_replace(&new_bin)
+        .map_err(|e| CliError::Generic(format!("replace running binary: {e}")))?;
+
+    println!("Installed mergify {latest} to {}", current_exe.display());
+    Ok(())
+}
+
+fn http_client() -> Result<reqwest::Client, CliError> {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .user_agent(concat!("mergify-cli/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| CliError::Generic(format!("build HTTP client: {e}")))
+}
+
+async fn fetch_latest_tag(client: &reqwest::Client, url: &str) -> Result<String, CliError> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| CliError::Generic(format!("GET {url}: {e}")))?
+        .error_for_status()
+        .map_err(|e| CliError::Generic(format!("GitHub API: {e}")))?
+        .json::<LatestRelease>()
+        .await
+        .map_err(|e| CliError::Generic(format!("parse latest-release: {e}")))?;
+    Ok(resp.tag_name)
+}
+
+async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, CliError> {
+    Ok(client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| CliError::Generic(format!("GET {url}: {e}")))?
+        .error_for_status()
+        .map_err(|e| CliError::Generic(format!("GET {url}: {e}")))?
+        .bytes()
+        .await
+        .map_err(|e| CliError::Generic(format!("read body {url}: {e}")))?
+        .to_vec())
+}
+
+async fn download_text(client: &reqwest::Client, url: &str) -> Result<String, CliError> {
+    let bytes = download(client, url).await?;
+    String::from_utf8(bytes)
+        .map_err(|e| CliError::Generic(format!("non-UTF8 body from {url}: {e}")))
+}
+
+/// Verify the downloaded archive's SHA256 against the entry for
+/// `asset_name` in `SHA256SUMS`. Mirrors `install.sh` exactly: the
+/// line must split as `<hash> <name>` on whitespace where the
+/// second field equals `asset_name` *literally* (not `ends_with`,
+/// so `mergify-fooX-target.tar.gz` can't accidentally pass the
+/// check for `target.tar.gz`), and the hash field must be 64 hex
+/// chars. Both layers fail closed.
+fn verify_checksum(archive: &[u8], asset_name: &str, sums: &str) -> Result<(), CliError> {
+    let mut expected: Option<&str> = None;
+    for line in sums.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else { continue };
+        let Some(name) = fields.next() else { continue };
+        // Canonical `sha256sum` output is exactly two fields; bail
+        // on anything else even if `name == asset_name`, so a
+        // doctored entry with smuggled extras can't sneak past.
+        if fields.next().is_some() {
+            continue;
+        }
+        if name == asset_name {
+            expected = Some(hash);
+            break;
+        }
+    }
+    let expected = expected.ok_or_else(|| {
+        CliError::Generic(format!("no checksum entry for {asset_name} in SHA256SUMS"))
+    })?;
+    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CliError::Generic(format!(
+            "malformed checksum entry for {asset_name}"
+        )));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(archive);
+    let actual = format!("{:x}", hasher.finalize());
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(CliError::Generic(format!(
+            "checksum mismatch for {asset_name}: expected {expected}, got {actual}"
+        )))
+    }
+}
+
+/// Extract `archive` (a `.tar.gz` or `.zip`) into `dest` by
+/// shelling out to the system `tar` / PowerShell `Expand-Archive`.
+/// `install.sh` shells out to `tar` too — keeping the same
+/// extractor for both code paths keeps "did the archive parse OK"
+/// surface area tiny.
+fn extract(archive: &Path, dest: &Path) -> Result<(), CliError> {
+    let archive_str = archive.to_string_lossy();
+    let dest_str = dest.to_string_lossy();
+    let status = if archive_str.ends_with(".zip") {
+        // PowerShell single-quoted strings escape an embedded `'`
+        // by doubling it. Without this, a Windows username like
+        // `C:\Users\O'Connor\...` would terminate the literal
+        // early and PowerShell would refuse the command.
+        let archive_quoted = archive_str.replace('\'', "''");
+        let dest_quoted = dest_str.replace('\'', "''");
+        std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Expand-Archive -LiteralPath '{archive_quoted}' \
+                     -DestinationPath '{dest_quoted}' -Force"
+                ),
+            ])
+            .status()
+    } else {
+        std::process::Command::new("tar")
+            .args(["-xzf", &archive_str, "-C", &dest_str])
+            .status()
+    };
+    let status = status.map_err(|e| CliError::Generic(format!("spawn extractor: {e}")))?;
+    if !status.success() {
+        return Err(CliError::Generic(format!(
+            "extractor exited with status {status}"
+        )));
+    }
+    Ok(())
+}
+
+/// Map the running platform to the Rust target triple the release
+/// workflow tags its assets with. Mirrors `install.sh`'s
+/// `detect_target` — kept here as a sanity net (the release wheel
+/// matrix wouldn't have shipped a binary for an unsupported
+/// target, so the running binary can only exist on a known one),
+/// but we still match explicitly so a future cross-build for a
+/// new triple gets caught before the GitHub URL 404s.
+fn current_target() -> Result<&'static str, CliError> {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        (os, arch) => {
+            return Err(CliError::Generic(format!(
+                "no release binary published for {os}/{arch} — install from source"
+            )));
+        }
+    };
+    Ok(target)
+}
+
+/// Print a notice (not an error) if the install path looks
+/// package-manager-owned. Updating in place still works, but the
+/// package manager will overwrite our binary on its next upgrade.
+fn warn_if_package_manager_owned(install_dir: &Path) {
+    // Conservative list — match the path prefixes the common
+    // installers use, not arbitrary substrings, to avoid false
+    // positives. Skipping `~/.local/bin` (where the curl|sh
+    // installer lives) and `/usr/local/bin` (often used manually).
+    let path = install_dir.to_string_lossy();
+    let owned_by: Option<&str> = if path.contains("/Cellar/") || path.starts_with("/opt/homebrew/")
+    {
+        Some("Homebrew")
+    } else if path.contains("/.local/share/uv/tools/") || path.contains("/.local/pipx/") {
+        Some("uv / pipx")
+    } else if path.contains("/site-packages/") {
+        Some("pip")
+    } else {
+        None
+    };
+    if let Some(mgr) = owned_by {
+        eprintln!(
+            "warning: mergify looks like it was installed by {mgr}. \
+             `self-update` will overwrite the binary, but {mgr} will \
+             restore its own version on the next upgrade. Use \
+             {mgr}'s upgrade command instead for a durable update."
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_archive() -> Vec<u8> {
+        b"pretend-this-is-a-tar.gz".to_vec()
+    }
+
+    #[test]
+    fn verify_checksum_accepts_a_matching_entry() {
+        let archive = fixture_archive();
+        let mut h = Sha256::new();
+        h.update(&archive);
+        let hash = format!("{:x}", h.finalize());
+        let sums = format!("{hash}  mergify-x86_64-unknown-linux-gnu.tar.gz\n");
+        verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums).unwrap();
+    }
+
+    #[test]
+    fn verify_checksum_rejects_mismatch() {
+        let archive = fixture_archive();
+        let wrong = "0".repeat(64);
+        let sums = format!("{wrong}  mergify-x86_64-unknown-linux-gnu.tar.gz\n");
+        let err = verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums)
+            .unwrap_err();
+        assert!(err.to_string().contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn verify_checksum_rejects_missing_entry() {
+        let sums = "deadbeef  mergify-aarch64-apple-darwin.tar.gz\n";
+        let err =
+            verify_checksum(&[], "mergify-x86_64-unknown-linux-gnu.tar.gz", sums).unwrap_err();
+        assert!(err.to_string().contains("no checksum entry"));
+    }
+
+    #[test]
+    fn verify_checksum_does_not_accept_suffix_match() {
+        // Regression for the pre-fix `ends_with` lookup: a sibling
+        // asset whose name *ends in* `asset_name` (here
+        // `mergify-x86_64-pc-windows-msvc.zip` ending in `.zip`)
+        // could be matched and pass even when the requested asset
+        // wasn't in the file. The literal second-field match must
+        // reject this.
+        let archive = fixture_archive();
+        let mut h = Sha256::new();
+        h.update(&archive);
+        let hash = format!("{:x}", h.finalize());
+        let sums = format!("{hash}  mergify-x86_64-pc-windows-msvc.zip\n");
+        let err = verify_checksum(&archive, "msvc.zip", &sums).unwrap_err();
+        assert!(
+            err.to_string().contains("no checksum entry"),
+            "expected 'no checksum entry', got: {err}",
+        );
+    }
+
+    #[test]
+    fn verify_checksum_rejects_extra_fields_on_the_entry_line() {
+        // Defence-in-depth against a doctored SHA256SUMS smuggling
+        // extra fields after the asset name (e.g. an injected
+        // `; rm -rf /` for a downstream shell consumer). Canonical
+        // `sha256sum` output is exactly two fields, anything else
+        // is treated as a missing entry.
+        let archive = fixture_archive();
+        let mut h = Sha256::new();
+        h.update(&archive);
+        let hash = format!("{:x}", h.finalize());
+        let sums = format!("{hash}  mergify-x86_64-unknown-linux-gnu.tar.gz extra\n");
+        let err = verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no checksum entry"),
+            "expected 'no checksum entry', got: {err}",
+        );
+    }
+
+    #[test]
+    fn verify_checksum_rejects_malformed_hash_field() {
+        // Right asset name, wrong-shape hash. install.sh validates
+        // the same way so a corrupted SHA256SUMS can't slip past
+        // sha256sum's warn-but-pass behaviour; mirror it here.
+        let sums = "bogus  mergify-x86_64-unknown-linux-gnu.tar.gz\n";
+        let err =
+            verify_checksum(&[], "mergify-x86_64-unknown-linux-gnu.tar.gz", sums).unwrap_err();
+        assert!(err.to_string().contains("malformed checksum entry"));
+    }
+
+    #[test]
+    fn current_target_picks_one_of_the_known_triples() {
+        // We don't ship for anything else, so the call must
+        // succeed in the test harness — and it must return one of
+        // the five tagged triples we publish assets for.
+        let target = current_target().unwrap();
+        assert!(
+            [
+                "x86_64-unknown-linux-gnu",
+                "aarch64-unknown-linux-gnu",
+                "x86_64-apple-darwin",
+                "aarch64-apple-darwin",
+                "x86_64-pc-windows-msvc",
+            ]
+            .contains(&target),
+            "unexpected target: {target}",
+        );
+    }
+}
