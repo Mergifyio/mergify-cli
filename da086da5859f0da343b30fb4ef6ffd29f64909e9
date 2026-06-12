@@ -1,0 +1,1 @@
+copilot: switch SHA256SUMS lookup to awk for exact second-field match; clarify -joq combined flags
