@@ -26,12 +26,25 @@ on:
       stamp-version:
         description: |
           When true, replace `version = "..."` in pyproject.toml
-          with the git tag value (`${GITHUB_REF#refs/tags/}`)
-          before maturin runs. Keep false for PR smoke builds so
-          CI exercises the full path with the placeholder version.
+          before maturin runs. Source is `inputs.override-version`
+          when set (the workflow_dispatch draft path doesn't have a
+          tag yet), otherwise `${GITHUB_REF#refs/tags/}`. Keep false
+          for PR smoke builds so CI exercises the full path with
+          the placeholder version.
         required: false
         default: false
         type: boolean
+      override-version:
+        description: |
+          Explicit version string to stamp into the wheel. Lets the
+          dispatch-driven draft job pass its `tag` input through —
+          no git tag exists yet at that point, so the build can't
+          derive it from `$GITHUB_REF`. Ignored when `stamp-version`
+          is false; required when both `stamp-version` is true and
+          the caller wasn't triggered by a `release` event.
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build-wheels:
@@ -62,12 +75,25 @@ jobs:
         with:
           python-version: 3.14
 
-      - name: Stamp wheel version from git tag
+      - name: Stamp wheel version
         if: inputs.stamp-version
         shell: bash
         run: |
           set -eu
-          VERSION="${GITHUB_REF#refs/tags/}"
+          # `override-version` wins; falls back to the git tag the
+          # `release: published` flow rides on. The dispatch path
+          # passes `inputs.tag` here because no tag exists yet — it
+          # gets created by `gh release create` later in the
+          # workflow.
+          if [ -n "${{ inputs.override-version }}" ]; then
+              VERSION='${{ inputs.override-version }}'
+          else
+              VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "${VERSION}" ] || [ "${VERSION}" = "${GITHUB_REF}" ]; then
+              echo "::error::stamp-version is true but no version source is available (no tag in GITHUB_REF, no override-version input)"
+              exit 1
+          fi
           # `sed -i.bak`/rm form works on both BSD (macOS) and GNU
           # (Linux) sed without divergent flag handling. On Windows
           # the runner ships GNU sed via Git Bash, which honours the
@@ -131,12 +157,22 @@ jobs:
         with:
           python-version: 3.14
 
-      - name: Stamp wheel version from git tag
+      - name: Stamp wheel version
         if: inputs.stamp-version
         shell: bash
         run: |
           set -eu
-          VERSION="${GITHUB_REF#refs/tags/}"
+          # Same source-priority as the wheel job above —
+          # `override-version` wins, falls back to the tag.
+          if [ -n "${{ inputs.override-version }}" ]; then
+              VERSION='${{ inputs.override-version }}'
+          else
+              VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "${VERSION}" ] || [ "${VERSION}" = "${GITHUB_REF}" ]; then
+              echo "::error::stamp-version is true but no version source is available"
+              exit 1
+          fi
           sed -i.bak -E "s/^version = \".*\"$/version = \"${VERSION}\"/" pyproject.toml
           rm -f pyproject.toml.bak
 

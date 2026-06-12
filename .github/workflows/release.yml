@@ -2,50 +2,84 @@ name: release
 
 # Two-stage release flow, forced by GitHub's immutable-releases
 # policy (assets can't be added after publish — PR #1569 dropped a
-# prior `gh release upload` job for the same reason):
+# prior `gh release upload` job for the same reason). Naïvely you'd
+# expect `release: created` to fire for draft saves and let us
+# attach binaries before publish, but GitHub Actions filters
+# release events on drafts: nothing fires until the release becomes
+# visible. So the prepare stage runs from `workflow_dispatch`
+# instead — the maintainer drives it from the Actions UI.
 #
-# 1. `release: created` with `draft == true` — maintainer clicks
-#    "Save draft" in the UI. We build wheels, extract the binary
-#    from each, and attach `mergify-<target>.{tar.gz,zip}` +
-#    `SHA256SUMS` to the still-mutable draft. The assets appear in
-#    the draft's asset list within a few minutes.
+# Stage 1 — prepare-draft (`workflow_dispatch`):
+#   Maintainer opens Actions → "release" → "Run workflow" → enters
+#   the tag (e.g. `2026.6.12.1`). The workflow builds the wheel
+#   matrix, extracts the binary from each wheel, packages
+#   `mergify-<target>.{tar.gz,zip}` + `SHA256SUMS`, and creates the
+#   GitHub Release as a *draft* with all assets attached and notes
+#   auto-generated from the commit log via `--generate-notes`.
 #
-# 2. `release: published` — maintainer reviews the now-asset-laden
-#    draft and clicks "Publish release". We assert the expected
-#    asset names are attached (blocks the PyPI step with a clear
-#    error if the maintainer bypassed the draft flow and published
-#    directly — the release is then immutable and binaries can't be
-#    backfilled), then build wheels again and publish to PyPI.
+# Stage 2 — publish-stable (`release: published`):
+#   Maintainer goes to Releases, reviews the draft (notes + asset
+#   list), optionally edits, clicks "Publish release". This fires
+#   `release: published`. We assert the expected asset names are
+#   present (sanity net if the maintainer somehow stripped them
+#   before publish), then build wheels again and push to PyPI.
+#   The release is immutable from this point on.
 #
-# Yes, wheels are built twice (once per stage). The alternative —
-# stash wheels somewhere between runs — adds storage plumbing for
-# ~5 min of CI savings; not worth it. `build-wheels.yml` is shared
-# with `ci.yaml` so adding a new platform target there extends both
-# stages automatically.
+# Yes, wheels are built twice (once per stage). Stashing them
+# between two separately-triggered runs adds cross-run artifact
+# plumbing for ~5 min of CI savings; not worth it. `build-wheels.yml`
+# is shared with `ci.yaml` so adding a new platform target there
+# extends both stages automatically.
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: |
+          Release tag to publish (e.g. `2026.6.12.1`). The workflow
+          creates this tag and a matching draft release with all
+          platform binaries attached. The maintainer then publishes
+          the draft from the Releases UI.
+        required: true
+        type: string
+      target_commitish:
+        description: |
+          Branch or commit SHA to tag. Defaults to the branch the
+          workflow runs from — keep as-is unless you're cherry-
+          picking a release commit off an older line.
+        required: false
+        type: string
+        default: ''
   release:
-    types: [created, published]
+    types: [published]
 
 jobs:
-  # ---------------- Draft stage: attach binaries ----------------
+  # ---------------- Stage 1: prepare draft ----------------
 
   build-wheels-for-draft:
     name: build wheels (draft stage)
-    if: github.event.action == 'created' && github.event.release.draft
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/build-wheels.yml
     with:
       stamp-version: true
+      override-version: ${{ inputs.tag }}
 
-  upload-binaries:
-    name: attach binaries to the draft release
-    if: github.event.action == 'created' && github.event.release.draft
+  create-draft-release:
+    name: create draft release with binaries
+    if: github.event_name == 'workflow_dispatch'
     needs: build-wheels-for-draft
     runs-on: ubuntu-24.04
     permissions:
-      # `gh release upload` writes to the release.
+      # `gh release create` writes the release.
       contents: write
     steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          # `--generate-notes` needs full history to walk back to
+          # the previous tag.
+          fetch-depth: 0
+          fetch-tags: true
+
       - uses: actions/download-artifact@v8
         with:
           # Skip `wheel-sdist` (single dash); each wheel artifact is
@@ -87,21 +121,49 @@ jobs:
           echo "Built release assets:"
           ls -la dist
 
-      - name: Upload assets to the draft release
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          # Read inputs via env, not `${{ }}` interpolation, so a
+          # tag or commitish value containing shell metacharacters
+          # can't break out of the script. With direct
+          # interpolation, `inputs.tag = "foo'; rm -rf /; '"` would
+          # render the script as runnable injected commands;
+          # through env they reach bash as plain string values.
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_TARGET: ${{ inputs.target_commitish }}
+        shell: bash
         run: |
-          # `--clobber` so re-saving the draft (which can re-fire
-          # `release: created`) replaces stale assets instead of
-          # erroring out.
-          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          set -euo pipefail
+          # Build the gh argument list as an array — keeps each
+          # element a single argv slot regardless of the value's
+          # contents.
+          args=(
+              "${INPUT_TAG}"
+              --draft
+              --generate-notes
+              --title "${INPUT_TAG}"
+          )
+          if [ -n "${INPUT_TARGET}" ]; then
+              args+=(--target "${INPUT_TARGET}")
+          fi
+          # `--draft` keeps the release mutable until the maintainer
+          # clicks Publish. `--generate-notes` builds a changelog
+          # from PRs merged since the previous tag — overridable in
+          # the UI before publish if needed.
+          gh release create "${args[@]}" dist/*
 
-  # ---------------- Publish stage: assert + PyPI ----------------
+          url=$(gh release view "${INPUT_TAG}" --json url --jq .url)
+          echo
+          echo "Draft release created: ${url}"
+          echo "Review the draft and click Publish in the Releases UI to ship."
+
+  # ---------------- Stage 2: publish + PyPI ----------------
 
   assert-binaries-present:
     name: assert binary assets attached
-    if: github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -134,16 +196,15 @@ jobs:
             cat <<EOF >&2
           ::error::Release $tag is missing assets: ${missing[*]}
 
-          Binaries are attached by the 'upload-binaries' job, which only runs when
-          a release is saved as a *draft* (release: created event). It looks like
-          this release was published directly without first being saved as a
-          draft. Because release metadata is now immutable, the assets can't be
+          Binary assets are attached by the 'create-draft-release' job, which
+          runs from Actions → "release" → "Run workflow". Did you create this
+          release through the Releases UI directly instead? That path doesn't
+          attach binaries, and the release is now immutable so they can't be
           backfilled — the PyPI publish is being blocked so the package and the
           binary distributions don't diverge.
 
-          Recovery: delete this release, then re-create it via the UI making sure
-          to click "Save draft" first. Wait for the binaries to appear in the
-          draft's asset list before clicking "Publish".
+          Recovery: delete this release, then re-create it via Actions →
+          "release" → "Run workflow" with the same tag.
           EOF
             exit 1
           fi
@@ -151,7 +212,7 @@ jobs:
 
   build-wheels-for-publish:
     name: build wheels (publish stage)
-    if: github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published'
     needs: assert-binaries-present
     uses: ./.github/workflows/build-wheels.yml
     with:
@@ -159,7 +220,7 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-24.04
     needs:
       - assert-binaries-present
