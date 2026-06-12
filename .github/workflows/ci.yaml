@@ -102,12 +102,134 @@ jobs:
             exit 1
           }
 
+  # End-to-end exercise of the `install.sh` one-liner: build the
+  # release binary, pretend to be a GitHub Release by serving the
+  # repackaged `mergify-<target>.tar.gz` + `SHA256SUMS` through a
+  # local HTTP fixture, then run `install.sh` against it and assert
+  # the installed binary works. This catches the install path that
+  # the unit-style shellcheck pass can't — detect_target mapping,
+  # sha256 verification, the `install -m 0755` step, and the final
+  # `--version` exec.
+  #
+  # Linux + macOS only (Windows users go through a separate
+  # PowerShell installer, TBD).
+  install-script-smoke:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: install-${{ matrix.os }}
+
+      - name: Install shellcheck (Linux only)
+        if: matrix.os == 'ubuntu-24.04'
+        run: sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Lint install.sh
+        if: matrix.os == 'ubuntu-24.04'
+        run: shellcheck install.sh
+
+      # Build the binary the same way the release path does, then
+      # repackage it under the exact name/structure `install.sh`
+      # expects so the fixture is bit-identical to a real release
+      # asset.
+      - name: Build release binary
+        run: cargo build --release -p mergify-cli
+
+      - name: Pack release fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          echo "Building fixture for target: ${target}"
+          mkdir -p fixture/release
+          tar -C target/release -czf "fixture/release/mergify-${target}.tar.gz" mergify
+          (cd fixture/release && shasum -a 256 "mergify-${target}.tar.gz" > SHA256SUMS)
+          ls -la fixture/release
+
+      - name: Serve fixture
+        shell: bash
+        run: |
+          cd fixture/release
+          # `python3 -m http.server` is preinstalled on both runners.
+          # Bind to localhost only; the runner is ephemeral but
+          # there's no point exposing the fixture.
+          python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
+          echo $! > /tmp/server.pid
+          # Wait for the server to actually accept connections.
+          for _ in $(seq 1 50); do
+              curl -fsS http://127.0.0.1:8765/SHA256SUMS > /dev/null && break
+              sleep 0.1
+          done
+
+      - name: Run install.sh against the fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MERGIFY_BASE_URL=http://127.0.0.1:8765
+          export MERGIFY_INSTALL_DIR=/tmp/mergify-install
+          ./install.sh
+          # `install.sh` runs `--version` itself, but pin it here
+          # too so a future refactor that drops the post-install
+          # smoke from the script still trips this job.
+          /tmp/mergify-install/mergify --version
+
+      # Negative paths: corrupted SHA256SUMS must fail closed, not
+      # silently install a tampered binary. Tests both the
+      # `sha256sum -c` mismatch path (right shape, wrong hash) and
+      # the malformed-line path (`sha256sum -c` only warns on
+      # malformed lines, so install.sh validates the line shape
+      # separately).
+      - name: install.sh rejects a tampered SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          asset="mergify-${target}.tar.gz"
+          # Keep a clean copy so the malformed test below can write
+          # its own bad version without losing the original.
+          cp fixture/release/SHA256SUMS fixture/release/SHA256SUMS.orig
+
+          echo "Case 1: wrong-but-well-formed hash"
+          printf '%064d  %s\n' 0 "${asset}" > fixture/release/SHA256SUMS
+          ! MERGIFY_BASE_URL=http://127.0.0.1:8765 \
+            MERGIFY_INSTALL_DIR=/tmp/mergify-bad1 \
+            ./install.sh > /tmp/case1.log 2>&1
+          grep -q 'checksum verification failed' /tmp/case1.log
+
+          echo "Case 2: malformed line"
+          echo "bogus  ${asset}" > fixture/release/SHA256SUMS
+          ! MERGIFY_BASE_URL=http://127.0.0.1:8765 \
+            MERGIFY_INSTALL_DIR=/tmp/mergify-bad2 \
+            ./install.sh > /tmp/case2.log 2>&1
+          grep -q 'malformed checksum entry' /tmp/case2.log
+
+          # Restore — the next steps may depend on a working fixture.
+          mv fixture/release/SHA256SUMS.orig fixture/release/SHA256SUMS
+
+      - name: Stop fixture server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/server.pid ]; then
+              kill "$(cat /tmp/server.pid)" || true
+          fi
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
       - rust
       - wheels
       - smoke-test-binary
+      - install-script-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded
