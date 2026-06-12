@@ -24,51 +24,11 @@ use mergify_core::CliError;
 use mergify_core::HttpClient;
 use mergify_core::Output;
 use mergify_core::auth;
+use mergify_core::pull_request::PullRequestRef;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::paths::resolve_config_path;
-
-/// Deserialized shape of the `(owner/repo, number)` pair parsed from
-/// a pull-request URL.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PullRequestRef {
-    pub repository: String,
-    pub pull_number: u64,
-}
-
-/// Clap value-parser for the positional PR URL argument.
-///
-/// Returning `Err(String)` makes clap exit with status 2 (argument
-/// validation error) rather than our CLI's `ConfigurationError` —
-/// matching the Python CLI's behavior where `_parse_pr_url` raises
-/// `click.BadParameter` (also exit 2).
-///
-/// # Errors
-///
-/// Returns a human-readable message when `url` is not a valid
-/// GitHub-style pull request URL.
-pub fn parse_pr_url(url: &str) -> Result<PullRequestRef, String> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| format!("Invalid pull request URL: {url}"))?;
-    let parts: Vec<&str> = rest.split('/').collect();
-    if parts.len() != 5 || parts[3] != "pull" {
-        return Err(format!("Invalid pull request URL: {url}"));
-    }
-    let [host, owner, repo, _pull, number] = [parts[0], parts[1], parts[2], parts[3], parts[4]];
-    if host.is_empty() || owner.is_empty() || repo.is_empty() {
-        return Err(format!("Invalid pull request URL: {url}"));
-    }
-    let pull_number: u64 = number
-        .parse()
-        .map_err(|_| format!("Invalid pull request URL: {url}"))?;
-    Ok(PullRequestRef {
-        repository: format!("{owner}/{repo}"),
-        pull_number,
-    })
-}
 
 #[derive(Serialize)]
 struct SimulatorRequest<'a> {
@@ -145,38 +105,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn parse_pr_url_accepts_canonical_github_url() {
-        let got = parse_pr_url("https://github.com/owner/repo/pull/42").unwrap();
-        assert_eq!(got.repository, "owner/repo");
-        assert_eq!(got.pull_number, 42);
-    }
-
-    #[test]
-    fn parse_pr_url_rejects_non_pull_path() {
-        assert!(parse_pr_url("https://github.com/owner/repo/issues/42").is_err());
-    }
-
-    #[test]
-    fn parse_pr_url_rejects_trailing_segments() {
-        assert!(parse_pr_url("https://github.com/owner/repo/pull/42/files").is_err());
-    }
-
-    #[test]
-    fn parse_pr_url_rejects_non_numeric_pull_number() {
-        assert!(parse_pr_url("https://github.com/owner/repo/pull/abc").is_err());
-    }
-
-    #[test]
-    fn parse_pr_url_rejects_missing_scheme() {
-        assert!(parse_pr_url("github.com/owner/repo/pull/42").is_err());
-    }
-
-    #[test]
-    fn parse_pr_url_rejects_empty_owner() {
-        assert!(parse_pr_url("https://github.com//repo/pull/42").is_err());
-    }
-
     #[tokio::test]
     async fn run_posts_config_and_prints_simulator_result() {
         let server = MockServer::start().await;
@@ -199,6 +127,7 @@ mod tests {
             .await;
 
         let pull_request = PullRequestRef {
+            host: "github.com".into(),
             repository: "owner/repo".into(),
             pull_number: 42,
         };

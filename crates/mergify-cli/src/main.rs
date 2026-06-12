@@ -17,16 +17,17 @@ use clap::Subcommand;
 use mergify_ci::git_refs::Format as GitRefsFormat;
 use mergify_ci::git_refs::GitRefsOptions;
 use mergify_ci::junit_process::JunitProcessOptions;
+use mergify_ci::queue_info::QueueInfoOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
 use mergify_ci::tests_quarantine::GetOptions;
 use mergify_ci::tests_quarantine::QuarantineOptions;
 use mergify_ci::tests_quarantine::QuarantinedOptions;
 use mergify_ci::tests_quarantine::UnquarantineOptions;
 use mergify_ci::tests_show::TestsShowOptions;
-use mergify_config::simulate::PullRequestRef;
 use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
+use mergify_core::pull_request::PullRequestRef;
 use mergify_freeze::common::parse_naive_datetime;
 use mergify_freeze::create::CreateOptions as FreezeCreateOptions;
 use mergify_freeze::delete::DeleteOptions as FreezeDeleteOptions;
@@ -159,7 +160,7 @@ enum NativeCommand {
     CiGitRefs {
         format: GitRefsFormat,
     },
-    CiQueueInfo,
+    CiQueueInfo(CiQueueInfoOpts),
     CiJunitProcess(CiJunitProcessOpts),
     /// Deprecated alias for `CiJunitProcess`. Same orchestrator,
     /// same args; the dispatcher prints a deprecation warning to
@@ -475,6 +476,11 @@ struct CiScopesOpts {
     base: Option<String>,
     head: Option<String>,
     write: Option<PathBuf>,
+}
+
+struct CiQueueInfoOpts {
+    pull_request: Option<PullRequestRef>,
+    token: Option<String>,
 }
 
 struct CiScopesSendOpts {
@@ -1041,8 +1047,15 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             command: CiSubcommand::GitRefs(GitRefsCliArgs { format }),
         }) => Dispatch::Native(NativeCommand::CiGitRefs { format }),
         Subcommands::Ci(CiArgs {
-            command: CiSubcommand::QueueInfo,
-        }) => Dispatch::Native(NativeCommand::CiQueueInfo),
+            command:
+                CiSubcommand::QueueInfo(QueueInfoCliArgs {
+                    pull_request,
+                    token,
+                }),
+        }) => Dispatch::Native(NativeCommand::CiQueueInfo(CiQueueInfoOpts {
+            pull_request,
+            token,
+        })),
         Subcommands::Tests(TestsArgs {
             command:
                 TestsSubcommand::Show(TestsShowCliArgs {
@@ -1514,9 +1527,15 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 mergify_ci::git_refs::run(&GitRefsOptions { format }, &mut output)
                     .map(|()| mergify_core::ExitCode::Success)
             }
-            NativeCommand::CiQueueInfo => {
-                mergify_ci::queue_info::run(&mut output).map(|()| mergify_core::ExitCode::Success)
-            }
+            NativeCommand::CiQueueInfo(opts) => mergify_ci::queue_info::run(
+                QueueInfoOptions {
+                    pull_request: opts.pull_request.as_ref(),
+                    token: opts.token.as_deref(),
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
             NativeCommand::CiJunitProcess(opts) => {
                 mergify_ci::junit_process::run(
                     JunitProcessOptions {
@@ -3448,7 +3467,7 @@ struct ValidateArgs {}
 #[derive(clap::Args)]
 struct SimulateCliArgs {
     /// Pull request URL (e.g. <https://github.com/owner/repo/pull/123>).
-    #[arg(value_name = "PULL_REQUEST_URL", value_parser = mergify_config::simulate::parse_pr_url)]
+    #[arg(value_name = "PULL_REQUEST_URL", value_parser = mergify_core::pull_request::parse_pr_url)]
     pull_request: PullRequestRef,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
@@ -3481,9 +3500,9 @@ enum CiSubcommand {
     /// Print the base/head git references for the current build.
     #[command(name = "git-refs")]
     GitRefs(GitRefsCliArgs),
-    /// Print the merge queue batch metadata for the current draft PR.
+    /// Print the merge queue batch metadata for a merge queue draft PR.
     #[command(name = "queue-info")]
-    QueueInfo,
+    QueueInfo(QueueInfoCliArgs),
     /// Give the list of scopes impacted by changed files.
     Scopes(ScopesCliArgs),
     /// Upload JUnit XML reports and ignore failed tests with
@@ -3506,6 +3525,21 @@ struct GitRefsCliArgs {
         value_parser = mergify_ci::git_refs::Format::parse,
     )]
     format: GitRefsFormat,
+}
+
+#[derive(clap::Args)]
+struct QueueInfoCliArgs {
+    /// Pull request URL (e.g. <https://github.com/owner/repo/pull/123>).
+    /// When omitted, reads the metadata from the CI event payload
+    /// (`GITHUB_EVENT_PATH`) — the in-CI default.
+    #[arg(value_name = "PULL_REQUEST_URL", value_parser = mergify_core::pull_request::parse_pr_url)]
+    pull_request: Option<PullRequestRef>,
+
+    /// GitHub token used to fetch the pull request. Falls back to
+    /// ``MERGIFY_TOKEN``, then ``GITHUB_TOKEN``, then `gh auth token`.
+    /// Only used when a pull request URL is given.
+    #[arg(long, short = 't')]
+    token: Option<String>,
 }
 
 #[derive(clap::Args)]

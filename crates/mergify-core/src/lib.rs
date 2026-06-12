@@ -22,6 +22,7 @@ pub mod error;
 pub mod exit_code;
 pub mod http;
 pub mod output;
+pub mod pull_request;
 
 pub use command_context::CommandContext;
 pub use error::CliError;
