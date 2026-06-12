@@ -1,0 +1,1 @@
+copilot review + fmt: Windows .zip extension on download; exact-second-field + extra-fields-rejecting verify_checksum (mirrors install.sh's awk match); PowerShell single-quote escape so paths with apostrophes work; reflow long array literal that CI rustfmt collapsed
