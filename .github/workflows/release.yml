@@ -36,12 +36,13 @@ on:
     inputs:
       tag:
         description: |
-          Release tag to publish (e.g. `2026.6.12.1`). The workflow
-          creates this tag and a matching draft release with all
-          platform binaries attached. The maintainer then publishes
-          the draft from the Releases UI.
-        required: true
+          Release tag to publish (e.g. `2026.6.12.1`). Leave empty
+          to auto-pick `YYYY.M.D.<next>` where `<next>` is one past
+          the highest existing tag for today's UTC date (1 if no
+          release has shipped today yet).
+        required: false
         type: string
+        default: ''
       target_commitish:
         description: |
           Branch or commit SHA to tag. Defaults to the branch the
@@ -53,27 +54,104 @@ on:
   release:
     types: [published]
 
+# Serialize runs that could collide on the same tag. Auto-tag
+# dispatches share the `auto` group key — two near-simultaneous
+# clicks of "Run workflow" with an empty tag would otherwise both
+# resolve the same `YYYY.M.D.<next>` before either created the
+# release, and one would 422 on `gh release create` for a
+# duplicate tag. Explicit-tag and `release: published` runs key off
+# the tag itself so unrelated releases run in parallel. Don't
+# cancel-in-progress: a release run end-to-end is the only correct
+# outcome — partial completion would leave a wheel mismatch with
+# the PyPI publish.
+concurrency:
+  group: release-${{ github.event_name }}-${{ inputs.tag || github.event.release.tag_name || 'auto' }}
+  cancel-in-progress: false
+
 jobs:
   # ---------------- Stage 1: prepare draft ----------------
+
+  compute-tag:
+    name: resolve release tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6.0.3
+        with:
+          # `git tag -l` needs the full tag list to find today's
+          # highest counter.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Either honour an explicit `tag` input or synthesise
+      # `YYYY.M.D.<next>` from today's UTC date and the existing
+      # tag list. Both paths validate the result against the
+      # calver shape so a typo doesn't drift through the matrix
+      # and produce a wheel with a garbage version string.
+      - id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+              tag="${INPUT_TAG}"
+              echo "Using explicit tag: ${tag}"
+          else
+              # `%-m` / `%-d` drop the leading zero — matches the
+              # historic calver style (`2026.6.5.1`, not
+              # `2026.06.05.01`). UTC so the rollover is the same
+              # regardless of which maintainer triggers the run.
+              today=$(date -u +'%Y.%-m.%-d')
+              # Each pipe stage can fail loudly under `pipefail`
+              # *except* `grep` returning 1 on a no-match — that's
+              # the legitimate "no release shipped today yet"
+              # path and must collapse to an empty `last_n`.
+              # Swallow only that one exit with `{ … || true; }`.
+              last_n=$(git tag -l "${today}.*" \
+                  | { grep -E "^${today//./\\.}\\.[0-9]+$" || true; } \
+                  | awk -F. '{print $NF}' \
+                  | sort -n \
+                  | tail -1)
+              if [ -z "${last_n}" ]; then
+                  next=1
+              else
+                  next=$((last_n + 1))
+              fi
+              tag="${today}.${next}"
+              echo "Auto-computed tag: ${tag}"
+          fi
+          # Final shape check — `gh release create` would accept
+          # any string, so the validation lives here. Catches
+          # typos in the explicit-tag path and any future bug in
+          # the date arithmetic.
+          if ! [[ "${tag}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]+$ ]]; then
+              echo "::error::tag '${tag}' doesn't match the YYYY.M.D.N calver shape"
+              exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
   build-wheels-for-draft:
     name: build wheels (draft stage)
     if: github.event_name == 'workflow_dispatch'
+    needs: compute-tag
     uses: ./.github/workflows/build-wheels.yml
     with:
       stamp-version: true
-      override-version: ${{ inputs.tag }}
+      override-version: ${{ needs.compute-tag.outputs.tag }}
 
   create-draft-release:
     name: create draft release with binaries
     if: github.event_name == 'workflow_dispatch'
-    needs: build-wheels-for-draft
+    needs: [compute-tag, build-wheels-for-draft]
     runs-on: ubuntu-24.04
     permissions:
       # `gh release create` writes the release.
       contents: write
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
         with:
           # `--generate-notes` needs full history to walk back to
           # the previous tag.
@@ -142,7 +220,7 @@ jobs:
           # interpolation, `inputs.tag = "foo'; rm -rf /; '"` would
           # render the script as runnable injected commands;
           # through env they reach bash as plain string values.
-          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_TAG: ${{ needs.compute-tag.outputs.tag }}
           INPUT_TARGET: ${{ inputs.target_commitish }}
         shell: bash
         run: |
