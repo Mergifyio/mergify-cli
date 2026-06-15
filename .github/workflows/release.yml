@@ -104,16 +104,27 @@ jobs:
             target="${dir#artifacts/wheel-}"
             whl=$(ls "${dir}"/*.whl | head -1)
             workdir=$(mktemp -d)
+            # Pick the binary name up-front from the target — every
+            # wheel ships exactly one of `mergify` or `mergify.exe`,
+            # never both. Passing *both* patterns to `unzip` made it
+            # exit 11 ("no matching files") for whichever pattern
+            # didn't apply, even when the other one did extract,
+            # killing the script under `set -e`.
+            if [[ "${target}" == *windows* ]]; then
+              bin=mergify.exe
+            else
+              bin=mergify
+            fi
             # `-joq` is the combined form of `-j -o -q`: junk paths
             # (flatten), overwrite without prompting, quiet. The
             # wheel layout is `<dist>.data/scripts/<bin>`; we only
             # want `<bin>` extracted at the workdir root.
-            unzip -joq "${whl}" '*/scripts/mergify' '*/scripts/mergify.exe' -d "${workdir}"
+            unzip -joq "${whl}" "*/scripts/${bin}" -d "${workdir}"
             if [[ "${target}" == *windows* ]]; then
-              (cd "${workdir}" && zip -q "${OLDPWD}/dist/mergify-${target}.zip" mergify.exe)
+              (cd "${workdir}" && zip -q "${OLDPWD}/dist/mergify-${target}.zip" "${bin}")
             else
-              chmod +x "${workdir}/mergify"
-              tar -C "${workdir}" -czf "dist/mergify-${target}.tar.gz" mergify
+              chmod +x "${workdir}/${bin}"
+              tar -C "${workdir}" -czf "dist/mergify-${target}.tar.gz" "${bin}"
             fi
             rm -rf "${workdir}"
           done
