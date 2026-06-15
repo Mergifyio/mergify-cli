@@ -203,6 +203,18 @@ async fn download_text(client: &reqwest::Client, url: &str) -> Result<String, Cl
         .map_err(|e| CliError::Generic(format!("non-UTF8 body from {url}: {e}")))
 }
 
+/// Render digest bytes as a lowercase hex string. `sha2` 0.11 returns
+/// a `hybrid_array::Array` from `finalize()` that no longer implements
+/// `LowerHex`, so we format the bytes ourselves.
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 /// Verify the downloaded archive's SHA256 against the entry for
 /// `asset_name` in `SHA256SUMS`. Mirrors `install.sh` exactly: the
 /// line must split as `<hash> <name>` on whitespace where the
@@ -237,7 +249,7 @@ fn verify_checksum(archive: &[u8], asset_name: &str, sums: &str) -> Result<(), C
     }
     let mut hasher = Sha256::new();
     hasher.update(archive);
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex_encode(&hasher.finalize());
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
@@ -351,7 +363,7 @@ mod tests {
         let archive = fixture_archive();
         let mut h = Sha256::new();
         h.update(&archive);
-        let hash = format!("{:x}", h.finalize());
+        let hash = hex_encode(&h.finalize());
         let sums = format!("{hash}  mergify-x86_64-unknown-linux-gnu.tar.gz\n");
         verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums).unwrap();
     }
@@ -385,7 +397,7 @@ mod tests {
         let archive = fixture_archive();
         let mut h = Sha256::new();
         h.update(&archive);
-        let hash = format!("{:x}", h.finalize());
+        let hash = hex_encode(&h.finalize());
         let sums = format!("{hash}  mergify-x86_64-pc-windows-msvc.zip\n");
         let err = verify_checksum(&archive, "msvc.zip", &sums).unwrap_err();
         assert!(
@@ -404,7 +416,7 @@ mod tests {
         let archive = fixture_archive();
         let mut h = Sha256::new();
         h.update(&archive);
-        let hash = format!("{:x}", h.finalize());
+        let hash = hex_encode(&h.finalize());
         let sums = format!("{hash}  mergify-x86_64-unknown-linux-gnu.tar.gz extra\n");
         let err = verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums)
             .unwrap_err();
