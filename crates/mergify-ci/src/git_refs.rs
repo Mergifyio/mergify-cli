@@ -29,7 +29,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
 
 use mergify_core::CliError;
 use mergify_core::Output;
@@ -38,9 +37,7 @@ use serde::Serialize;
 use crate::github_event::GitHubEvent;
 use crate::github_event::PULL_REQUEST_EVENTS;
 use crate::github_event::load as load_event;
-use crate::queue_metadata::MergeQueueMetadata;
 use crate::queue_metadata::extract_from_event;
-use crate::queue_metadata::parse_yaml_block;
 
 const BUILDKITE_BASE_METADATA_KEY: &str = "mergify-ci.base";
 const BUILDKITE_HEAD_METADATA_KEY: &str = "mergify-ci.head";
@@ -84,12 +81,14 @@ pub struct References {
     pub source: ReferencesSource,
 }
 
-/// Trait-object-compatible hook for reading merge-queue git notes.
+/// Trait-object-compatible hook for reading the merge-queue checking
+/// base SHA from the engine's git note.
 ///
-/// The real implementation shells out to `git`. Tests inject a stub
-/// so detection can exercise the note-driven branches without
-/// touching a real repository.
-pub type NotesReader<'a> = &'a dyn Fn(&str, &str) -> Option<MergeQueueMetadata>;
+/// git-refs only needs that one field, so the reader yields it directly
+/// rather than a half-populated struct. The real implementation shells
+/// out to `git`; tests inject a stub so detection can exercise the
+/// note-driven branches without touching a real repository.
+pub type NotesReader<'a> = &'a dyn Fn(&str, &str) -> Option<String>;
 
 #[derive(Serialize)]
 struct JsonOutput<'a> {
@@ -198,9 +197,9 @@ fn detect_from_buildkite(notes_reader: NotesReader<'_>) -> Option<References> {
         .unwrap_or_else(|| "HEAD".to_string());
     if let Ok(branch) = env::var("BUILDKITE_BRANCH") {
         if !branch.is_empty() {
-            if let Some(note) = notes_reader(&branch, &commit) {
+            if let Some(base) = notes_reader(&branch, &commit) {
                 return Some(References {
-                    base: Some(note.checking_base_sha),
+                    base: Some(base),
                     head: commit,
                     source: ReferencesSource::MergeQueue,
                 });
@@ -231,9 +230,9 @@ fn detect_from_pull_request_event(
     if let Some(pr) = &event.pull_request {
         if let Some(head_ref) = &pr.head {
             if let Some(branch) = head_ref.r#ref.as_deref() {
-                if let Some(note) = notes_reader(branch, &head_ref.sha) {
+                if let Some(base) = notes_reader(branch, &head_ref.sha) {
                     return Ok(Some(References {
-                        base: Some(note.checking_base_sha),
+                        base: Some(base),
                         head,
                         source: ReferencesSource::MergeQueue,
                     }));
@@ -303,52 +302,38 @@ fn detect_from_push_event(event: &GitHubEvent) -> Option<References> {
 /// `git fetch` + `git notes show` and swallows any failure as `None`
 /// so callers can transparently fall through to other detection
 /// paths.
+///
+/// `read_note` returns the note's full payload; we pull just
+/// `checking_base_sha` out of it, so a note that lacks the field falls
+/// through to the other detection paths.
 #[must_use]
-pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<MergeQueueMetadata> {
+pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<String> {
     let notes_ref_short = format!("mergify/{branch}");
     let notes_ref = format!("refs/notes/{notes_ref_short}");
 
-    let fetch = Command::new("git")
-        .args([
-            "fetch",
-            "--no-tags",
-            "--quiet",
-            "origin",
-            &format!("+{notes_ref}:{notes_ref}"),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .ok()?;
-    if !fetch.success() {
+    if !crate::git::succeeds(&[
+        "fetch",
+        "--no-tags",
+        "--quiet",
+        "origin",
+        &format!("+{notes_ref}:{notes_ref}"),
+    ]) {
         return None;
     }
 
-    let output = Command::new("git")
-        .args([
-            "notes",
-            &format!("--ref={notes_ref_short}"),
-            "show",
-            head_sha,
-        ])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let content = String::from_utf8(output.stdout).ok()?;
-    let meta: MergeQueueMetadata = serde_yaml_ng::from_str(&content).ok()?;
-    // Python also guards against non-dict payloads; `from_str` into
-    // our typed struct already enforces the shape, so just return.
-    Some(meta)
+    checking_base_sha(&crate::git::read_note(&notes_ref_short, head_sha)?)
 }
 
-#[allow(dead_code)]
-fn parse_notes_payload(content: &str) -> Option<MergeQueueMetadata> {
-    // Exposed for unit-testing the YAML parsing independently of
-    // the git subprocess.
-    parse_yaml_block(content).or_else(|| serde_yaml_ng::from_str(content).ok())
+/// Pull `checking_base_sha` out of a note payload. Accepts the YAML
+/// scalar as either a string or (defensively) a number — a SHA is
+/// always a string in practice, but reading it tolerantly avoids
+/// silently dropping a note over a formatting quirk.
+fn checking_base_sha(note: &serde_json::Value) -> Option<String> {
+    match note.get("checking_base_sha")? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn emit(refs: &References, format: Format, output: &mut dyn Output) -> std::io::Result<()> {
@@ -447,8 +432,25 @@ mod tests {
 
     use super::*;
 
-    fn no_notes(_branch: &str, _sha: &str) -> Option<MergeQueueMetadata> {
+    fn no_notes(_branch: &str, _sha: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn checking_base_sha_extracts_string_or_number() {
+        use serde_json::json;
+        assert_eq!(
+            checking_base_sha(&json!({"checking_base_sha": "deadbeef", "scopes": ["x"]})),
+            Some("deadbeef".to_string()),
+        );
+        // A numeric-looking SHA is read tolerantly, matching the
+        // direct-YAML coercion the typed parse used to do.
+        assert_eq!(
+            checking_base_sha(&json!({"checking_base_sha": 1_234_567})),
+            Some("1234567".to_string()),
+        );
+        // No field → None, so detection falls back to the PR body.
+        assert_eq!(checking_base_sha(&json!({"pull_requests": []})), None);
     }
 
     fn write_event(dir: &TempDir, payload: &serde_json::Value) -> PathBuf {
@@ -558,11 +560,7 @@ mod tests {
         );
         let note_reader = |branch: &str, sha: &str| {
             if branch == "mq/main/0" && sha == "mq-head" {
-                Some(MergeQueueMetadata {
-                    checking_base_sha: "note-sha".to_string(),
-                    pull_requests: Vec::new(),
-                    previous_failed_batches: Vec::new(),
-                })
+                Some("note-sha".to_string())
             } else {
                 None
             }

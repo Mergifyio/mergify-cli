@@ -17,7 +17,7 @@ mergify ci junit-upload FILES...          # (Deprecated) Use junit-process inste
 mergify ci git-refs                       # Detect base/head git references for the current PR
 mergify ci scopes --config PATH           # Detect scopes impacted by changed files
 mergify ci scopes-send -s SCOPE           # Send scopes tied to a pull request to Mergify
-mergify ci queue-info                     # Output merge queue batch metadata from the current PR event
+mergify ci queue-info                     # Output the current build's merge queue batch metadata (from the git note)
 mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
 mergify tests quarantines add NAME        # Add a test to the CI Insights quarantine
 mergify tests quarantines remove NAME     # Remove a test from the CI Insights quarantine
@@ -296,24 +296,20 @@ A null `branch` renders as `*` (the quarantine applies to all branches).
 
 ## Queue Info (`queue-info`)
 
-Outputs merge queue batch metadata as JSON. Only works on merge queue draft pull requests; exits `INVALID_STATE` (7) otherwise.
+Outputs the current build's merge queue batch metadata as JSON. Reads the `refs/notes/mergify/<branch>` git note Mergify writes on the merge queue branch head for the current `HEAD`; exits `INVALID_STATE` (7) when no note is found (i.e. not a merge queue batch build). Takes no arguments and needs no GitHub token.
 
-Two ways to point it at a PR:
+The note's full payload is emitted verbatim (every field Mergify wrote, e.g. `checking_base_sha`, `pull_requests` with per-PR `scopes`, `previous_failed_batches`, top-level `scopes`). New fields appear automatically without a CLI update, so don't assume a fixed schema.
 
 ```bash
-# In CI: read the MQ draft PR from the GitHub Actions event payload.
-# Also writes the metadata to GITHUB_OUTPUT when running in GitHub Actions.
+# In CI, on a merge queue batch build. Works in any CI (GitHub Actions,
+# GitLab, CircleCI, Jenkins, ...) with plain git. When GITHUB_OUTPUT is
+# set (GitHub Actions runner) it also writes the metadata there.
 mergify ci queue-info
-
-# Anywhere: fetch the PR via the GitHub API by URL. Does NOT write
-# GITHUB_OUTPUT (it's a local/interactive lookup). The URL host drives
-# the API base (github.com or a GitHub Enterprise Server host).
-mergify ci queue-info https://github.com/owner/repo/pull/1234
 ```
 
-The URL form needs a GitHub token: `--token`/`-t`, else `MERGIFY_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`. It errors clearly when none is available.
+Mergify attaches the batch metadata as a git note to the MQ branch head commit, so reading it needs only git, no PR body and no GitHub token. The command runs `git fetch origin "refs/notes/mergify/*"` itself (notes aren't fetched by default), then returns the note attached to `HEAD`. Requirements: the `origin` remote is reachable and the checkout is at the MQ branch head commit, which is the normal state inside a merge-queue CI run. A detached HEAD is fine.
 
-This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch, and for inspecting a batch by URL from your laptop.
+This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch.
 
 ## Common Patterns
 

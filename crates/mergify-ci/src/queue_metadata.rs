@@ -1,18 +1,17 @@
 //! Extract merge-queue batch metadata from a GitHub event payload.
 //!
-//! Mirrors `mergify_cli.ci.queue.metadata`. The engine publishes the
-//! batch info as a ```yaml``` fenced block inside the MQ draft PR
-//! body. `detect` returns `None` when the current event has no such
-//! metadata — callers either fall back to other detection paths
-//! (`git_refs`) or surface it as an `INVALID_STATE` (`queue_info`).
+//! The engine embeds the batch info as a ```yaml``` fenced block inside
+//! the MQ draft PR body. [`extract_from_event`] reads it from a
+//! pull-request event and returns `None` when the event isn't an MQ
+//! draft or has no metadata; `git_refs` uses it as one of its base-SHA
+//! detection paths. (`queue-info` itself no longer reads the PR body —
+//! it reads the engine's git note; see `queue_info`.)
 
 use mergify_core::Output;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::github_event::GitHubEvent;
-use crate::github_event::PULL_REQUEST_EVENTS;
-use crate::github_event::load as load_event;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeQueuePullRequest {
@@ -87,21 +86,6 @@ pub fn extract_from_event(
         )?;
     }
     Ok(parsed)
-}
-
-/// Load the current event and extract merge-queue metadata.
-///
-/// Returns `None` when not in a pull-request event or when no MQ
-/// metadata is attached to the event's PR. Callers decide how to
-/// treat that `None` (skip, error, fall back).
-pub fn detect(output: &mut dyn Output) -> std::io::Result<Option<MergeQueueMetadata>> {
-    let Some((event_name, event)) = load_event() else {
-        return Ok(None);
-    };
-    if !PULL_REQUEST_EVENTS.contains(&event_name.as_str()) {
-        return Ok(None);
-    }
-    extract_from_event(&event, output)
 }
 
 #[cfg(test)]
