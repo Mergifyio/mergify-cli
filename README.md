@@ -18,11 +18,11 @@ or pin a version with `MERGIFY_VERSION=2026.4.23.1`. Once installed, upgrade wit
 For Windows, or to bypass the script, grab the matching archive from the
 [latest release](https://github.com/Mergifyio/mergify-cli/releases/latest):
 
-- **Windows** — download `mergify-x86_64-pc-windows-msvc.zip`, extract it,
-  and put `mergify.exe` anywhere on your `PATH`.
-- **Linux / macOS** — download `mergify-<target>.tar.gz` (e.g.
-  `mergify-aarch64-apple-darwin.tar.gz`), extract with `tar -xzf`, and put
-  the resulting `mergify` binary anywhere on your `PATH`.
+- **Windows** — download `mergify-<version>-x86_64-pc-windows-msvc.zip`,
+  extract it, and put `mergify.exe` anywhere on your `PATH`.
+- **Linux / macOS** — download `mergify-<version>-<target>.tar.gz` (e.g.
+  `mergify-2026.4.23.1-aarch64-apple-darwin.tar.gz`), extract with `tar -xzf`,
+  and put the resulting `mergify` binary anywhere on your `PATH`.
 
 Verify against `SHA256SUMS` from the same release if you care.
 

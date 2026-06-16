@@ -13,8 +13,8 @@
 //!    tag.
 //! 2. If `tag == crate::VERSION` and `--force` wasn't passed,
 //!    print "already up to date" and return.
-//! 3. Download `mergify-<target>.tar.gz` + `SHA256SUMS` from the
-//!    matching release.
+//! 3. Download `mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`
+//!    from the matching release (`.zip` on Windows, `.tar.gz` elsewhere).
 //! 4. Verify the asset SHA256 against `SHA256SUMS`. Mirrors
 //!    `install.sh`'s line-shape validation so a malformed
 //!    `SHA256SUMS` can't slip past.
@@ -110,7 +110,7 @@ pub async fn run(opts: &Options) -> Result<(), CliError> {
     // extension is determined by `cfg!(windows)` here, not by
     // target string-sniffing.
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
-    let asset = format!("mergify-{target}.{ext}");
+    let asset = format!("mergify-{latest}-{target}.{ext}");
     let ep = endpoints(&latest);
     let archive = download(&client, &format!("{}/{asset}", ep.asset_base)).await?;
     let sums = download_text(&client, &format!("{}/SHA256SUMS", ep.asset_base)).await?;
@@ -219,7 +219,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// `asset_name` in `SHA256SUMS`. Mirrors `install.sh` exactly: the
 /// line must split as `<hash> <name>` on whitespace where the
 /// second field equals `asset_name` *literally* (not `ends_with`,
-/// so `mergify-fooX-target.tar.gz` can't accidentally pass the
+/// so `mergify-2099.1.1.1-fooX-target.tar.gz` can't accidentally pass the
 /// check for `target.tar.gz`), and the hash field must be 64 hex
 /// chars. Both layers fail closed.
 fn verify_checksum(archive: &[u8], asset_name: &str, sums: &str) -> Result<(), CliError> {
@@ -364,25 +364,38 @@ mod tests {
         let mut h = Sha256::new();
         h.update(&archive);
         let hash = hex_encode(&h.finalize());
-        let sums = format!("{hash}  mergify-x86_64-unknown-linux-gnu.tar.gz\n");
-        verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums).unwrap();
+        let sums = format!("{hash}  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz\n");
+        verify_checksum(
+            &archive,
+            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            &sums,
+        )
+        .unwrap();
     }
 
     #[test]
     fn verify_checksum_rejects_mismatch() {
         let archive = fixture_archive();
         let wrong = "0".repeat(64);
-        let sums = format!("{wrong}  mergify-x86_64-unknown-linux-gnu.tar.gz\n");
-        let err = verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums)
-            .unwrap_err();
+        let sums = format!("{wrong}  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz\n");
+        let err = verify_checksum(
+            &archive,
+            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            &sums,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"));
     }
 
     #[test]
     fn verify_checksum_rejects_missing_entry() {
-        let sums = "deadbeef  mergify-aarch64-apple-darwin.tar.gz\n";
-        let err =
-            verify_checksum(&[], "mergify-x86_64-unknown-linux-gnu.tar.gz", sums).unwrap_err();
+        let sums = "deadbeef  mergify-2099.1.1.1-aarch64-apple-darwin.tar.gz\n";
+        let err = verify_checksum(
+            &[],
+            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            sums,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no checksum entry"));
     }
 
@@ -390,15 +403,15 @@ mod tests {
     fn verify_checksum_does_not_accept_suffix_match() {
         // Regression for the pre-fix `ends_with` lookup: a sibling
         // asset whose name *ends in* `asset_name` (here
-        // `mergify-x86_64-pc-windows-msvc.zip` ending in `.zip`)
-        // could be matched and pass even when the requested asset
-        // wasn't in the file. The literal second-field match must
-        // reject this.
+        // `mergify-2099.1.1.1-x86_64-pc-windows-msvc.zip` ending in
+        // `.zip`) could be matched and pass even when the requested
+        // asset wasn't in the file. The literal second-field match
+        // must reject this.
         let archive = fixture_archive();
         let mut h = Sha256::new();
         h.update(&archive);
         let hash = hex_encode(&h.finalize());
-        let sums = format!("{hash}  mergify-x86_64-pc-windows-msvc.zip\n");
+        let sums = format!("{hash}  mergify-2099.1.1.1-x86_64-pc-windows-msvc.zip\n");
         let err = verify_checksum(&archive, "msvc.zip", &sums).unwrap_err();
         assert!(
             err.to_string().contains("no checksum entry"),
@@ -417,9 +430,13 @@ mod tests {
         let mut h = Sha256::new();
         h.update(&archive);
         let hash = hex_encode(&h.finalize());
-        let sums = format!("{hash}  mergify-x86_64-unknown-linux-gnu.tar.gz extra\n");
-        let err = verify_checksum(&archive, "mergify-x86_64-unknown-linux-gnu.tar.gz", &sums)
-            .unwrap_err();
+        let sums = format!("{hash}  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz extra\n");
+        let err = verify_checksum(
+            &archive,
+            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            &sums,
+        )
+        .unwrap_err();
         assert!(
             err.to_string().contains("no checksum entry"),
             "expected 'no checksum entry', got: {err}",
@@ -431,9 +448,13 @@ mod tests {
         // Right asset name, wrong-shape hash. install.sh validates
         // the same way so a corrupted SHA256SUMS can't slip past
         // sha256sum's warn-but-pass behaviour; mirror it here.
-        let sums = "bogus  mergify-x86_64-unknown-linux-gnu.tar.gz\n";
-        let err =
-            verify_checksum(&[], "mergify-x86_64-unknown-linux-gnu.tar.gz", sums).unwrap_err();
+        let sums = "bogus  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz\n";
+        let err = verify_checksum(
+            &[],
+            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            sums,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("malformed checksum entry"));
     }
 

@@ -30,12 +30,12 @@ minutes.
 1. Go to **Releases** → the new draft.
 2. Review the auto-generated notes; edit if needed (drafts are
    mutable).
-3. Confirm all six asset names are listed:
-   - `mergify-x86_64-unknown-linux-gnu.tar.gz`
-   - `mergify-aarch64-unknown-linux-gnu.tar.gz`
-   - `mergify-x86_64-apple-darwin.tar.gz`
-   - `mergify-aarch64-apple-darwin.tar.gz`
-   - `mergify-x86_64-pc-windows-msvc.zip`
+3. Confirm all six asset names are listed (each prefixed with the release version):
+   - `mergify-<version>-x86_64-unknown-linux-gnu.tar.gz`
+   - `mergify-<version>-aarch64-unknown-linux-gnu.tar.gz`
+   - `mergify-<version>-x86_64-apple-darwin.tar.gz`
+   - `mergify-<version>-aarch64-apple-darwin.tar.gz`
+   - `mergify-<version>-x86_64-pc-windows-msvc.zip`
    - `SHA256SUMS`
 4. Click **Publish release**.
 

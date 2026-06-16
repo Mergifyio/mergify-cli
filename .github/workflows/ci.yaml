@@ -151,8 +151,11 @@ jobs:
           target=$(rustc -vV | awk '/^host:/ {print $2}')
           echo "Building fixture for target: ${target}"
           mkdir -p fixture/release
-          tar -C target/release -czf "fixture/release/mergify-${target}.tar.gz" mergify
-          (cd fixture/release && shasum -a 256 "mergify-${target}.tar.gz" > SHA256SUMS)
+          # install.sh resolves the version from latest-release.json (fixture
+          # mode) before building the per-version asset name.
+          echo '{"tag_name":"2099.1.1.1"}' > fixture/release/latest-release.json
+          tar -C target/release -czf "fixture/release/mergify-2099.1.1.1-${target}.tar.gz" mergify
+          (cd fixture/release && shasum -a 256 "mergify-2099.1.1.1-${target}.tar.gz" > SHA256SUMS)
           ls -la fixture/release
 
       - name: Serve fixture
@@ -193,7 +196,7 @@ jobs:
         run: |
           set -euo pipefail
           target=$(rustc -vV | awk '/^host:/ {print $2}')
-          asset="mergify-${target}.tar.gz"
+          asset="mergify-2099.1.1.1-${target}.tar.gz"
           # Keep a clean copy so the malformed test below can write
           # its own bad version without losing the original.
           cp fixture/release/SHA256SUMS fixture/release/SHA256SUMS.orig
@@ -263,8 +266,8 @@ jobs:
           # Pretend a far-future release is available so the
           # `current == latest` short-circuit doesn't fire.
           echo '{"tag_name":"2099.1.1.1"}' > fixture/su/latest-release.json
-          tar -C target/release -czf "fixture/su/mergify-${target}.tar.gz" mergify
-          (cd fixture/su && shasum -a 256 "mergify-${target}.tar.gz" > SHA256SUMS)
+          tar -C target/release -czf "fixture/su/mergify-2099.1.1.1-${target}.tar.gz" mergify
+          (cd fixture/su && shasum -a 256 "mergify-2099.1.1.1-${target}.tar.gz" > SHA256SUMS)
           ls -la fixture/su
 
       - name: Serve fixture
@@ -304,7 +307,7 @@ jobs:
           cp target/release/mergify /tmp/mergify-su-tamper
           before=$(shasum -a 256 /tmp/mergify-su-tamper | awk '{print $1}')
           # Replace SHA256SUMS with a wrong-but-well-formed hash.
-          printf '%064d  mergify-%s.tar.gz\n' 0 "${target}" > fixture/su/SHA256SUMS
+          printf '%064d  mergify-2099.1.1.1-%s.tar.gz\n' 0 "${target}" > fixture/su/SHA256SUMS
           ! MERGIFY_BASE_URL=http://127.0.0.1:8766 /tmp/mergify-su-tamper self-update \
               > /tmp/su-tamper.log 2>&1
           grep -q 'checksum mismatch' /tmp/su-tamper.log
