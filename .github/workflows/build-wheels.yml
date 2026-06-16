@@ -119,6 +119,15 @@ jobs:
           args: --release --strip --out target/wheels
           manylinux: auto
           sccache: true
+          # Forward MERGIFY_RELEASE_VERSION into the manylinux Docker
+          # container. On Linux maturin-action runs the build inside a
+          # container and only propagates env vars whose names match an
+          # allowlist of prefixes (CARGO_*, GITHUB_*, MATURIN_*, etc.).
+          # MERGIFY_RELEASE_VERSION doesn't match any prefix, so without
+          # this the variable is silently dropped and build.rs falls back
+          # to CARGO_PKG_VERSION (0.0.0). macOS and Windows build natively
+          # on the runner and inherit the host env, so they were unaffected.
+          docker-options: -e MERGIFY_RELEASE_VERSION
 
       # `twine check --strict` validates the wheel's metadata against
       # the same rules PyPI's upload validator applies (README
