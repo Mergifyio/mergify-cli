@@ -19,28 +19,31 @@ before the maintainer clicks Publish.
 
 The workflow builds the wheel matrix (Linux x86_64/aarch64, macOS
 x86_64/aarch64, Windows x86_64), extracts the `mergify` binary out
-of each, packages `mergify-<target>.{tar.gz,zip}` + `SHA256SUMS`,
-and runs `gh release create <tag> --draft --generate-notes` to
-create the release with the assets attached and notes
-auto-generated from PRs merged since the previous tag. Takes ~10
-minutes.
+of each, packages `mergify-<version>-<target>.{tar.gz,zip}` +
+`SHA256SUMS`, dumps the CLI schema to `cli-schema.json` (rendered
+by the docs site into the command reference), and runs `gh release
+create <tag> --draft --generate-notes` to create the release with
+the assets attached and notes auto-generated from PRs merged since
+the previous tag. Takes ~10 minutes.
 
 ## Stage 2 — review and publish
 
 1. Go to **Releases** → the new draft.
 2. Review the auto-generated notes; edit if needed (drafts are
    mutable).
-3. Confirm all six asset names are listed (each prefixed with the release version):
+3. Confirm all seven asset names are listed (the binaries are each
+   prefixed with the release version):
    - `mergify-<version>-x86_64-unknown-linux-gnu.tar.gz`
    - `mergify-<version>-aarch64-unknown-linux-gnu.tar.gz`
    - `mergify-<version>-x86_64-apple-darwin.tar.gz`
    - `mergify-<version>-aarch64-apple-darwin.tar.gz`
    - `mergify-<version>-x86_64-pc-windows-msvc.zip`
    - `SHA256SUMS`
+   - `cli-schema.json`
 4. Click **Publish release**.
 
 Publishing fires `release: published`, which kicks the second half
-of the workflow: assert all six assets are present, rebuild wheels
+of the workflow: assert all seven assets are present, rebuild wheels
 with the same version stamp, and publish to PyPI through
 Trusted-Publisher. Takes ~10 minutes.
 

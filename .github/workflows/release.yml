@@ -13,8 +13,9 @@ name: release
 #   Maintainer opens Actions → "release" → "Run workflow" → enters
 #   the tag (e.g. `2026.6.12.1`). The workflow builds the wheel
 #   matrix, extracts the binary from each wheel, packages
-#   `mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`, and creates the
-#   GitHub Release as a *draft* with all assets attached and notes
+#   `mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`, dumps
+#   the CLI schema to `cli-schema.json`, and creates the GitHub
+#   Release as a *draft* with all assets attached and notes
 #   auto-generated from the commit log via `--generate-notes`.
 #
 # Stage 2 — publish-stable (`release: published`):
@@ -212,6 +213,26 @@ jobs:
           echo "Built release assets:"
           ls -la dist
 
+      # Dump the CLI schema straight off the released binary so the
+      # docs site renders the command reference from the same artifact
+      # it ships — it can't drift from the binary. The x86_64 Linux
+      # wheel's binary runs natively on the ubuntu-24.04 runner. Stable
+      # filename (the version is carried inside, under `cli.version`)
+      # so docs tooling can fetch it off the latest release without
+      # resolving the tag. Not added to SHA256SUMS — that file is the
+      # installer's binary-integrity manifest, not a docs artifact.
+      - name: Dump CLI schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          whl=$(ls artifacts/wheel-x86_64-unknown-linux-gnu/*.whl | head -1)
+          workdir=$(mktemp -d)
+          unzip -joq "${whl}" "*/scripts/mergify" -d "${workdir}"
+          chmod +x "${workdir}/mergify"
+          "${workdir}/mergify" _internal dump-cli-schema > dist/cli-schema.json
+          rm -rf "${workdir}"
+          echo "Wrote dist/cli-schema.json ($(wc -c < dist/cli-schema.json) bytes)"
+
       - name: Create draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -278,10 +299,11 @@ jobs:
             "mergify-${tag}-aarch64-apple-darwin.tar.gz"
             "mergify-${tag}-x86_64-pc-windows-msvc.zip"
             SHA256SUMS
+            cli-schema.json
           )
           missing=()
           for asset in "${expected[@]}"; do
-            printf '%s\n' "${attached[@]}" | grep -qx "$asset" || missing+=("$asset")
+            printf '%s\n' "${attached[@]}" | grep -qxF "$asset" || missing+=("$asset")
           done
           if (( ${#missing[@]} > 0 )); then
             cat <<EOF >&2
