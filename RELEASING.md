@@ -9,9 +9,12 @@ before the maintainer clicks Publish.
 
 1. Go to **Actions** → **release** → **Run workflow** (top right of
    the workflow page).
-2. Fill in the **tag** field with the new calver, e.g.
-   `2026.6.12.1`. Leave **target_commitish** empty unless you're
-   cherry-picking a release commit off an older branch.
+2. Leave **tag** empty to auto-pick `YYYY.M.D.<next>` (today's UTC
+   date + one past the highest existing tag for today; `1` if you
+   haven't shipped today yet). Override it only if you need a
+   specific version (e.g. cherry-pick onto an older line). Leave
+   **target_commitish** empty unless you're cherry-picking a
+   release commit off an older branch.
 3. Click **Run workflow**.
 
 The workflow builds the wheel matrix (Linux x86_64/aarch64, macOS
