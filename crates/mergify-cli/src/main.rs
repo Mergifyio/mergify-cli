@@ -1327,30 +1327,20 @@ fn render_stack_list_text(out: &mergify_stack::commands::list::StackListOutput, 
                 "  [{status_label}] #{num} {title} ({short}){conflict}",
                 title = entry.title,
             );
-            if verbose && !entry.ci_checks.is_empty() {
-                let checks = entry
-                    .ci_checks
-                    .iter()
-                    .map(|c| format!("{} {}", c.status, c.name))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                println!("    CI: {checks}");
-            } else if entry.ci_status != "unknown" {
-                println!("    CI: {}", entry.ci_status);
-            }
-            if verbose && !entry.reviews.is_empty() {
-                let reviewers = entry
-                    .reviews
-                    .iter()
-                    .map(|r| format!("{} {}", r.state, r.user))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                println!("    Review: {reviewers}");
-            } else if entry.review_status != "unknown" {
-                println!("    Review: {}", entry.review_status);
+            // CI + review render on a single 5-space-indented line
+            // joined by " | ", matching Python's display_stack_list
+            // (a part is omitted entirely when its status is unknown).
+            let ci_display = format_ci_display(entry, verbose);
+            let review_display = format_review_display(entry, verbose);
+            let parts: Vec<&str> = [ci_display.as_str(), review_display.as_str()]
+                .into_iter()
+                .filter(|p| !p.is_empty())
+                .collect();
+            if !parts.is_empty() {
+                println!("     {}", parts.join(" | "));
             }
             if let Some(url) = &entry.pull_url {
-                println!("    {url}");
+                println!("     {url}");
             }
         } else {
             println!("  [{status_label}] {title} ({short})", title = entry.title);
@@ -1359,17 +1349,85 @@ fn render_stack_list_text(out: &mergify_stack::commands::list::StackListOutput, 
     }
 }
 
+/// Build the `CI: …` cell for a stack-list entry. Port of Python's
+/// `_format_ci_display`: empty when the status is unknown; in
+/// verbose mode with per-check data it lists each check with a
+/// status glyph, otherwise it shows the coarse status label.
+fn format_ci_display(
+    entry: &mergify_stack::commands::list::StackListEntry,
+    verbose: bool,
+) -> String {
+    if entry.ci_status == "unknown" {
+        return String::new();
+    }
+    if verbose && !entry.ci_checks.is_empty() {
+        let checks = entry
+            .ci_checks
+            .iter()
+            .map(|c| {
+                let glyph = match c.status.as_str() {
+                    "success" => "✓",
+                    "failure" => "✗",
+                    _ => "●",
+                };
+                format!("{glyph} {}", c.name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!("CI: {checks}");
+    }
+    let text = match entry.ci_status.as_str() {
+        "passing" => "✓ passing",
+        "failing" => "✗ failing",
+        "pending" => "● pending",
+        other => other,
+    };
+    format!("CI: {text}")
+}
+
+/// Build the `Review: …` cell for a stack-list entry. Port of
+/// Python's `_format_review_display`.
+fn format_review_display(
+    entry: &mergify_stack::commands::list::StackListEntry,
+    verbose: bool,
+) -> String {
+    if entry.review_status == "unknown" {
+        return String::new();
+    }
+    if verbose && !entry.reviews.is_empty() {
+        let reviewers = entry
+            .reviews
+            .iter()
+            .map(|r| match r.state.as_str() {
+                "APPROVED" => format!("✓ {}", r.user),
+                "CHANGES_REQUESTED" => format!("✗ {}", r.user),
+                _ => r.user.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!("Review: {reviewers}");
+    }
+    let text = match entry.review_status.as_str() {
+        "approved" => "✓ approved",
+        "changes_requested" => "✗ changes requested",
+        "pending" => "● pending",
+        other => other,
+    };
+    format!("Review: {text}")
+}
+
 /// Install / upgrade the git hooks. Prints one human line per
 /// action performed, then a summary footer. Surfaces the same
 /// outcome ``mergify_cli/stack/setup.py`` used to print.
 fn run_stack_setup(force: bool) -> Result<(), mergify_core::CliError> {
     use mergify_stack::commands::setup::HookAction;
-    let logs = mergify_stack::commands::setup::install(&mergify_stack::commands::setup::Options {
-        repo_dir: None,
-        force,
-    })?;
+    let outcome =
+        mergify_stack::commands::setup::install(&mergify_stack::commands::setup::Options {
+            repo_dir: None,
+            force,
+        })?;
     let mut any_legacy_needs_force = false;
-    for log in &logs {
+    for log in &outcome.logs {
         for action in &log.actions {
             match action {
                 HookAction::ScriptInstalled | HookAction::ScriptUpdated => {
@@ -1394,6 +1452,9 @@ fn run_stack_setup(force: bool) -> Result<(), mergify_core::CliError> {
                 HookAction::ScriptUpToDate | HookAction::WrapperAlreadyInstalled => {}
             }
         }
+    }
+    if outcome.notes_display_ref_added {
+        println!("Added notes.displayRef = refs/notes/mergify/*");
     }
     if any_legacy_needs_force {
         println!("Some hooks are legacy. Run 'mergify stack hooks --setup --force' to migrate.");
@@ -1830,9 +1891,11 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     },
                 )?;
                 match outcome {
-                    mergify_stack::commands::edit::Outcome::PausedAt { commit } => {
-                        let short = &commit.sha[..commit.sha.len().min(12)];
-                        println!("Editing commit: {short} {subject}", subject = commit.subject);
+                    mergify_stack::commands::edit::Outcome::PausedAt { .. } => {
+                        // The "Editing commit:" notice is printed by
+                        // edit::run before the rebase so it precedes
+                        // git's output; here we add the post-rebase
+                        // amend hint.
                         println!("Amend the commit, then run: git rebase --continue");
                     }
                     mergify_stack::commands::edit::Outcome::EmptyStack => {

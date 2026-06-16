@@ -1,9 +1,9 @@
 //! `mergify queue pause` — pause the merge queue for a repository.
 //!
 //! PUTs ``{"reason": "..."}`` to
-//! ``/v1/repos/<repo>/merge-queue/pause``. Prints a "Queue paused"
-//! confirmation with the reason (and the raw pause timestamp if
-//! the API returned one).
+//! ``/v1/repos/<repo>/merge-queue/pause``. Prints a "⚠  Queue
+//! paused" confirmation with the reason (and a coarse relative
+//! "since" delta if the API returned a pause timestamp).
 //!
 //! Confirmation flow:
 //!
@@ -16,9 +16,11 @@
 use std::io::IsTerminal;
 use std::io::Write;
 
+use chrono::Utc;
 use mergify_core::CliError;
 use mergify_core::CommandContext;
 use mergify_core::Output;
+use mergify_tui::relative_time;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -142,11 +144,14 @@ fn confirm(skip: bool, is_tty: bool, repository: &str) -> Result<(), CliError> {
 fn emit_confirmation(output: &mut dyn Output, response: &PauseResponse) -> std::io::Result<()> {
     output.emit(&(), &mut |w: &mut dyn Write| {
         match &response.reason {
-            Some(r) => write!(w, "Queue paused: \"{r}\"")?,
-            None => write!(w, "Queue paused")?,
+            Some(r) => write!(w, "⚠  Queue paused: \"{r}\"")?,
+            None => write!(w, "⚠  Queue paused")?,
         }
         if let Some(ts) = &response.paused_at {
-            write!(w, " (since {ts})")?;
+            let rel = relative_time(ts, Utc::now(), false);
+            if !rel.is_empty() {
+                write!(w, " (since {rel})")?;
+            }
         }
         writeln!(w)
     })
@@ -247,8 +252,12 @@ mod tests {
         .unwrap();
 
         let stdout = cap.stdout();
-        assert!(stdout.contains("Queue paused"), "got: {stdout:?}");
+        assert!(stdout.contains("⚠  Queue paused"), "got: {stdout:?}");
         assert!(stdout.contains("deploy freeze"), "got: {stdout:?}");
-        assert!(stdout.contains("2026-04-23"), "got: {stdout:?}");
+        // `paused_at` renders as a coarse relative delta (e.g.
+        // "5m ago"), not the raw RFC-3339 timestamp.
+        assert!(stdout.contains("(since "), "got: {stdout:?}");
+        assert!(stdout.contains(" ago)"), "got: {stdout:?}");
+        assert!(!stdout.contains("2026-04-23"), "got: {stdout:?}");
     }
 }

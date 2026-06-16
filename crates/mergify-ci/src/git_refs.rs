@@ -339,7 +339,11 @@ fn checking_base_sha(note: &serde_json::Value) -> Option<String> {
 fn emit(refs: &References, format: Format, output: &mut dyn Output) -> std::io::Result<()> {
     match format {
         Format::Text => output.emit(&(), &mut |w: &mut dyn Write| {
-            writeln!(w, "Base: {}", refs.base.as_deref().unwrap_or(""))?;
+            // A missing base renders as the literal "None" to match
+            // Python's f-string (`f"Base: {ref.base}"` with
+            // ref.base = None). The Shell arm keeps the empty string
+            // since that's a shell variable value, not display text.
+            writeln!(w, "Base: {}", refs.base.as_deref().unwrap_or("None"))?;
             writeln!(w, "Head: {}", refs.head)
         }),
         Format::Shell => output.emit(&(), &mut |w: &mut dyn Write| {
@@ -635,6 +639,21 @@ mod tests {
         emit(&refs, Format::Text, &mut cap.output).unwrap();
         let stdout = cap.stdout();
         assert_eq!(stdout, "Base: b\nHead: h\n");
+    }
+
+    #[test]
+    fn emits_text_format_with_none_base() {
+        // A missing base (e.g. workflow_dispatch / schedule events)
+        // renders the literal "None", matching Python's f-string.
+        let refs = References {
+            base: None,
+            head: "HEAD".into(),
+            source: ReferencesSource::GithubEventOther,
+        };
+        let mut cap = Captured::human();
+        emit(&refs, Format::Text, &mut cap.output).unwrap();
+        let stdout = cap.stdout();
+        assert_eq!(stdout, "Base: None\nHead: HEAD\n");
     }
 
     #[test]

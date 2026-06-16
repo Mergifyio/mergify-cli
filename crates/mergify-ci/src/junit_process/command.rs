@@ -100,11 +100,26 @@ pub async fn run(
         }
     };
 
-    if parsed.cases.is_empty() {
+    // Two distinct early exits, mirroring Python. When the files
+    // yield no suites at all the session/suite spans are absent, so
+    // "No spans found" is the right message. When suites parsed but
+    // hold zero test cases, the spans exist — the actual problem is
+    // a test step that never produced results.
+    if parsed.suite_names.is_empty() {
         write_early_exit(
             &mut report,
             "No spans found in the JUnit files",
             "Check that the JUnit XML files are not empty.",
+        );
+        emit(output, &report)?;
+        return Ok(ExitCode::GenericError);
+    }
+
+    if parsed.cases.is_empty() {
+        write_early_exit(
+            &mut report,
+            "No test cases found in the JUnit files",
+            "Check that your test step ran successfully before this step.",
         );
         emit(output, &report)?;
         return Ok(ExitCode::GenericError);
@@ -1207,13 +1222,15 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn testsuite_without_cases_short_circuits_with_no_spans_error() {
+        async fn testsuite_without_cases_short_circuits_with_no_test_cases_error() {
             // A `<testsuites>` wrapping an empty `<testsuite>` is
             // valid XML and gets past the parser (the parser only
             // rejects bare `<testsuites/>` with zero suites), but
-            // produces zero TestCase records. The orchestrator must
-            // bail out with a specific error before reaching the
-            // quarantine + upload layers.
+            // produces zero TestCase records. Because suites *were*
+            // parsed, the orchestrator must report "No test cases
+            // found" (the test step ran but emitted nothing), not
+            // the "No spans found" message reserved for files with
+            // no suites at all.
             let tmp = tempfile::tempdir().unwrap();
             let file = write_xml(
                 &tmp,
@@ -1246,9 +1263,14 @@ mod tests {
             assert_eq!(code, ExitCode::GenericError);
             let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
             assert!(
-                stdout.contains("No spans found in the JUnit files"),
+                stdout.contains("No test cases found in the JUnit files"),
                 "{stdout}"
             );
+            assert!(
+                stdout.contains("Check that your test step ran successfully before this step."),
+                "{stdout}"
+            );
+            assert!(!stdout.contains("No spans found"), "{stdout}");
         }
     }
 }

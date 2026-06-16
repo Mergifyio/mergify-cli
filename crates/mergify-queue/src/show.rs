@@ -262,14 +262,32 @@ fn print_checks_section(
 }
 
 fn print_checks_table(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> std::io::Result<()> {
-    let name_width = checks
+    // First column carries the `  Check` header, so its width is the
+    // wider of the padded check names and the header label itself
+    // (mirrors rich's auto-sizing of the "  Check" column).
+    const HEADER_CHECK: &str = "  Check";
+    let name_col_width = checks
         .iter()
-        .map(|c| c.name.chars().count())
+        .map(|c| 2 + c.name.chars().count())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(HEADER_CHECK.chars().count());
+
+    // Header row: `Check` / `Status`, dim, matching Python's
+    // `Table(show_header=True)` column titles.
+    let header_pad = name_col_width.saturating_sub(HEADER_CHECK.chars().count());
+    writeln!(
+        w,
+        "{D}{check}{spaces}  Status{R}",
+        D = theme.dim,
+        check = HEADER_CHECK,
+        spaces = " ".repeat(header_pad),
+        R = theme.reset,
+    )?;
+
     for check in checks {
         let glyph = check_state_glyph(theme, &check.state);
-        let pad = name_width.saturating_sub(check.name.chars().count());
+        let pad = name_col_width.saturating_sub(2 + check.name.chars().count());
         writeln!(
             w,
             "  {D}{name}{spaces}{R}  {S}{icon} {state}{R}",
@@ -591,6 +609,9 @@ mod tests {
         .unwrap();
 
         let stdout = cap.stdout();
+        // Verbose table: header row labels both columns.
+        assert!(stdout.contains("Check"), "got: {stdout:?}");
+        assert!(stdout.contains("Status"), "got: {stdout:?}");
         // Verbose table: every check name appears as its own row.
         assert!(stdout.contains("tests"), "got: {stdout:?}");
         assert!(stdout.contains("linters"), "got: {stdout:?}");
