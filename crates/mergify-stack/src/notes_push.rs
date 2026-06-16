@@ -199,11 +199,23 @@ pub fn push_branches(
     // updates, …). Always cleanup, even on failure.
     let mut cmd = git_cmd(repo_dir);
     cmd.args(&arg_refs).env(PUSH_ENV_MARKER, "1");
-    let status = cmd
-        .status()
+    // Capture stdio rather than inherit it: `git push` narrates the
+    // branch creation, `remote:` ruleset-bypass notices, and the
+    // "create a pull request by visiting …" hint, all of which are
+    // noise next to the orchestrator's own plan/created summary.
+    // Keep it for the failure path only. Mirrors `run_git_silent`
+    // and the Python `utils.git` wrapper.
+    let output = cmd
+        .output()
         .map_err(|e| CliError::Generic(format!("failed to spawn `git push`: {e}")))?;
-    if !status.success() {
-        return Err(CliError::Generic(format!("`git push` exited {status}")));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        return Err(CliError::Generic(if stderr.is_empty() {
+            format!("`git push` exited {}", output.status)
+        } else {
+            format!("`git push` exited {}:\n{stderr}", output.status)
+        }));
     }
     Ok(())
 }

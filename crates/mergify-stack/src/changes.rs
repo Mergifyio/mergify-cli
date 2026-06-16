@@ -153,6 +153,118 @@ fn pop_matching(
     Some(remote_changes.swap_remove(idx))
 }
 
+/// First 7 characters of a SHA — the short form every log line
+/// uses.
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
+}
+
+/// Plain-text log line describing one planned change. `dry_run`
+/// selects the would-be wording ("to create") shown in the plan
+/// preview vs the past-tense ("created") shown after the push
+/// lands. `dest_branch` is the branch the PR will live on — used
+/// as the URL placeholder until the PR exists.
+///
+/// Ported from Python `LocalChange.get_log_from_local_change`,
+/// minus the Rich colour tags: this CLI prints plain lines so log
+/// scrapers don't have to strip ANSI (see `render_stack_list_text`).
+#[must_use]
+pub fn format_local_change_log(
+    change: &LocalChange,
+    dest_branch: &str,
+    dry_run: bool,
+    create_as_draft: bool,
+) -> String {
+    let url = match change.pull.as_ref() {
+        Some(pull) => pull
+            .get("html_url")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>")
+            .to_string(),
+        None => format!("<{dest_branch}>"),
+    };
+
+    let mut flags = String::new();
+    let draft = change
+        .pull
+        .as_ref()
+        .and_then(|p| p.get("draft"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if draft || (matches!(change.action, Action::Create) && create_as_draft) {
+        flags.push_str(" (draft)");
+    }
+
+    let commit_short = short_sha(&change.commit_sha);
+    let (action, commit_info) = match change.action {
+        Action::Create => (
+            if dry_run { "to create" } else { "created" }.to_string(),
+            commit_short,
+        ),
+        Action::Update => {
+            let head = change
+                .pull
+                .as_ref()
+                .and_then(|p| p.pointer("/head/sha"))
+                .and_then(Value::as_str)
+                .map(short_sha)
+                .unwrap_or_default();
+            (
+                if dry_run { "to update" } else { "updated" }.to_string(),
+                format!("{head} -> {commit_short}"),
+            )
+        }
+        Action::SkipCreate => (
+            "skip, --only-update-existing-pulls".to_string(),
+            commit_short,
+        ),
+        Action::SkipMerged => {
+            flags.push_str(" (merged)");
+            // The merge commit's short SHA when the PR really merged,
+            // else the local commit's. (Python sliced `[7:]` here —
+            // a typo; the short SHA is the first 7 chars.)
+            let info = change
+                .pull
+                .as_ref()
+                .filter(|p| p.get("merged_at").is_some_and(|v| !v.is_null()))
+                .and_then(|p| p.get("merge_commit_sha"))
+                .and_then(Value::as_str)
+                .map(short_sha)
+                .unwrap_or(commit_short);
+            ("merged".to_string(), info)
+        }
+        Action::SkipNextOnly => ("skip, --next-only".to_string(), commit_short),
+        Action::SkipUpToDate => ("up-to-date".to_string(), commit_short),
+    };
+
+    format!(
+        "* [{action}] '{commit_info} - {title}{flags} {url}",
+        title = change.title,
+    )
+}
+
+/// Plain-text log line for an orphan PR (one whose Change-Id left
+/// the local stack) being deleted. `dry_run` toggles "to delete"
+/// vs "deleted". Ported from
+/// `OrphanChange.get_log_from_orphan_change`.
+#[must_use]
+pub fn format_orphan_change_log(pull: &Value, dry_run: bool) -> String {
+    let action = if dry_run { "to delete" } else { "deleted" };
+    let title = pull
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let url = pull
+        .get("html_url")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let sha = pull
+        .pointer("/head/sha")
+        .and_then(Value::as_str)
+        .map_or_else(|| "<unknown>".to_string(), short_sha);
+    format!("* [{action}] '{sha} - {title} {url}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +373,99 @@ mod tests {
         )
         .unwrap();
         assert!(res.orphans.is_empty());
+    }
+
+    fn change(action: Action, pull: Option<Value>) -> LocalChange {
+        LocalChange {
+            commit_sha: "abc1234def5678".to_string(),
+            title: "Add feature".to_string(),
+            message: String::new(),
+            change_id: "Iaaaa".to_string(),
+            action,
+            pull,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn format_create_plan_uses_branch_placeholder_url() {
+        let c = change(Action::Create, None);
+        let line = format_local_change_log(&c, "stack/feat/x", true, false);
+        assert_eq!(line, "* [to create] 'abc1234 - Add feature <stack/feat/x>");
+    }
+
+    #[test]
+    fn format_create_done_uses_pull_url_and_draft_flag() {
+        let pull = json!({"html_url": "https://gh/pull/7", "draft": true});
+        let c = change(Action::Create, Some(pull));
+        let line = format_local_change_log(&c, "stack/feat/x", false, false);
+        assert_eq!(
+            line,
+            "* [created] 'abc1234 - Add feature (draft) https://gh/pull/7"
+        );
+    }
+
+    #[test]
+    fn format_create_as_draft_flag_applies_without_pull() {
+        let c = change(Action::Create, None);
+        let line = format_local_change_log(&c, "stack/feat/x", true, true);
+        assert_eq!(
+            line,
+            "* [to create] 'abc1234 - Add feature (draft) <stack/feat/x>"
+        );
+    }
+
+    #[test]
+    fn format_update_shows_old_to_new_head() {
+        let pull = json!({"html_url": "https://gh/pull/7", "head": {"sha": "fff0000aaa"}});
+        let c = change(Action::Update, Some(pull));
+        let line = format_local_change_log(&c, "stack/feat/x", true, false);
+        assert_eq!(
+            line,
+            "* [to update] 'fff0000 -> abc1234 - Add feature https://gh/pull/7"
+        );
+    }
+
+    #[test]
+    fn format_skip_up_to_date() {
+        let pull = json!({"html_url": "https://gh/pull/7", "head": {"sha": "abc1234def5678"}});
+        let c = change(Action::SkipUpToDate, Some(pull));
+        let line = format_local_change_log(&c, "stack/feat/x", false, false);
+        assert_eq!(
+            line,
+            "* [up-to-date] 'abc1234 - Add feature https://gh/pull/7"
+        );
+    }
+
+    #[test]
+    fn format_skip_merged_uses_merge_commit_and_flag() {
+        let pull = json!({
+            "html_url": "https://gh/pull/7",
+            "merged_at": "2025-01-01T00:00:00Z",
+            "merge_commit_sha": "9998887ccc",
+        });
+        let c = change(Action::SkipMerged, Some(pull));
+        let line = format_local_change_log(&c, "stack/feat/x", false, false);
+        assert_eq!(
+            line,
+            "* [merged] '9998887 - Add feature (merged) https://gh/pull/7"
+        );
+    }
+
+    #[test]
+    fn format_orphan_plan_and_deleted() {
+        let pull = json!({
+            "title": "Old PR",
+            "html_url": "https://gh/pull/9",
+            "head": {"sha": "deadbeef0000"},
+        });
+        assert_eq!(
+            format_orphan_change_log(&pull, true),
+            "* [to delete] 'deadbee - Old PR https://gh/pull/9"
+        );
+        assert_eq!(
+            format_orphan_change_log(&pull, false),
+            "* [deleted] 'deadbee - Old PR https://gh/pull/9"
+        );
     }
 }
