@@ -390,15 +390,20 @@ impl Client {
     /// diagnostics — timeouts and connect failures must read the
     /// same regardless of HTTP method.
     fn terminal_send_error_message(&self, e: &reqwest::Error) -> String {
-        if e.is_timeout() {
-            format!(
-                "{} did not respond in time. The request was aborted — please retry.",
-                self.service_name()
-            )
+        let svc = self.service_name();
+        let base = if e.is_timeout() {
+            format!("{svc} did not respond in time. The request was aborted — please retry.")
         } else if e.is_connect() {
-            format!("could not reach {}: {e}", self.service_name())
+            format!("could not reach {svc}: {e}")
         } else {
             format!("request failed: {e}")
+        };
+        // Surface the contacted URL so a hung or mis-configured
+        // endpoint (e.g. a wrong --api-url) is diagnosable — Python
+        // printed it in the same network-error message.
+        match e.url() {
+            Some(url) => format!("{base} (url: {url})"),
+            None => base,
         }
     }
 }
@@ -408,6 +413,11 @@ fn is_transient(e: &reqwest::Error) -> bool {
 }
 
 async fn error_message(status: StatusCode, mut resp: reqwest::Response) -> String {
+    // Capture the URL before the body stream consumes `resp` — a
+    // failing endpoint (e.g. a mis-resolved --api-url) is surfaced on
+    // a trailing `url:` line, matching Python's `check_for_status`.
+    let url = resp.url().clone();
+
     // Stream chunks until we've buffered at most `MAX_ERROR_BODY_BYTES`,
     // then drop the rest. `Response::text()` would slurp the entire
     // body into memory regardless of size.
@@ -426,11 +436,29 @@ async fn error_message(status: StatusCode, mut resp: reqwest::Response) -> Strin
     if truncated {
         text.push_str("…[truncated]");
     }
-    if text.is_empty() {
-        format!("HTTP {status}")
+
+    // Prefer the JSON `detail` field the Mergify API returns so the
+    // user sees a clean sentence instead of the raw `{"detail": …}`
+    // envelope. Only when the (untruncated) body parses as an object
+    // carrying a string `detail`; otherwise fall back to the body text.
+    let detail = if truncated {
+        None
     } else {
-        format!("HTTP {status}: {text}")
-    }
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.get("detail")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+    };
+
+    let head = match detail {
+        Some(detail) => format!("HTTP {status}: {detail}"),
+        None if text.is_empty() => format!("HTTP {status}"),
+        None => format!("HTTP {status}: {text}"),
+    };
+    format!("{head}\nurl: {url}")
 }
 
 #[cfg(test)]
@@ -677,6 +705,46 @@ mod tests {
         assert!(matches!(err, CliError::GitHubApi(_)));
         let msg = err.to_string();
         assert!(msg.contains("404"), "expected status in message, got {msg}");
+    }
+
+    #[tokio::test]
+    async fn json_detail_field_is_extracted_and_url_is_appended() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(serde_json::json!({"detail": "Repository not found"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let msg = client.get::<Foo>("/foo").await.unwrap_err().to_string();
+        // Clean sentence from `detail`, not the raw `{"detail": …}` body.
+        assert!(
+            msg.contains("HTTP 404 Not Found: Repository not found"),
+            "expected extracted detail, got {msg}"
+        );
+        assert!(!msg.contains('{'), "raw JSON envelope leaked: {msg}");
+        // Failing endpoint surfaced on a trailing url: line.
+        assert!(msg.contains("\nurl: "), "missing url line: {msg}");
+        assert!(msg.contains("/foo"), "url should name the path: {msg}");
+    }
+
+    #[tokio::test]
+    async fn non_json_error_body_falls_back_to_raw_text_with_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let msg = client.get::<Foo>("/foo").await.unwrap_err().to_string();
+        assert!(msg.contains("boom"), "raw body should survive: {msg}");
+        assert!(msg.contains("\nurl: "), "missing url line: {msg}");
     }
 
     #[tokio::test]
