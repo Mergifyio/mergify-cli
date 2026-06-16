@@ -23,11 +23,6 @@ set -eu
 REPO="Mergifyio/mergify-cli"
 INSTALL_DIR="${MERGIFY_INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${MERGIFY_VERSION:-latest}"
-if [ "${VERSION}" = "latest" ]; then
-    BASE_URL="${MERGIFY_BASE_URL:-https://github.com/${REPO}/releases/latest/download}"
-else
-    BASE_URL="${MERGIFY_BASE_URL:-https://github.com/${REPO}/releases/download/${VERSION}}"
-fi
 
 die() {
     printf 'error: %s\n' "$1" >&2
@@ -72,8 +67,31 @@ main() {
     command -v curl > /dev/null 2>&1 || die "curl is required"
     command -v tar  > /dev/null 2>&1 || die "tar is required"
 
+    # Resolve VERSION to the actual tag so we can embed it in the
+    # asset filename. When MERGIFY_BASE_URL is set (fixture mode used
+    # by the CI smoke test) the fixture already serves a
+    # `latest-release.json` stub; otherwise call the GitHub API.
+    if [ "${VERSION}" = "latest" ]; then
+        if [ -n "${MERGIFY_BASE_URL:-}" ]; then
+            # Fixture mode: the stub JSON lives next to the assets.
+            VERSION=$(curl -fsSL "${MERGIFY_BASE_URL}/latest-release.json" \
+                | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
+                | sed 's/.*"tag_name":[[:space:]]*"//; s/".*//')
+        else
+            VERSION=$(curl -fsSL \
+                "https://api.github.com/repos/${REPO}/releases/latest" \
+                | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
+                | sed 's/.*"tag_name":[[:space:]]*"//; s/".*//')
+        fi
+        [ -n "${VERSION}" ] || die "could not resolve latest release version"
+    fi
+
+    # With the version known, build the per-version asset name and
+    # the base URL for this release.
+    BASE_URL="${MERGIFY_BASE_URL:-https://github.com/${REPO}/releases/download/${VERSION}}"
+
     target=$(detect_target)
-    asset="mergify-${target}.tar.gz"
+    asset="mergify-${VERSION}-${target}.tar.gz"
     url="${BASE_URL}/${asset}"
     sums_url="${BASE_URL}/SHA256SUMS"
 
