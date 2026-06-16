@@ -5,7 +5,7 @@ CI insights, merge queue, scheduled freezes, and configuration management.
 
 ## Installation
 
-Standalone binary (Linux + macOS, x86_64 and aarch64):
+Linux + macOS (x86_64 and aarch64):
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
@@ -15,13 +15,16 @@ Installs to `~/.local/bin/mergify`. Override with `MERGIFY_INSTALL_DIR=/usr/loca
 or pin a version with `MERGIFY_VERSION=2026.4.23.1`. Once installed, upgrade with
 `mergify self-update`.
 
-Or via Python packaging (any OS):
+For Windows, or to bypass the script, grab the matching archive from the
+[latest release](https://github.com/Mergifyio/mergify-cli/releases/latest):
 
-```shell
-uv tool install mergify-cli
-# or
-pipx install mergify-cli
-```
+- **Windows** — download `mergify-x86_64-pc-windows-msvc.zip`, extract it,
+  and put `mergify.exe` anywhere on your `PATH`.
+- **Linux / macOS** — download `mergify-<target>.tar.gz` (e.g.
+  `mergify-aarch64-apple-darwin.tar.gz`), extract with `tar -xzf`, and put
+  the resulting `mergify` binary anywhere on your `PATH`.
+
+Verify against `SHA256SUMS` from the same release if you care.
 
 Run `mergify --help` to list commands and `mergify <command> --help` for
 details. See the [CLI docs](https://docs.mergify.com/cli/) for authentication
