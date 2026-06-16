@@ -13,7 +13,7 @@ name: release
 #   Maintainer opens Actions → "release" → "Run workflow" → enters
 #   the tag (e.g. `2026.6.12.1`). The workflow builds the wheel
 #   matrix, extracts the binary from each wheel, packages
-#   `mergify-<target>.{tar.gz,zip}` + `SHA256SUMS`, and creates the
+#   `mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`, and creates the
 #   GitHub Release as a *draft* with all assets attached and notes
 #   auto-generated from the commit log via `--generate-notes`.
 #
@@ -167,13 +167,15 @@ jobs:
 
       # Each `wheel-<target>` artifact is a maturin-built wheel with
       # the `mergify` binary at `<dist>.data/scripts/mergify[.exe]`.
-      # Extract it, normalise into `mergify-<target>.{tar.gz,zip}`,
-      # then hash the lot with sha256 so the installer can verify
-      # what it pulled. Stable names (no embedded version) so the
-      # `releases/latest/download/...` redirect keeps working for
-      # the `install.sh` consumers — the version is still observable
-      # via `mergify --version` after install.
+      # Extract it, normalise into
+      # `mergify-<version>-<target>.{tar.gz,zip}`, then hash the lot
+      # with sha256 so the installer can verify what it pulled.
+      # Embedding the version (before the Rust triple) lets
+      # Homebrew's dotted-version parser win over the fallback stem
+      # regex that would otherwise mangle `x86_64` assets.
       - name: Extract binaries and repack
+        env:
+          INPUT_TAG: ${{ needs.compute-tag.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -199,10 +201,10 @@ jobs:
             # want `<bin>` extracted at the workdir root.
             unzip -joq "${whl}" "*/scripts/${bin}" -d "${workdir}"
             if [[ "${target}" == *windows* ]]; then
-              (cd "${workdir}" && zip -q "${OLDPWD}/dist/mergify-${target}.zip" "${bin}")
+              (cd "${workdir}" && zip -q "${OLDPWD}/dist/mergify-${INPUT_TAG}-${target}.zip" "${bin}")
             else
               chmod +x "${workdir}/${bin}"
-              tar -C "${workdir}" -czf "dist/mergify-${target}.tar.gz" "${bin}"
+              tar -C "${workdir}" -czf "dist/mergify-${INPUT_TAG}-${target}.tar.gz" "${bin}"
             fi
             rm -rf "${workdir}"
           done
@@ -270,11 +272,11 @@ jobs:
           printf '  %s\n' "${attached[@]}"
 
           expected=(
-            mergify-x86_64-unknown-linux-gnu.tar.gz
-            mergify-aarch64-unknown-linux-gnu.tar.gz
-            mergify-x86_64-apple-darwin.tar.gz
-            mergify-aarch64-apple-darwin.tar.gz
-            mergify-x86_64-pc-windows-msvc.zip
+            "mergify-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+            "mergify-${tag}-aarch64-unknown-linux-gnu.tar.gz"
+            "mergify-${tag}-x86_64-apple-darwin.tar.gz"
+            "mergify-${tag}-aarch64-apple-darwin.tar.gz"
+            "mergify-${tag}-x86_64-pc-windows-msvc.zip"
             SHA256SUMS
           )
           missing=()
