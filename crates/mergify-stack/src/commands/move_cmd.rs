@@ -13,6 +13,7 @@ use mergify_core::CliError;
 use crate::change_id;
 use crate::git::{resolve_repo_toplevel, run_git_capture, shell_quote, spawn_rebase};
 use crate::local_commits::{self, LocalCommit};
+use crate::plan_display::PlanRow;
 use crate::trunk;
 
 /// Where to move the commit. Mirrors Python's positional value.
@@ -25,15 +26,23 @@ pub enum Position {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrderedCommit {
-    pub sha: String,
-    pub subject: String,
+struct OrderedCommit {
+    sha: String,
+    subject: String,
+    change_id: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    Moved { plan: Vec<OrderedCommit> },
-    DryRun { plan: Vec<OrderedCommit> },
+    /// Move ran to completion. `plan` is the new full-stack order
+    /// (tag-less, like Python's `display_plan`).
+    Moved {
+        plan: Vec<PlanRow>,
+    },
+    /// `--dry-run` short-circuit. Same full-stack `plan`, no rebase.
+    DryRun {
+        plan: Vec<PlanRow>,
+    },
     AlreadyInPosition,
     EmptyStack,
 }
@@ -90,52 +99,7 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         (Position::First | Position::Last, None) => None,
     };
 
-    let remaining_owned: Vec<OrderedCommit> = commits
-        .iter()
-        .filter(|c| c.commit_sha != commit.sha)
-        .map(|c| OrderedCommit {
-            sha: c.commit_sha.clone(),
-            subject: c.title.clone(),
-        })
-        .collect();
-
-    let new_order: Vec<OrderedCommit> = match opts.position {
-        Position::First => {
-            let mut v = Vec::with_capacity(remaining_owned.len() + 1);
-            v.push(commit.clone());
-            v.extend(remaining_owned);
-            v
-        }
-        Position::Last => {
-            let mut v = remaining_owned;
-            v.push(commit.clone());
-            v
-        }
-        Position::Before => {
-            let target = target.expect("target validated above");
-            let idx = remaining_owned
-                .iter()
-                .position(|c| c.sha == target.sha)
-                .expect("target was in stack");
-            let mut v = Vec::with_capacity(remaining_owned.len() + 1);
-            v.extend(remaining_owned[..idx].iter().cloned());
-            v.push(commit.clone());
-            v.extend(remaining_owned[idx..].iter().cloned());
-            v
-        }
-        Position::After => {
-            let target = target.expect("target validated above");
-            let idx = remaining_owned
-                .iter()
-                .position(|c| c.sha == target.sha)
-                .expect("target was in stack");
-            let mut v = Vec::with_capacity(remaining_owned.len() + 1);
-            v.extend(remaining_owned[..=idx].iter().cloned());
-            v.push(commit.clone());
-            v.extend(remaining_owned[idx + 1..].iter().cloned());
-            v
-        }
-    };
+    let new_order = compute_new_order(&commits, &commit, &opts.position, target.as_ref());
 
     let current_shas: Vec<&str> = commits.iter().map(|c| c.commit_sha.as_str()).collect();
     let new_shas: Vec<&str> = new_order.iter().map(|c| c.sha.as_str()).collect();
@@ -143,12 +107,75 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         return Ok(Outcome::AlreadyInPosition);
     }
 
+    let plan: Vec<PlanRow> = new_order
+        .iter()
+        .map(|c| PlanRow {
+            sha: c.sha.clone(),
+            subject: c.subject.clone(),
+            change_id: c.change_id.clone(),
+            action: None,
+        })
+        .collect();
+
     if opts.dry_run {
-        return Ok(Outcome::DryRun { plan: new_order });
+        return Ok(Outcome::DryRun { plan });
     }
 
     spawn_reorder_rebase(&repo_dir, &base, opts.mergify_binary, &new_shas)?;
-    Ok(Outcome::Moved { plan: new_order })
+    Ok(Outcome::Moved { plan })
+}
+
+/// Build the reordered stack: every commit except `commit` in its
+/// original order, with `commit` reinserted at the requested
+/// `position` (relative to `target` for `Before` / `After`).
+fn compute_new_order(
+    commits: &[LocalCommit],
+    commit: &OrderedCommit,
+    position: &Position,
+    target: Option<&OrderedCommit>,
+) -> Vec<OrderedCommit> {
+    let remaining: Vec<OrderedCommit> = commits
+        .iter()
+        .filter(|c| c.commit_sha != commit.sha)
+        .map(|c| OrderedCommit {
+            sha: c.commit_sha.clone(),
+            subject: c.title.clone(),
+            change_id: c.change_id.clone(),
+        })
+        .collect();
+
+    match position {
+        Position::First => {
+            let mut v = Vec::with_capacity(remaining.len() + 1);
+            v.push(commit.clone());
+            v.extend(remaining);
+            v
+        }
+        Position::Last => {
+            let mut v = remaining;
+            v.push(commit.clone());
+            v
+        }
+        Position::Before | Position::After => {
+            let target = target.expect("target validated above");
+            let idx = remaining
+                .iter()
+                .position(|c| c.sha == target.sha)
+                .expect("target was in stack");
+            // `Before` inserts at the target's index; `After`
+            // inserts just past it.
+            let insert_at = if matches!(position, Position::After) {
+                idx + 1
+            } else {
+                idx
+            };
+            let mut v = Vec::with_capacity(remaining.len() + 1);
+            v.extend(remaining[..insert_at].iter().cloned());
+            v.push(commit.clone());
+            v.extend(remaining[insert_at..].iter().cloned());
+            v
+        }
+    }
 }
 
 fn position_name(p: &Position) -> &'static str {
@@ -185,6 +212,7 @@ fn match_commit(prefix: &str, commits: &[LocalCommit]) -> Result<OrderedCommit, 
         [only] => Ok(OrderedCommit {
             sha: only.commit_sha.clone(),
             subject: only.title.clone(),
+            change_id: only.change_id.clone(),
         }),
         many => {
             let listing = many

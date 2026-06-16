@@ -83,6 +83,7 @@ pub mod git;
 pub mod local_commits;
 pub mod notes_push;
 pub mod plan;
+pub mod plan_display;
 pub mod pr_upsert;
 pub mod push_helpers;
 pub mod rebase_log;
