@@ -14,9 +14,12 @@
 //! on stdout — every field the engine wrote, including ones this CLI
 //! doesn't model — so new engine attributes show up without a CLI
 //! change. When `$GITHUB_OUTPUT` is set (GitHub Actions runner) the
-//! command also appends it as `queue_metadata` under a random
-//! `ghadelimiter_<uuid>` heredoc, matching the pattern the workflow
-//! runtime expects for multi-line outputs.
+//! command also appends two outputs: the full payload as `queue_metadata`
+//! under a random `ghadelimiter_<uuid>` heredoc (the pattern the workflow
+//! runtime expects for multi-line outputs), and `last_failed_draft_pr` —
+//! the most recent failed batch's draft PR number as a plain single line
+//! (empty when there are none), so a workflow can branch on it without
+//! parsing the JSON.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -110,6 +113,20 @@ fn write_github_output(metadata: &Value) -> Result<(), CliError> {
     let delimiter = format!("ghadelimiter_{}", random_delimiter_suffix()?);
     let compact = serde_json::to_string(metadata)
         .map_err(|e| CliError::Generic(format!("failed to serialize queue metadata: {e}")))?;
+    // Surface the most recent failed batch's draft PR number as a plain
+    // single-line output so workflows don't have to parse the
+    // `queue_metadata` JSON. `previous_failed_batches` is ordered
+    // oldest→newest, so the last element is the most recent. Empty string
+    // when the field is absent or empty, which makes the output falsy
+    // (`if: steps.x.outputs.last_failed_draft_pr`).
+    let last_failed_draft_pr = metadata
+        .get("previous_failed_batches")
+        .and_then(Value::as_array)
+        .and_then(|batches| batches.last())
+        .and_then(|batch| batch.get("draft_pr_number"))
+        .and_then(Value::as_u64)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -117,6 +134,7 @@ fn write_github_output(metadata: &Value) -> Result<(), CliError> {
     writeln!(file, "queue_metadata<<{delimiter}")?;
     writeln!(file, "{compact}")?;
     writeln!(file, "{delimiter}")?;
+    writeln!(file, "last_failed_draft_pr={last_failed_draft_pr}")?;
     Ok(())
 }
 
@@ -200,5 +218,37 @@ mod tests {
         assert!(written.starts_with("queue_metadata<<ghadelimiter_"));
         assert!(written.contains("\"checking_base_sha\":\"abc123\""));
         assert!(written.contains("\"scopes\":[\"backend\"]"));
+        // `sample()` has an empty `previous_failed_batches`, so the
+        // convenience output is present but empty (falsy in workflow `if:`).
+        assert!(
+            written.contains("\nlast_failed_draft_pr=\n"),
+            "got: {written:?}"
+        );
+    }
+
+    #[test]
+    fn github_output_exposes_last_failed_draft_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let gha_output = dir.path().join("gha_output");
+        // Two failed batches — the last one (draft PR 99) is the most
+        // recent and is what the convenience output must surface.
+        let note = || {
+            Some(json!({
+                "checking_base_sha": "abc123",
+                "previous_failed_batches": [
+                    {"draft_pr_number": 42, "checked_pull_requests": [1, 2]},
+                    {"draft_pr_number": 99, "checked_pull_requests": [3]},
+                ],
+            }))
+        };
+        let mut cap = Captured::human();
+        temp_env::with_var("GITHUB_OUTPUT", Some(gha_output.to_str().unwrap()), || {
+            run_with_reader(&mut cap.output, &note).unwrap();
+        });
+        let written = std::fs::read_to_string(&gha_output).unwrap();
+        assert!(
+            written.contains("\nlast_failed_draft_pr=99\n"),
+            "got: {written:?}"
+        );
     }
 }

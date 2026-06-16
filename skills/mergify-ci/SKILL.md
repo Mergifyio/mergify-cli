@@ -309,6 +309,18 @@ mergify ci queue-info
 
 Mergify attaches the batch metadata as a git note to the MQ branch head commit, so reading it needs only git, no PR body and no GitHub token. The command runs `git fetch origin "refs/notes/mergify/*"` itself (notes aren't fetched by default), then returns the note attached to `HEAD`. Requirements: the `origin` remote is reachable and the checkout is at the MQ branch head commit, which is the normal state inside a merge-queue CI run. A detached HEAD is fine.
 
+On GitHub Actions (`$GITHUB_OUTPUT` set) it writes two outputs:
+
+- `queue_metadata` -- the full note payload as JSON (multi-line heredoc).
+- `last_failed_draft_pr` -- the most recent failed batch's draft PR number, as a plain single line. Empty when there are no failed batches, so it's falsy in a workflow `if:`. This saves parsing `queue_metadata` to reach `previous_failed_batches[-1].draft_pr_number`.
+
+```yaml
+- id: queue
+  run: mergify ci queue-info
+- if: steps.queue.outputs.last_failed_draft_pr
+  run: echo "last failed draft PR was #${{ steps.queue.outputs.last_failed_draft_pr }}"
+```
+
 This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch.
 
 ## Common Patterns
