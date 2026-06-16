@@ -1,9 +1,9 @@
 //! Parse a GitHub-style pull-request URL into its parts.
 //!
 //! Shared by every command that takes a PR URL on the command line
-//! (`config simulate`, `ci queue-info`). Lives in `mergify-core`
-//! next to `auth`/`http` rather than in any one command crate so
-//! both call sites use a single parser instead of copies.
+//! (currently `config simulate`). Lives in `mergify-core` next to
+//! `auth`/`http` rather than in any one command crate so all call
+//! sites use a single parser instead of copies.
 
 /// The `(host, owner/repo, number)` triple parsed from a pull-request
 /// URL.
@@ -45,8 +45,8 @@ pub fn parse_pr_url(url: &str) -> Result<PullRequestRef, String> {
         return Err(format!("Invalid pull request URL: {url}"));
     }
     // A real GitHub PR URL has a bare host with no userinfo. Reject
-    // `user@host` shapes: a host segment is later used as the GitHub
-    // API authority (see `mergify-ci`'s `github_api_base`), and
+    // `user@host` shapes: a host segment can later be used to build an
+    // API authority (e.g. `config simulate`'s client), and
     // `https://github.com@evil.com/...` parses to host `evil.com` with
     // `github.com` as decoy userinfo — which would send the bearer
     // token to the attacker host.

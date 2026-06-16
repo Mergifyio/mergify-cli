@@ -17,7 +17,6 @@ use clap::Subcommand;
 use mergify_ci::git_refs::Format as GitRefsFormat;
 use mergify_ci::git_refs::GitRefsOptions;
 use mergify_ci::junit_process::JunitProcessOptions;
-use mergify_ci::queue_info::QueueInfoOptions;
 use mergify_ci::scopes_send::ScopesSendOptions;
 use mergify_ci::tests_quarantine::GetOptions;
 use mergify_ci::tests_quarantine::QuarantineOptions;
@@ -161,7 +160,7 @@ enum NativeCommand {
     CiGitRefs {
         format: GitRefsFormat,
     },
-    CiQueueInfo(CiQueueInfoOpts),
+    CiQueueInfo,
     CiJunitProcess(CiJunitProcessOpts),
     /// Deprecated alias for `CiJunitProcess`. Same orchestrator,
     /// same args; the dispatcher prints a deprecation warning to
@@ -480,11 +479,6 @@ struct CiScopesOpts {
     base: Option<String>,
     head: Option<String>,
     write: Option<PathBuf>,
-}
-
-struct CiQueueInfoOpts {
-    pull_request: Option<PullRequestRef>,
-    token: Option<String>,
 }
 
 struct CiScopesSendOpts {
@@ -1052,15 +1046,8 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             command: CiSubcommand::GitRefs(GitRefsCliArgs { format }),
         }) => Dispatch::Native(NativeCommand::CiGitRefs { format }),
         Subcommands::Ci(CiArgs {
-            command:
-                CiSubcommand::QueueInfo(QueueInfoCliArgs {
-                    pull_request,
-                    token,
-                }),
-        }) => Dispatch::Native(NativeCommand::CiQueueInfo(CiQueueInfoOpts {
-            pull_request,
-            token,
-        })),
+            command: CiSubcommand::QueueInfo(QueueInfoCliArgs {}),
+        }) => Dispatch::Native(NativeCommand::CiQueueInfo),
         Subcommands::Tests(TestsArgs {
             command:
                 TestsSubcommand::Show(TestsShowCliArgs {
@@ -1532,15 +1519,8 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 mergify_ci::git_refs::run(&GitRefsOptions { format }, &mut output)
                     .map(|()| mergify_core::ExitCode::Success)
             }
-            NativeCommand::CiQueueInfo(opts) => mergify_ci::queue_info::run(
-                QueueInfoOptions {
-                    pull_request: opts.pull_request.as_ref(),
-                    token: opts.token.as_deref(),
-                },
-                &mut output,
-            )
-            .await
-            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::CiQueueInfo => mergify_ci::queue_info::run(&mut output)
+                .map(|()| mergify_core::ExitCode::Success),
             NativeCommand::CiJunitProcess(opts) => {
                 mergify_ci::junit_process::run(
                     JunitProcessOptions {
@@ -3542,7 +3522,8 @@ enum CiSubcommand {
     /// Print the base/head git references for the current build.
     #[command(name = "git-refs")]
     GitRefs(GitRefsCliArgs),
-    /// Print the merge queue batch metadata for a merge queue draft PR.
+    /// Print the current build's merge queue batch metadata (from the
+    /// Mergify git note).
     #[command(name = "queue-info")]
     QueueInfo(QueueInfoCliArgs),
     /// Give the list of scopes impacted by changed files.
@@ -3569,20 +3550,11 @@ struct GitRefsCliArgs {
     format: GitRefsFormat,
 }
 
+/// `queue-info` reads the `refs/notes/mergify/<branch>` git note
+/// Mergify writes for the current `HEAD`, so it takes no arguments and
+/// needs no GitHub token — plain git in any CI.
 #[derive(clap::Args)]
-struct QueueInfoCliArgs {
-    /// Pull request URL (e.g. <https://github.com/owner/repo/pull/123>).
-    /// When omitted, reads the metadata from the CI event payload
-    /// (`GITHUB_EVENT_PATH`) — the in-CI default.
-    #[arg(value_name = "PULL_REQUEST_URL", value_parser = mergify_core::pull_request::parse_pr_url)]
-    pull_request: Option<PullRequestRef>,
-
-    /// GitHub token used to fetch the pull request. Falls back to
-    /// ``MERGIFY_TOKEN``, then ``GITHUB_TOKEN``, then `gh auth token`.
-    /// Only used when a pull request URL is given.
-    #[arg(long, short = 't')]
-    token: Option<String>,
-}
+struct QueueInfoCliArgs {}
 
 #[derive(clap::Args)]
 struct ScopesCliArgs {

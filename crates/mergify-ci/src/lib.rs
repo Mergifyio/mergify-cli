@@ -8,6 +8,7 @@
 //! `junit-process`, `scopes` outer command) reuse these helpers.
 
 pub mod detector;
+mod git;
 pub mod git_refs;
 pub mod github_event;
 pub mod junit_process;
