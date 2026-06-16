@@ -81,11 +81,12 @@ pub async fn run(opts: &Options<'_>) -> Result<StackListOutput, CliError> {
 
     let (remote, base_branch) = opts.trunk;
     if base_branch == dest_branch {
-        return Err(CliError::InvalidState(format!(
-            "your local branch `{dest_branch}` targets itself: `{remote}/{base_branch}`. \
-             Either fix the target branch (`git branch {dest_branch} \
-             --set-upstream-to=<remote>/<target>`) or rename it."
-        )));
+        return Err(stack_context::targets_itself_error(
+            Some(&repo_dir),
+            &dest_branch,
+            remote,
+            base_branch,
+        ));
     }
 
     let stack_prefix = if opts.branch_prefix.is_empty() {

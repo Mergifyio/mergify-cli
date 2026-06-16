@@ -152,22 +152,21 @@ fn match_commit(prefix: &str, commits: &[LocalCommit]) -> Result<RewordedCommit,
         )
     };
     match matches.as_slice() {
-        [] => Err(CliError::StackNotFound(format!(
-            "no commit found matching {field} prefix '{prefix}'"
-        ))),
+        [] => Err(crate::match_commit::not_found(field, prefix)),
         [only] => Ok(RewordedCommit {
             sha: only.commit_sha.clone(),
             subject: only.title.clone(),
         }),
         many => {
-            let listing = many
+            let candidates: Vec<crate::match_commit::Candidate<'_>> = many
                 .iter()
-                .map(|c| format!("{} {}", &c.commit_sha[..7], c.title))
-                .collect::<Vec<_>>()
-                .join("\n  ");
-            Err(CliError::InvalidState(format!(
-                "{field} prefix '{prefix}' matches multiple commits:\n  {listing}"
-            )))
+                .map(|c| crate::match_commit::Candidate {
+                    commit_sha: &c.commit_sha,
+                    title: &c.title,
+                    change_id: &c.change_id,
+                })
+                .collect();
+            Err(crate::match_commit::ambiguous(field, prefix, &candidates))
         }
     }
 }

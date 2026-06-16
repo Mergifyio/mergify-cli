@@ -127,11 +127,12 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
 
     let (remote, base_branch) = opts.trunk;
     if base_branch == dest_branch {
-        return Err(CliError::InvalidState(format!(
-            "your local branch `{dest_branch}` targets itself: \
-             `{remote}/{base_branch}`. \
-             Switch off the trunk branch before pushing.",
-        )));
+        return Err(stack_context::targets_itself_error(
+            Some(&repo_dir),
+            &dest_branch,
+            remote,
+            base_branch,
+        ));
     }
 
     let stack_prefix = if opts.branch_prefix.is_empty() {
