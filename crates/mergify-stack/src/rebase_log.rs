@@ -103,8 +103,8 @@ pub fn rebase_dry_run(
             let n = decision.approved_pulls.len();
             let plural = if n == 1 { "" } else { "s" };
             let mut lines = vec![format!(
-                "[orange]branch `{dest_branch}` rebase would be skipped: \
-                 approvals detected on {n} PR{plural}[/]",
+                "branch `{dest_branch}` rebase would be skipped: \
+                 approvals detected on {n} PR{plural}",
             )];
             for pull in &decision.approved_pulls {
                 let number = pull.get("number").and_then(Value::as_u64).unwrap_or(0);
@@ -117,13 +117,13 @@ pub fn rebase_dry_run(
         RebaseReason::ConflictOverride => {
             let numbers = pull_numbers_csv(&decision.approved_pulls);
             vec![format!(
-                "[orange]branch `{dest_branch}` would be rebased on `{remote}/{base_branch}` \
-                 (bottom PR has conflicts; approvals on PR(s) {numbers} would be dismissed)[/]",
+                "branch `{dest_branch}` would be rebased on `{remote}/{base_branch}` \
+                 (bottom PR has conflicts; approvals on PR(s) {numbers} would be dismissed)",
             )]
         }
         RebaseReason::Forced => vec![format!(
-            "[orange]branch `{dest_branch}` would be rebased on `{remote}/{base_branch}` \
-             (--force-rebase; approvals may be dismissed)[/]",
+            "branch `{dest_branch}` would be rebased on `{remote}/{base_branch}` \
+             (--force-rebase; approvals may be dismissed)",
         )],
         RebaseReason::NoApprovals => {
             // Match Python's "only warn if behind" — silent
@@ -137,8 +137,8 @@ pub fn rebase_dry_run(
                 "commits"
             };
             vec![format!(
-                "[orange]branch `{dest_branch}` is behind `{remote}/{base_branch}` \
-                 by {commits_behind} {plural}, commit SHAs will differ after rebase[/]",
+                "branch `{dest_branch}` is behind `{remote}/{base_branch}` \
+                 by {commits_behind} {plural}, commit SHAs will differ after rebase",
             )]
         }
     }

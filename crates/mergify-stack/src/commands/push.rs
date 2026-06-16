@@ -261,8 +261,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             change_type::fetch_old_pr_heads(Some(&repo_dir), remote, &updated_pr_numbers)
         {
             log_lines.push(format!(
-                "[orange]Could not fetch old PR heads; revision-history \
-                 change types will fall back to 'unknown': {e}[/]",
+                "Could not fetch old PR heads; revision-history \
+                 change types will fall back to 'unknown': {e}",
             ));
         }
         for entry in &planned.locals {
