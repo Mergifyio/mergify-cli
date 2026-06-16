@@ -87,6 +87,16 @@ pub struct InstallLog {
     pub actions: Vec<HookAction>,
 }
 
+/// Outcome of an `install` run: the per-hook action log plus
+/// whether the local `notes.displayRef` config was added this run
+/// (so the caller can echo Python's `Added notes.displayRef = …`
+/// confirmation).
+#[derive(Debug, Clone)]
+pub struct InstallOutcome {
+    pub logs: Vec<InstallLog>,
+    pub notes_display_ref_added: bool,
+}
+
 pub struct Options<'a> {
     pub repo_dir: Option<&'a Path>,
     pub force: bool,
@@ -122,7 +132,7 @@ pub fn status(repo_dir: Option<&Path>) -> Result<HooksStatus, CliError> {
 
 /// Install or upgrade every managed hook. Returns a per-hook
 /// action log so callers can render the right messages.
-pub fn install(opts: &Options<'_>) -> Result<Vec<InstallLog>, CliError> {
+pub fn install(opts: &Options<'_>) -> Result<InstallOutcome, CliError> {
     let hooks_dir = resolve_hooks_dir(opts.repo_dir)?;
     let managed_dir = hooks_dir.join("mergify-hooks");
     fs::create_dir_all(&managed_dir).map_err(|e| {
@@ -142,8 +152,11 @@ pub fn install(opts: &Options<'_>) -> Result<Vec<InstallLog>, CliError> {
         });
     }
 
-    ensure_notes_display_ref(opts.repo_dir)?;
-    Ok(logs)
+    let notes_display_ref_added = ensure_notes_display_ref(opts.repo_dir)?;
+    Ok(InstallOutcome {
+        logs,
+        notes_display_ref_added,
+    })
 }
 
 fn install_single_hook(
@@ -190,7 +203,11 @@ fn install_single_hook(
     Ok(())
 }
 
-fn ensure_notes_display_ref(repo_dir: Option<&Path>) -> Result<(), CliError> {
+/// Ensure `git log` surfaces mergify notes by adding the local
+/// `notes.displayRef = refs/notes/mergify/*` config. Returns `true`
+/// when the config was added this run, `false` when it was already
+/// present.
+fn ensure_notes_display_ref(repo_dir: Option<&Path>) -> Result<bool, CliError> {
     let desired = "refs/notes/mergify/*";
     let current = run_git_capture(
         repo_dir,
@@ -198,13 +215,13 @@ fn ensure_notes_display_ref(repo_dir: Option<&Path>) -> Result<(), CliError> {
     )
     .unwrap_or_default();
     if current.lines().any(|l| l == desired) {
-        return Ok(());
+        return Ok(false);
     }
     run_git_capture(
         repo_dir,
         &["config", "--local", "--add", "notes.displayRef", desired],
     )?;
-    Ok(())
+    Ok(true)
 }
 
 fn wrapper_status(path: &Path, hook: &str) -> WrapperStatus {
@@ -334,12 +351,13 @@ mod tests {
     #[test]
     fn install_writes_wrappers_and_scripts() {
         let dir = init_repo();
-        let logs = install(&Options {
+        let outcome = install(&Options {
             repo_dir: Some(dir.path()),
             force: false,
         })
         .unwrap();
-        assert_eq!(logs.len(), HOOK_NAMES.len());
+        assert_eq!(outcome.logs.len(), HOOK_NAMES.len());
+        assert!(outcome.notes_display_ref_added);
         let s = status(Some(dir.path())).unwrap();
         for h in &s.git_hooks {
             assert_eq!(h.wrapper_status, WrapperStatus::Installed);
@@ -362,8 +380,10 @@ mod tests {
         })
         .unwrap();
         // Second run should report up-to-date scripts and already-
-        // installed wrappers across the board.
-        for log in &second {
+        // installed wrappers across the board, and not re-add the
+        // notes.displayRef config.
+        assert!(!second.notes_display_ref_added);
+        for log in &second.logs {
             assert!(log.actions.iter().any(|a| matches!(
                 a,
                 HookAction::ScriptUpToDate | HookAction::WrapperAlreadyInstalled
@@ -383,12 +403,16 @@ mod tests {
         )
         .unwrap();
 
-        let logs = install(&Options {
+        let outcome = install(&Options {
             repo_dir: Some(dir.path()),
             force: false,
         })
         .unwrap();
-        let commit_msg = logs.iter().find(|l| l.hook_name == "commit-msg").unwrap();
+        let commit_msg = outcome
+            .logs
+            .iter()
+            .find(|l| l.hook_name == "commit-msg")
+            .unwrap();
         assert!(
             commit_msg
                 .actions
@@ -397,12 +421,16 @@ mod tests {
         );
 
         // With --force, the legacy wrapper is migrated.
-        let logs = install(&Options {
+        let outcome = install(&Options {
             repo_dir: Some(dir.path()),
             force: true,
         })
         .unwrap();
-        let commit_msg = logs.iter().find(|l| l.hook_name == "commit-msg").unwrap();
+        let commit_msg = outcome
+            .logs
+            .iter()
+            .find(|l| l.hook_name == "commit-msg")
+            .unwrap();
         assert!(
             commit_msg
                 .actions

@@ -231,26 +231,27 @@ fn emit_scopes_listing(
     }
 
     // Push the "Scopes touched:" block to stdout (so a downstream
-    // pipe captures it) and the per-file dump to stderr — the
-    // primary signal for downstream tooling is the list of
-    // touched scopes.
+    // pipe captures it). Under ACTIONS_STEP_DEBUG each scope's
+    // matching files are listed (sorted) immediately under their
+    // scope name, interleaved on the same stream — matching
+    // Python's `click.echo` ordering so verbose CI logs read the
+    // same.
     output.emit(&(), &mut |w: &mut dyn Write| {
         writeln!(w, "Scopes touched:")?;
         for s in hit {
             writeln!(w, "- {s}")?;
-        }
-        Ok(())
-    })?;
-
-    if actions_debug {
-        for s in hit {
-            if let Some(files) = by_scope.get(s) {
-                for f in files {
-                    output.status(&format!("    {f}"))?;
+            if actions_debug {
+                if let Some(files) = by_scope.get(s) {
+                    let mut files: Vec<&String> = files.iter().collect();
+                    files.sort();
+                    for f in files {
+                        writeln!(w, "    {f}")?;
+                    }
                 }
             }
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 

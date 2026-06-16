@@ -32,7 +32,7 @@ pub async fn run(opts: UnpauseOptions<'_>, output: &mut dyn Output) -> Result<()
 
     match client.delete_if_exists(&path).await? {
         DeleteOutcome::Deleted => {
-            emit_resumed(output)?;
+            emit_unpaused(output)?;
             Ok(())
         }
         DeleteOutcome::NotFound => Err(CliError::MergifyApi(
@@ -41,8 +41,10 @@ pub async fn run(opts: UnpauseOptions<'_>, output: &mut dyn Output) -> Result<()
     }
 }
 
-fn emit_resumed(output: &mut dyn Output) -> std::io::Result<()> {
-    output.emit(&(), &mut |w: &mut dyn Write| writeln!(w, "Queue resumed."))
+fn emit_unpaused(output: &mut dyn Output) -> std::io::Result<()> {
+    output.emit(&(), &mut |w: &mut dyn Write| {
+        writeln!(w, "Queue unpaused successfully.")
+    })
 }
 
 #[cfg(test)]
@@ -82,7 +84,10 @@ mod tests {
         .unwrap();
 
         let stdout = cap.stdout();
-        assert!(stdout.contains("Queue resumed"), "got: {stdout:?}");
+        assert!(
+            stdout.contains("Queue unpaused successfully."),
+            "got: {stdout:?}"
+        );
     }
 
     #[tokio::test]
