@@ -176,7 +176,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     )
     .await?;
 
-    let mut log_lines: Vec<String> = Vec::new();
+    let mut log_lines: Vec<String> = vec!["Stacked pull request plan:".into()];
 
     if opts.dry_run {
         let commits_behind = git_count_behind(&repo_dir, &trunk_ref)?;
@@ -190,6 +190,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         if rebase_decision.should_rebase && commits_behind > 0 {
             plan::promote_skip_up_to_date_to_update(&mut planned);
         }
+        push_plan_preview(&mut log_lines, &planned, opts.create_as_draft);
+        log_lines.push("Finished (dry-run mode).".into());
         return Ok(Outcome::DryRun {
             planned,
             rebase: rebase_decision,
@@ -231,6 +233,11 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     } else if let Some(line) = rebase_log::rebase_skipped(&dest_branch, &rebase_decision) {
         log_lines.push(line);
     }
+
+    // Plan preview (what will happen) — emitted before the push so
+    // the order matches Python's `display_plan`. `planned` is now
+    // final (re-planned above if a rebase ran).
+    push_plan_preview(&mut log_lines, &planned, opts.create_as_draft);
 
     // Pre-push: optional change-type detection for the
     // revision-history comment. Order matters — must happen
@@ -373,6 +380,20 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         upserted.push(pull);
     }
 
+    // Per-PR outcome lines — every local change (not just
+    // create/update) so skip/up-to-date/merged rows show too, now
+    // with the freshly-known PR URLs. Mirrors Python's
+    // post-`gather` log loop.
+    log_lines.push("Updating and/or creating stacked pull requests:".into());
+    for p in &planned.locals {
+        log_lines.push(crate::changes::format_local_change_log(
+            &p.change,
+            &p.dest_branch,
+            false,
+            opts.create_as_draft,
+        ));
+    }
+
     // Stack comments (only when stack has > 1 PR — the upserter
     // also guards on this but we pre-filter to avoid a useless
     // GET when total_pulls == 1).
@@ -477,6 +498,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             continue;
         };
         pr_upsert::delete_orphan_branch(opts.client, opts.user, opts.repo, head_ref).await?;
+        log_lines.push(crate::changes::format_orphan_change_log(orphan, false));
     }
 
     log_lines.push("Finished.".into());
@@ -487,6 +509,23 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         upserted,
         log_lines,
     })
+}
+
+/// Append the "what will happen" preview lines (locals first, then
+/// orphans), in the would-be wording. Mirrors Python's
+/// `changes.display_plan`.
+fn push_plan_preview(log: &mut Vec<String>, planned: &PlannedChanges, create_as_draft: bool) {
+    for p in &planned.locals {
+        log.push(crate::changes::format_local_change_log(
+            &p.change,
+            &p.dest_branch,
+            true,
+            create_as_draft,
+        ));
+    }
+    for orphan in &planned.orphans {
+        log.push(crate::changes::format_orphan_change_log(orphan, true));
+    }
 }
 
 /// Build a `StackEntry` from a `PlannedChange` — pulls every
