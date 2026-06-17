@@ -160,5 +160,5 @@ fn spawn_reorder_rebase(
     let bin = shell_quote(&mergify_binary.to_string_lossy());
     let shas = shell_quote(&ordered_shas.join(","));
     let editor = format!("{bin} _internal rebase-todo-rewrite --action reorder --shas {shas}");
-    spawn_rebase(repo_dir, base, Some(&editor))
+    spawn_rebase(repo_dir, base, Some(&editor), false)
 }
