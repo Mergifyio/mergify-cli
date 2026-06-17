@@ -16,6 +16,10 @@ regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.14"
+# `stack push` live progress: query the terminal width so each
+# in-place row is truncated to one physical line (multi-line
+# cursor-up redraw breaks if a row wraps).
+terminal_size = "0.4"
 tokio = { version = "1", default-features = false, features = ["time"] }
 url = "2"
 
