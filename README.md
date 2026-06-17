@@ -5,17 +5,29 @@ CI insights, merge queue, scheduled freezes, and configuration management.
 
 ## Installation
 
-Linux + macOS (x86_64 and aarch64):
+### Homebrew (recommended — macOS + Linux)
+
+```shell
+brew install mergifyio/tap/mergify-cli
+```
+
+The fully-qualified name taps and installs in one step. Upgrade with
+`brew upgrade mergify-cli` — not `mergify self-update`, which overwrites the
+Homebrew-managed binary. See the [tap](https://github.com/Mergifyio/homebrew-tap)
+for tap-trust and short-name details.
+
+### Install script (macOS + Linux, x86_64 and aarch64)
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
 ```
 
 Installs to `~/.local/bin/mergify`. Override with `MERGIFY_INSTALL_DIR=/usr/local/bin`
-or pin a version with `MERGIFY_VERSION=2026.4.23.1`. Once installed, upgrade with
-`mergify self-update`.
+or pin a version with `MERGIFY_VERSION=2026.4.23.1`. Upgrade with `mergify self-update`.
 
-For Windows, or to bypass the script, grab the matching archive from the
+### Manual download (Windows, or to bypass the script)
+
+Grab the matching archive from the
 [latest release](https://github.com/Mergifyio/mergify-cli/releases/latest):
 
 - **Windows** — download `mergify-<version>-x86_64-pc-windows-msvc.zip`,
