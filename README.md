@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.
 ```
 
 Installs to `~/.local/bin/mergify`. Override with `MERGIFY_INSTALL_DIR=/usr/local/bin`
-or pin a version with `MERGIFY_VERSION=2026.4.23.1`. Upgrade with `mergify self-update`.
+or pin a version with `MERGIFY_VERSION=<version>`. Upgrade with `mergify self-update`.
 
 ### Manual download (Windows, or to bypass the script)
 
