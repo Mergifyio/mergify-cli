@@ -2372,14 +2372,14 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     },
                 )
                 .await?;
-                let log_lines = match outcome {
-                    mergify_stack::commands::push::Outcome::DryRun { log_lines, .. }
-                    | mergify_stack::commands::push::Outcome::Pushed { log_lines, .. } => {
-                        log_lines
+                // Dry-run buffers its plan and prints it here; a real
+                // push streams progress live from `push::run` as each
+                // step completes, so its transcript must not be
+                // re-printed.
+                if let mergify_stack::commands::push::Outcome::DryRun { log_lines, .. } = outcome {
+                    for line in log_lines {
+                        println!("{line}");
                     }
-                };
-                for line in log_lines {
-                    println!("{line}");
                 }
                 Ok(mergify_core::ExitCode::Success)
             }

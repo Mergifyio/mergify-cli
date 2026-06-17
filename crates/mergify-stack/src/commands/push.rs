@@ -44,6 +44,7 @@ use crate::local_commits;
 use crate::notes_push::{self, PushEntry};
 use crate::plan::{self, PlannedChange, PlannedChanges, PlannerOpts};
 use crate::pr_upsert::{self, PrUpsertInput, StaleBase};
+use crate::progress::{Mark, Progress};
 use crate::rebase_log;
 use crate::remote_changes;
 use crate::replay;
@@ -141,22 +142,36 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         format!("{prefix}/{dest_branch}", prefix = opts.branch_prefix)
     };
 
-    // Pre-push: trunk fetch + notes fetch. Both are required
-    // before merge-base / push can run.
+    // The pre-flight — trunk + notes fetch, the PR search, the rebase
+    // decision — is several network round-trips with nothing to show,
+    // the stretch that used to look frozen. Drive one spinner row
+    // through it, then clear it so the live block (or the dry-run
+    // plan) starts fresh below.
+    let mut prog = Progress::new();
+    let pf = prog.add(None, "", "fetching trunk");
+
+    // The two git fetches are synchronous, so the spinner can't tick
+    // across them, but the label still says what is happening.
+    prog.activate(pf, "fetching trunk");
     run_git_silent(Some(&repo_dir), &["fetch", remote, base_branch])?;
     let notes_ref_fetched = notes_push::fetch_notes_ref(Some(&repo_dir), remote)?;
 
     let trunk_ref = format!("{remote}/{base_branch}");
     let base_commit_sha = compute_base_commit_sha(&repo_dir, &trunk_ref, &dest_branch)?;
 
-    let remote_changes_data = remote_changes::get_remote_changes(
-        opts.client,
-        opts.user,
-        opts.repo,
-        &stack_prefix,
-        opts.author,
-    )
-    .await?;
+    let remote_changes_data = prog
+        .run(
+            pf,
+            "reading pull requests",
+            remote_changes::get_remote_changes(
+                opts.client,
+                opts.user,
+                opts.repo,
+                &stack_prefix,
+                opts.author,
+            ),
+        )
+        .await?;
     let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
 
     let planner_opts = PlannerOpts {
@@ -167,19 +182,24 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     };
     let mut planned = plan::plan(&local, remote_changes_data.clone(), planner_opts)?;
 
-    let rebase_decision = approvals::decide_rebase(
-        opts.client,
-        opts.user,
-        opts.repo,
-        &PlannedAsChanges(&planned).into(),
-        opts.skip_rebase,
-        opts.force_rebase,
-    )
-    .await?;
-
-    let mut log_lines: Vec<String> = vec!["Stacked pull request plan:".into()];
+    let rebase_decision = prog
+        .run(
+            pf,
+            "checking rebase",
+            approvals::decide_rebase(
+                opts.client,
+                opts.user,
+                opts.repo,
+                &PlannedAsChanges(&planned).into(),
+                opts.skip_rebase,
+                opts.force_rebase,
+            ),
+        )
+        .await?;
+    prog.clear_block();
 
     if opts.dry_run {
+        let mut log_lines: Vec<String> = vec!["Stacked pull request plan:".into()];
         let commits_behind = git_count_behind(&repo_dir, &trunk_ref)?;
         log_lines.extend(rebase_log::rebase_dry_run(
             &dest_branch,
@@ -201,7 +221,11 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         });
     }
 
-    // Real-push path.
+    // Real-push path. `prog` (created above for the pre-flight) now
+    // drives the live per-PR rows. Live streaming replaces the old
+    // buffered plan-then-result transcript so a slow link never looks
+    // frozen and PRs aren't listed twice; off a TTY it degrades to
+    // one plain line per step (see [`crate::progress`]).
     if rebase_decision.should_rebase {
         let sync_opts = sync_cmd::Options {
             repo_dir: Some(&repo_dir),
@@ -219,7 +243,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             sync_cmd::Outcome::Synced { dropped_count, .. } => dropped_count,
             sync_cmd::Outcome::DryRun(_) => 0,
         };
-        log_lines.push(rebase_log::rebase_performed(
+        prog.note(rebase_log::rebase_performed(
             &dest_branch,
             remote,
             base_branch,
@@ -232,13 +256,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         let local2 = local_commits::read(&repo_dir, &new_base, "HEAD")?;
         planned = plan::plan(&local2, remote_changes_data, planner_opts)?;
     } else if let Some(line) = rebase_log::rebase_skipped(&dest_branch, &rebase_decision) {
-        log_lines.push(line);
+        prog.note(line);
     }
-
-    // Plan preview (what will happen) — emitted before the push so
-    // the order matches Python's `display_plan`. `planned` is now
-    // final (re-planned above if a rebase ran).
-    push_plan_preview(&mut log_lines, &planned, opts.create_as_draft);
 
     // Pre-push: optional change-type detection for the
     // revision-history comment. Order matters — must happen
@@ -261,7 +280,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         if let Err(e) =
             change_type::fetch_old_pr_heads(Some(&repo_dir), remote, &updated_pr_numbers)
         {
-            log_lines.push(format!(
+            prog.note(format!(
                 "Could not fetch old PR heads; revision-history \
                  change types will fall back to 'unknown': {e}",
             ));
@@ -329,6 +348,12 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             }
         })
         .collect();
+    if !push_entries.is_empty() {
+        prog.note(format!(
+            "Pushing {n} branch(es) to `{remote}`…",
+            n = push_entries.len(),
+        ));
+    }
     notes_push::push_branches(
         Some(&repo_dir),
         remote,
@@ -337,30 +362,53 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         notes_ref_fetched,
     )?;
 
+    // One live row per planned change, in stack order. Create/Update
+    // start `queued` and spin while their upsert is in flight; the
+    // skip variants resolve immediately. `row_idx[i]` maps each local
+    // back to its row for the upsert loop below.
+    let mut row_idx: Vec<Option<usize>> = Vec::with_capacity(planned.locals.len());
+    for p in &planned.locals {
+        let number = pull_number(p.change.pull.as_ref());
+        let url = pull_url(p.change.pull.as_ref());
+        let title = p.change.title.clone();
+        match p.change.action {
+            Action::Create | Action::Update => {
+                row_idx.push(Some(prog.add(number, title, "queued")));
+            }
+            Action::SkipMerged => {
+                prog.add_resolved(number, title, Mark::Noop, "merged", url);
+                row_idx.push(None);
+            }
+            Action::SkipUpToDate => {
+                prog.add_resolved(number, title, Mark::Noop, "up-to-date", url);
+                row_idx.push(None);
+            }
+            Action::SkipCreate | Action::SkipNextOnly => {
+                prog.add_resolved(number, title, Mark::Noop, "skipped", url);
+                row_idx.push(None);
+            }
+        }
+    }
+
     // Sequential per-PR upsert so each Depends-On has access to
     // the predecessor's freshly-known PR number. Python uses
     // asyncio fan-out + Event coordination; sequential is fine
     // for typical stack sizes.
     let mut upserted: Vec<Value> = Vec::new();
     let mut last_pull_number: Option<u64> = None;
-    for entry in &mut planned.locals {
+    for (i, entry) in planned.locals.iter_mut().enumerate() {
         let action = entry.change.action;
         if !matches!(action, Action::Create | Action::Update) {
             // Skip-* still carries an existing pull number
             // forward as a potential predecessor for downstream
             // Depends-On chaining. Mirrors Python's
             // `_build_change_tasks` carry-forward semantics.
-            if let Some(n) = entry
-                .change
-                .pull
-                .as_ref()
-                .and_then(|v| v.get("number"))
-                .and_then(Value::as_u64)
-            {
+            if let Some(n) = pull_number(entry.change.pull.as_ref()) {
                 last_pull_number = Some(n);
             }
             continue;
         }
+        let idx = row_idx[i].expect("create/update rows are always added");
 
         let input = PrUpsertInput {
             action,
@@ -373,26 +421,35 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             create_as_draft: opts.create_as_draft,
             keep_pull_request_title_and_body: opts.keep_pull_request_title_and_body,
         };
-        let pull = pr_upsert::create_or_update_pr(opts.client, opts.user, opts.repo, input).await?;
-        if let Some(n) = pull.get("number").and_then(Value::as_u64) {
+        let active = if matches!(action, Action::Create) {
+            "creating"
+        } else {
+            "updating"
+        };
+        let pull = prog
+            .run(
+                idx,
+                active,
+                pr_upsert::create_or_update_pr(opts.client, opts.user, opts.repo, input),
+            )
+            .await?;
+        let number = pull.get("number").and_then(Value::as_u64);
+        if let Some(n) = number {
             last_pull_number = Some(n);
         }
+        let url = pull
+            .get("html_url")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        prog.set_pr(idx, number, url);
+        let done_word = if matches!(action, Action::Create) {
+            "created"
+        } else {
+            "updated"
+        };
+        prog.resolve(idx, Mark::Done, Some(done_word));
         entry.change.pull = Some(pull.clone());
         upserted.push(pull);
-    }
-
-    // Per-PR outcome lines — every local change (not just
-    // create/update) so skip/up-to-date/merged rows show too, now
-    // with the freshly-known PR URLs. Mirrors Python's
-    // post-`gather` log loop.
-    log_lines.push("Updating and/or creating stacked pull requests:".into());
-    for p in &planned.locals {
-        log_lines.push(crate::changes::format_local_change_log(
-            &p.change,
-            &p.dest_branch,
-            false,
-            opts.create_as_draft,
-        ));
     }
 
     // Stack comments (only when stack has > 1 PR — the upserter
@@ -405,90 +462,106 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         .collect();
     let total_pulls = entries.len();
     if total_pulls > 1 {
-        for p in &planned.locals {
-            let Some(pull) = p.change.pull.as_ref() else {
-                continue;
-            };
-            if pull.get("merged_at").is_some_and(|v| !v.is_null()) {
-                continue;
+        let cidx = prog.add(None, "", "queued");
+        prog.run(cidx, "updating stack comments", async {
+            for p in &planned.locals {
+                let Some(pull) = p.change.pull.as_ref() else {
+                    continue;
+                };
+                if pull.get("merged_at").is_some_and(|v| !v.is_null()) {
+                    continue;
+                }
+                let Some(number) = pull.get("number").and_then(Value::as_u64) else {
+                    continue;
+                };
+                comment_upsert::update_stack_comment_for_pull(
+                    opts.client,
+                    opts.user,
+                    opts.repo,
+                    number,
+                    &entries,
+                    &dest_branch,
+                    total_pulls,
+                )
+                .await?;
             }
-            let Some(number) = pull.get("number").and_then(Value::as_u64) else {
-                continue;
-            };
-            comment_upsert::update_stack_comment_for_pull(
-                opts.client,
-                opts.user,
-                opts.repo,
-                number,
-                &entries,
-                &dest_branch,
-                total_pulls,
-            )
-            .await?;
-        }
+            Ok::<(), CliError>(())
+        })
+        .await?;
+        prog.resolve(cidx, Mark::Done, Some("stack comments updated"));
     }
-    log_lines.push("Comments updated.".into());
 
     // Revision-history comments — only for Updates, and only
     // when revision_history is enabled.
     if opts.revision_history {
-        let now = Utc::now();
-        for p in &planned.locals {
-            if !matches!(p.change.action, Action::Update) {
-                continue;
-            }
-            let Some(pull) = p.change.pull.as_ref() else {
-                continue;
-            };
-            let Some(number) = pull.get("number").and_then(Value::as_u64) else {
-                continue;
-            };
-            let Some(old_sha) = pull.pointer("/head/sha").and_then(Value::as_str) else {
-                continue;
-            };
+        let has_updates = planned
+            .locals
+            .iter()
+            .any(|p| matches!(p.change.action, Action::Update) && p.change.pull.is_some());
+        if has_updates {
+            let ridx = prog.add(None, "", "queued");
+            prog.run(ridx, "updating revision history", async {
+                let now = Utc::now();
+                for p in &planned.locals {
+                    if !matches!(p.change.action, Action::Update) {
+                        continue;
+                    }
+                    let Some(pull) = p.change.pull.as_ref() else {
+                        continue;
+                    };
+                    let Some(number) = pull.get("number").and_then(Value::as_u64) else {
+                        continue;
+                    };
+                    let Some(old_sha) = pull.pointer("/head/sha").and_then(Value::as_str) else {
+                        continue;
+                    };
 
-            let ct = change_types
-                .get(&p.change.change_id)
-                .copied()
-                .unwrap_or(ChangeType::Unknown);
+                    let ct = change_types
+                        .get(&p.change.change_id)
+                        .copied()
+                        .unwrap_or(ChangeType::Unknown);
 
-            // Replay only when the change is content (not rebase
-            // or unknown) — for rebase/unknown the
-            // revision-history table renders without a compare
-            // URL anyway.
-            let replay_sha = if matches!(ct, ChangeType::Content) {
-                replay::replay_for_revision(
-                    opts.client,
-                    Some(&repo_dir),
-                    opts.user,
-                    opts.repo,
-                    old_sha,
-                    &p.change.commit_sha,
-                )
-                .await
-            } else {
-                None
-            };
+                    // Replay only when the change is content (not
+                    // rebase or unknown) — for rebase/unknown the
+                    // revision-history table renders without a
+                    // compare URL anyway.
+                    let replay_sha = if matches!(ct, ChangeType::Content) {
+                        replay::replay_for_revision(
+                            opts.client,
+                            Some(&repo_dir),
+                            opts.user,
+                            opts.repo,
+                            old_sha,
+                            &p.change.commit_sha,
+                        )
+                        .await
+                    } else {
+                        None
+                    };
 
-            let input = RevisionInput {
-                pull_number: number,
-                old_sha,
-                new_sha: &p.change.commit_sha,
-                change_type: ct,
-                reason: &p.change.note,
-                replay_sha: replay_sha.as_deref(),
-                timestamp: now,
-            };
-            comment_upsert::update_revision_history_for_pull(
-                opts.client,
-                opts.user,
-                opts.repo,
-                opts.github_server,
-                &input,
-            )
+                    let input = RevisionInput {
+                        pull_number: number,
+                        old_sha,
+                        new_sha: &p.change.commit_sha,
+                        change_type: ct,
+                        reason: &p.change.note,
+                        replay_sha: replay_sha.as_deref(),
+                        timestamp: now,
+                    };
+                    comment_upsert::update_revision_history_for_pull(
+                        opts.client,
+                        opts.user,
+                        opts.repo,
+                        opts.github_server,
+                        &input,
+                    )
+                    .await?;
+                }
+                Ok::<(), CliError>(())
+            })
             .await?;
+            prog.resolve(ridx, Mark::Done, Some("revision history updated"));
         }
-        log_lines.push("Revision history updated.".into());
     }
 
     // Orphan-branch teardown — last so we don't yank the rug out
@@ -498,11 +571,28 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         let Some(head_ref) = orphan.pointer("/head/ref").and_then(Value::as_str) else {
             continue;
         };
-        pr_upsert::delete_orphan_branch(opts.client, opts.user, opts.repo, head_ref).await?;
-        log_lines.push(crate::changes::format_orphan_change_log(orphan, false));
+        let number = orphan.get("number").and_then(Value::as_u64);
+        let title = orphan
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>")
+            .to_string();
+        let url = orphan
+            .get("html_url")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let oidx = prog.add(number, title, "queued");
+        prog.set_pr(oidx, None, url);
+        prog.run(
+            oidx,
+            "deleting",
+            pr_upsert::delete_orphan_branch(opts.client, opts.user, opts.repo, head_ref),
+        )
+        .await?;
+        prog.resolve(oidx, Mark::Noop, Some("deleted"));
     }
 
-    log_lines.push("Finished.".into());
+    let log_lines = prog.finish("Finished.");
 
     Ok(Outcome::Pushed {
         planned,
@@ -527,6 +617,19 @@ fn push_plan_preview(log: &mut Vec<String>, planned: &PlannedChanges, create_as_
     for orphan in &planned.orphans {
         log.push(crate::changes::format_orphan_change_log(orphan, true));
     }
+}
+
+/// PR number from a pull payload, if present.
+fn pull_number(pull: Option<&Value>) -> Option<u64> {
+    pull?.get("number").and_then(Value::as_u64)
+}
+
+/// PR `html_url` from a pull payload, if present.
+fn pull_url(pull: Option<&Value>) -> Option<String> {
+    pull?
+        .get("html_url")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 /// Build a `StackEntry` from a `PlannedChange` — pulls every
