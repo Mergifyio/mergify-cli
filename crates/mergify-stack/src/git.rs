@@ -104,9 +104,16 @@ pub fn spawn_rebase(
         .status()
         .map_err(|e| CliError::Generic(format!("failed to spawn `git rebase -i`: {e}")))?;
     if !status.success() {
-        return Err(CliError::Generic(format!(
-            "`git rebase -i {base}` exited {status}"
-        )));
+        // A non-zero `git rebase -i` almost always means conflicts.
+        // Surface the recovery steps and map to the dedicated
+        // Conflict exit code (4) so scripts can branch on it — same
+        // contract as the Python `run_scripted_rebase`.
+        return Err(CliError::Conflict(
+            "rebase failed — there may be conflicts\n\
+             Resolve conflicts then run: git rebase --continue\n\
+             Or abort the rebase with: git rebase --abort"
+                .to_string(),
+        ));
     }
     Ok(())
 }
