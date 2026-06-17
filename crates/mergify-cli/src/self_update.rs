@@ -10,11 +10,18 @@
 //! Flow:
 //!
 //! 1. GET `/repos/Mergifyio/mergify-cli/releases/latest` for the
-//!    tag.
+//!    tag and the published asset list.
 //! 2. If `tag == crate::VERSION` and `--force` wasn't passed,
 //!    print "already up to date" and return.
-//! 3. Download `mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`
-//!    from the matching release (`.zip` on Windows, `.tar.gz` elsewhere).
+//! 3. Pick the matching asset out of the release's published asset
+//!    list by its target-triple suffix (`.zip` on Windows,
+//!    `.tar.gz` elsewhere) and download it + `SHA256SUMS` via the
+//!    URLs the API hands back. We *discover* the asset rather than
+//!    reconstructing its filename: the release has embedded the
+//!    version in the name (`mergify-<version>-<target>.<ext>`) and
+//!    could rename it again, but a binary frozen at install time
+//!    can't know a future scheme — matching on the stable triple
+//!    suffix keeps `self-update` working across renames.
 //! 4. Verify the asset SHA256 against `SHA256SUMS`. Mirrors
 //!    `install.sh`'s line-shape validation so a malformed
 //!    `SHA256SUMS` can't slip past.
@@ -35,36 +42,26 @@ use sha2::Sha256;
 const REPO: &str = "Mergifyio/mergify-cli";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_API_BASE: &str = "https://api.github.com";
-const DEFAULT_DOWNLOAD_BASE: &str = "https://github.com";
 
-/// Env-var override that points all HTTP traffic at a single base
-/// URL. Same lever `install.sh` exposes as `MERGIFY_BASE_URL` —
-/// the CI smoke test sets it to a `python3 -m http.server` fixture
-/// so the full download + verify + swap path runs without hitting
-/// real GitHub. Unset in real use.
+/// Env-var override that points the release lookup at a fixture URL.
+/// Same lever `install.sh` exposes as `MERGIFY_BASE_URL` — the CI
+/// smoke test sets it to a `python3 -m http.server` fixture so the
+/// full download + verify + swap path runs without hitting real
+/// GitHub. The fixture serves a `latest-release.json` whose
+/// `assets[].browser_download_url` point back at the same server, so
+/// the discovery path is identical to the real one. Unset in real
+/// use.
 const BASE_URL_ENV: &str = "MERGIFY_BASE_URL";
 
-struct Endpoints {
-    /// `<api>/repos/<REPO>/releases/latest`
-    latest_release: String,
-    /// `<download>/<REPO>/releases/download/<tag>/<asset>`
-    asset_base: String,
-}
-
-fn endpoints(tag: &str) -> Endpoints {
+/// The release-metadata URL: the fixture stub in `MERGIFY_BASE_URL`
+/// mode, otherwise GitHub's `releases/latest` API. Asset URLs are
+/// read from the response, never reconstructed, so we only need to
+/// know where the metadata lives.
+fn latest_release_url() -> String {
     if let Ok(base) = std::env::var(BASE_URL_ENV) {
-        // Fixture mode: a single flat directory serves both
-        // `latest-release.json` (the stub for the API call) and
-        // every asset/checksum file by name. No path-routing logic
-        // on the fixture side.
-        return Endpoints {
-            latest_release: format!("{base}/latest-release.json"),
-            asset_base: base,
-        };
-    }
-    Endpoints {
-        latest_release: format!("{DEFAULT_API_BASE}/repos/{REPO}/releases/latest"),
-        asset_base: format!("{DEFAULT_DOWNLOAD_BASE}/{REPO}/releases/download/{tag}"),
+        format!("{base}/latest-release.json")
+    } else {
+        format!("{DEFAULT_API_BASE}/repos/{REPO}/releases/latest")
     }
 }
 
@@ -83,16 +80,47 @@ pub struct Options {
 #[derive(Deserialize)]
 struct LatestRelease {
     tag_name: String,
+    /// The release's published assets. GitHub returns more fields
+    /// per asset; we only deserialize what we download by.
+    #[serde(default)]
+    assets: Vec<Asset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
+}
+
+/// Pick the single release asset whose name ends in
+/// `-<target>.<ext>`. Matching the *suffix* — not the full
+/// reconstructed name — is what makes `self-update` survive an
+/// asset-naming change: the prefix (`mergify-`, an embedded version,
+/// or whatever a future release uses) is ignored, only the stable
+/// target-triple tail has to line up. Fails closed if zero or more
+/// than one asset matches.
+fn select_asset<'a>(assets: &'a [Asset], target: &str, ext: &str) -> Result<&'a Asset, CliError> {
+    let suffix = format!("-{target}.{ext}");
+    let mut matching = assets.iter().filter(|a| a.name.ends_with(&suffix));
+    let found = matching.next().ok_or_else(|| {
+        CliError::Generic(format!(
+            "no release asset matching *{suffix} — the latest release ships no binary for this platform"
+        ))
+    })?;
+    if matching.next().is_some() {
+        return Err(CliError::Generic(format!(
+            "multiple release assets match *{suffix}; refusing to guess"
+        )));
+    }
+    Ok(found)
 }
 
 pub async fn run(opts: &Options) -> Result<(), CliError> {
     let current = crate::VERSION;
     let target = current_target()?;
     let client = http_client()?;
-    // Fetch the latest tag with placeholder endpoints — the
-    // `asset_base` slot is only consulted after we know the tag.
-    let probe = endpoints("");
-    let latest = fetch_latest_tag(&client, &probe.latest_release).await?;
+    let release = fetch_latest_release(&client, &latest_release_url()).await?;
+    let latest = release.tag_name.as_str();
 
     if opts.check_only {
         println!("Current: {current}");
@@ -110,11 +138,18 @@ pub async fn run(opts: &Options) -> Result<(), CliError> {
     // extension is determined by `cfg!(windows)` here, not by
     // target string-sniffing.
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
-    let asset = format!("mergify-{latest}-{target}.{ext}");
-    let ep = endpoints(&latest);
-    let archive = download(&client, &format!("{}/{asset}", ep.asset_base)).await?;
-    let sums = download_text(&client, &format!("{}/SHA256SUMS", ep.asset_base)).await?;
-    verify_checksum(&archive, &asset, &sums)?;
+    let asset = select_asset(&release.assets, target, ext)?;
+    let sums_asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == "SHA256SUMS")
+        .ok_or_else(|| CliError::Generic("latest release has no SHA256SUMS asset".to_string()))?;
+    let archive = download(&client, &asset.browser_download_url).await?;
+    let sums = download_text(&client, &sums_asset.browser_download_url).await?;
+    // Verify against the asset's *actual* published name, so the
+    // `SHA256SUMS` lookup matches whatever scheme the release used.
+    verify_checksum(&archive, &asset.name, &sums)?;
+    let asset_name = asset.name.clone();
 
     // Stage the extracted binary in a sibling temp dir next to the
     // current binary. Same filesystem keeps the final `rename` in
@@ -130,7 +165,15 @@ pub async fn run(opts: &Options) -> Result<(), CliError> {
 
     let workdir = tempfile::tempdir_in(install_dir)
         .map_err(|e| CliError::Generic(format!("create temp dir near binary: {e}")))?;
-    let archive_path = workdir.path().join(&asset);
+    // `asset_name` comes from release metadata. Even though the
+    // archive's checksum is verified, the filename itself is
+    // untrusted input — constrain it to a bare leaf component so a
+    // crafted name with path separators (`../`, an absolute path)
+    // can't make us write the archive outside `workdir`.
+    let leaf = Path::new(&asset_name).file_name().ok_or_else(|| {
+        CliError::Generic(format!("asset name is not a plain filename: {asset_name}"))
+    })?;
+    let archive_path = workdir.path().join(leaf);
     std::fs::write(&archive_path, &archive)
         .map_err(|e| CliError::Generic(format!("write archive: {e}")))?;
 
@@ -143,7 +186,7 @@ pub async fn run(opts: &Options) -> Result<(), CliError> {
     let new_bin = workdir.path().join(bin_name);
     if !new_bin.exists() {
         return Err(CliError::Generic(format!(
-            "archive {asset} did not contain the expected binary {bin_name}"
+            "archive {asset_name} did not contain the expected binary {bin_name}"
         )));
     }
 
@@ -169,8 +212,11 @@ fn http_client() -> Result<reqwest::Client, CliError> {
         .map_err(|e| CliError::Generic(format!("build HTTP client: {e}")))
 }
 
-async fn fetch_latest_tag(client: &reqwest::Client, url: &str) -> Result<String, CliError> {
-    let resp = client
+async fn fetch_latest_release(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<LatestRelease, CliError> {
+    client
         .get(url)
         .send()
         .await
@@ -179,8 +225,7 @@ async fn fetch_latest_tag(client: &reqwest::Client, url: &str) -> Result<String,
         .map_err(|e| CliError::Generic(format!("GitHub API: {e}")))?
         .json::<LatestRelease>()
         .await
-        .map_err(|e| CliError::Generic(format!("parse latest-release: {e}")))?;
-    Ok(resp.tag_name)
+        .map_err(|e| CliError::Generic(format!("parse latest-release: {e}")))
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, CliError> {
@@ -356,6 +401,63 @@ mod tests {
 
     fn fixture_archive() -> Vec<u8> {
         b"pretend-this-is-a-tar.gz".to_vec()
+    }
+
+    fn asset(name: &str) -> Asset {
+        Asset {
+            name: name.to_string(),
+            browser_download_url: format!("https://example.test/{name}"),
+        }
+    }
+
+    #[test]
+    fn select_asset_matches_versioned_name() {
+        let assets = [
+            asset("mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz"),
+            asset("mergify-2099.1.1.1-aarch64-apple-darwin.tar.gz"),
+            asset("SHA256SUMS"),
+        ];
+        let found = select_asset(&assets, "aarch64-apple-darwin", "tar.gz").unwrap();
+        assert_eq!(found.name, "mergify-2099.1.1.1-aarch64-apple-darwin.tar.gz");
+    }
+
+    #[test]
+    fn select_asset_matches_legacy_unversioned_name() {
+        // The whole point of suffix-matching: a binary built after a
+        // future rename must still resolve assets from an
+        // old-scheme release (here the pre-#1603 name with no
+        // embedded version). The prefix is irrelevant.
+        let assets = [
+            asset("mergify-aarch64-apple-darwin.tar.gz"),
+            asset("SHA256SUMS"),
+        ];
+        let found = select_asset(&assets, "aarch64-apple-darwin", "tar.gz").unwrap();
+        assert_eq!(found.name, "mergify-aarch64-apple-darwin.tar.gz");
+    }
+
+    #[test]
+    fn select_asset_errors_when_platform_absent() {
+        let assets = [
+            asset("mergify-2099.1.1.1-x86_64-pc-windows-msvc.zip"),
+            asset("SHA256SUMS"),
+        ];
+        let err = select_asset(&assets, "aarch64-apple-darwin", "tar.gz").unwrap_err();
+        assert!(err.to_string().contains("no release asset"), "got: {err}");
+    }
+
+    #[test]
+    fn select_asset_rejects_ambiguous_matches() {
+        // Two assets with the same target suffix — refuse rather
+        // than silently grabbing the first.
+        let assets = [
+            asset("mergify-2099.1.1.1-x86_64-apple-darwin.tar.gz"),
+            asset("mergify-2099.1.1.2-x86_64-apple-darwin.tar.gz"),
+        ];
+        let err = select_asset(&assets, "x86_64-apple-darwin", "tar.gz").unwrap_err();
+        assert!(
+            err.to_string().contains("multiple release assets"),
+            "got: {err}"
+        );
     }
 
     #[test]
