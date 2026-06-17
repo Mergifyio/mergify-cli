@@ -25,7 +25,8 @@ use mergify_core::CliError;
 use mergify_core::HttpClient;
 
 use crate::git::{
-    resolve_repo_toplevel, run_git_capture, run_git_silent, shell_quote, spawn_rebase,
+    compute_base_commit_sha, resolve_repo_toplevel, run_git_silent, shell_quote, spawn_rebase,
+    spawn_rebase_captured,
 };
 use crate::local_commits;
 use crate::remote_changes;
@@ -56,6 +57,18 @@ pub struct Options<'a> {
     pub trunk: (&'a str, &'a str),
     pub dry_run: bool,
     pub mergify_binary: &'a Path,
+    /// Capture the rebase's git output instead of letting it reach
+    /// the terminal — set by `stack push`, which drives the rebase
+    /// under a progress spinner that owns the terminal.
+    pub quiet: bool,
+    /// Remote changes already fetched by the caller (the `stack push`
+    /// pre-flight). When `Some`, `run` reuses them instead of
+    /// re-running the search + per-PR GETs that `get_remote_changes`
+    /// does. `None` for the standalone `stack sync` command.
+    pub prefetched_remote_changes: Option<Vec<remote_changes::RemoteChange>>,
+    /// Skip the `git fetch <remote> <base>` pre-rebase. Set by
+    /// `stack push`, whose pre-flight already fetched the trunk.
+    pub skip_trunk_fetch: bool,
 }
 
 pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
@@ -81,29 +94,21 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     };
 
     let trunk_ref = format!("{remote}/{base_branch}");
-    let base_commit_sha =
-        match run_git_capture(Some(&repo_dir), &["merge-base", "--fork-point", &trunk_ref]) {
-            Ok(sha) if !sha.is_empty() => sha,
-            // `--fork-point` falls back to the plain merge-base when
-            // there's no reflog history (CI sandboxes, freshly cloned
-            // repos). Match Python's "any non-empty result is fine"
-            // tolerance.
-            _ => run_git_capture(Some(&repo_dir), &["merge-base", &trunk_ref, "HEAD"])?,
-        };
-    if base_commit_sha.is_empty() {
-        return Err(CliError::StackNotFound(format!(
-            "common commit between `{trunk_ref}` and `{dest_branch}` branches not found"
-        )));
-    }
+    let base_commit_sha = compute_base_commit_sha(&repo_dir, &trunk_ref, &dest_branch)?;
 
-    let remote_changes = remote_changes::get_remote_changes(
-        opts.client,
-        opts.user,
-        opts.repo,
-        &stack_prefix,
-        opts.author,
-    )
-    .await?;
+    let remote_changes = match &opts.prefetched_remote_changes {
+        Some(changes) => changes.clone(),
+        None => {
+            remote_changes::get_remote_changes(
+                opts.client,
+                opts.user,
+                opts.repo,
+                &stack_prefix,
+                opts.author,
+            )
+            .await?
+        }
+    };
 
     let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
     let status = sync_status::classify(
@@ -118,12 +123,27 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     }
 
     // Real sync.
-    run_git_silent(Some(&repo_dir), &["fetch", remote, base_branch])?;
+    if !opts.skip_trunk_fetch {
+        run_git_silent(Some(&repo_dir), &["fetch", remote, base_branch])?;
+    }
     let dropped_count = status.merged.len();
     if status.up_to_date() || status.all_merged() {
         // Either nothing to drop, or every commit got merged.
         // Both cases collapse to a plain pull --rebase.
-        run_git_silent(Some(&repo_dir), &["pull", "--rebase", remote, base_branch])?;
+        run_git_silent(Some(&repo_dir), &["pull", "--rebase", remote, base_branch]).map_err(
+            // A failed `pull --rebase` is almost always a conflict;
+            // give the same recovery guidance and Conflict exit code as
+            // `spawn_rebase` rather than a bare stderr. (`run_git_silent`
+            // only ever returns `Generic`, so map unconditionally.)
+            |_| {
+                CliError::Conflict(
+                    "rebase failed — there may be conflicts\n\
+                     Resolve conflicts then run: git rebase --continue\n\
+                     Or abort the rebase with: git rebase --abort"
+                        .to_string(),
+                )
+            },
+        )?;
     } else {
         // Mixed case: drop merged commits in a single
         // `git rebase -i`, dispatched through the existing
@@ -134,7 +154,11 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         // Trunk already carries the squash-merged equivalents of the
         // commits we're dropping, so they must stay in the todo for
         // the drop editor to find them — see `spawn_rebase`.
-        spawn_rebase(&repo_dir, &trunk_ref_owned, Some(&editor), true)?;
+        if opts.quiet {
+            spawn_rebase_captured(&repo_dir, &trunk_ref_owned, Some(&editor), true)?;
+        } else {
+            spawn_rebase(&repo_dir, &trunk_ref_owned, Some(&editor), true)?;
+        }
     }
     Ok(Outcome::Synced {
         status,
