@@ -5,7 +5,7 @@ CI insights, merge queue, scheduled freezes, and configuration management.
 
 ## Installation
 
-### Homebrew (recommended — macOS + Linux)
+### Homebrew (recommended for macOS)
 
 ```shell
 brew install mergifyio/tap/mergify-cli
@@ -16,7 +16,7 @@ The fully-qualified name taps and installs in one step. Upgrade with
 Homebrew-managed binary. See the [tap](https://github.com/Mergifyio/homebrew-tap)
 for tap-trust and short-name details.
 
-### Install script (macOS + Linux, x86_64 and aarch64)
+### Install script (recommended for Linux; also macOS — x86_64 and aarch64)
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
