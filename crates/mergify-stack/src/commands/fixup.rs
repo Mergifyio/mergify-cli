@@ -20,6 +20,7 @@ use mergify_core::CliError;
 use crate::change_id;
 use crate::git::{resolve_repo_toplevel, run_git_capture, shell_quote, spawn_rebase};
 use crate::local_commits::{self, LocalCommit};
+use crate::plan_display::PlanRow;
 use crate::trunk;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,8 +31,15 @@ pub struct FixedUpCommit {
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    Squashed { fixed_up: Vec<FixedUpCommit> },
-    DryRun { plan: Vec<FixedUpCommit> },
+    /// Fixup ran to completion. `plan` is the full stack in
+    /// `base..HEAD` order with `[fixup]` tags on the folded rows.
+    Squashed {
+        plan: Vec<PlanRow>,
+    },
+    /// `--dry-run` short-circuit. Same full-stack `plan`, no rebase.
+    DryRun {
+        plan: Vec<PlanRow>,
+    },
     EmptyStack,
 }
 
@@ -89,14 +97,26 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         resolved.push(matched);
     }
 
+    let plan: Vec<PlanRow> = commits
+        .iter()
+        .map(|c| PlanRow {
+            sha: c.commit_sha.clone(),
+            subject: c.title.clone(),
+            change_id: c.change_id.clone(),
+            action: seen_shas
+                .contains(&c.commit_sha)
+                .then(|| "fixup".to_string()),
+        })
+        .collect();
+
     if opts.dry_run {
-        return Ok(Outcome::DryRun { plan: resolved });
+        return Ok(Outcome::DryRun { plan });
     }
 
     let shas: Vec<String> = resolved.iter().map(|c| c.sha.clone()).collect();
     let editor = build_sequence_editor(opts.mergify_binary, &shas);
     spawn_rebase(&repo_dir, &base, Some(&editor))?;
-    Ok(Outcome::Squashed { fixed_up: resolved })
+    Ok(Outcome::Squashed { plan })
 }
 
 fn match_commit(prefix: &str, commits: &[LocalCommit]) -> Result<FixedUpCommit, CliError> {
@@ -244,8 +264,14 @@ mod tests {
         .unwrap();
         match outcome {
             Outcome::DryRun { plan } => {
-                assert_eq!(plan[0].sha, commits[1].0);
-                assert_eq!(plan[0].subject, "Commit B");
+                // Plan lists the whole stack (A, B, C); only B is
+                // tagged for fixup.
+                assert_eq!(plan.len(), 3);
+                assert_eq!(plan[1].sha, commits[1].0);
+                assert_eq!(plan[1].subject, "Commit B");
+                assert_eq!(plan[1].action.as_deref(), Some("fixup"));
+                assert_eq!(plan[0].action, None);
+                assert_eq!(plan[2].action, None);
             }
             other => panic!("unexpected: {other:?}"),
         }

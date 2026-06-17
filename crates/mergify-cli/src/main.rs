@@ -1857,18 +1857,15 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     },
                 )?;
                 match outcome {
-                    mergify_stack::commands::drop::Outcome::Dropped { dropped } => {
-                        for c in &dropped {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("Dropping: {short} {subject}", subject = c.subject);
+                    mergify_stack::commands::drop::Outcome::Dropped { plan } => {
+                        for line in mergify_stack::plan_display::render_plan("Drop plan:", &plan) {
+                            println!("{line}");
                         }
                         println!("Commits dropped successfully.");
                     }
                     mergify_stack::commands::drop::Outcome::DryRun { plan } => {
-                        println!("Drop plan:");
-                        for c in &plan {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("  drop {short} {subject}", subject = c.subject);
+                        for line in mergify_stack::plan_display::render_plan("Drop plan:", &plan) {
+                            println!("{line}");
                         }
                         println!("Dry run — no changes made");
                     }
@@ -1893,18 +1890,15 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     },
                 )?;
                 match outcome {
-                    mergify_stack::commands::fixup::Outcome::Squashed { fixed_up } => {
-                        for c in &fixed_up {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("Fixing up: {short} {subject}", subject = c.subject);
+                    mergify_stack::commands::fixup::Outcome::Squashed { plan } => {
+                        for line in mergify_stack::plan_display::render_plan("Fixup plan:", &plan) {
+                            println!("{line}");
                         }
                         println!("Commits squashed successfully.");
                     }
                     mergify_stack::commands::fixup::Outcome::DryRun { plan } => {
-                        println!("Fixup plan:");
-                        for c in &plan {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("  fixup {short} {subject}", subject = c.subject);
+                        for line in mergify_stack::plan_display::render_plan("Fixup plan:", &plan) {
+                            println!("{line}");
                         }
                         println!("Dry run — no changes made");
                     }
@@ -1930,21 +1924,16 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     },
                 )?;
                 match outcome {
-                    mergify_stack::commands::reword::Outcome::Reworded { commit } => {
-                        let short = &commit.sha[..commit.sha.len().min(12)];
-                        println!(
-                            "Reworded {short} {subject}",
-                            subject = commit.subject,
-                        );
+                    mergify_stack::commands::reword::Outcome::Reworded { plan } => {
+                        for line in mergify_stack::plan_display::render_plan("Reword plan:", &plan) {
+                            println!("{line}");
+                        }
+                        println!("Commit reworded successfully.");
                     }
-                    mergify_stack::commands::reword::Outcome::DryRun {
-                        commit,
-                        inline_message,
-                    } => {
-                        let short = &commit.sha[..commit.sha.len().min(12)];
-                        let verb = if inline_message { "amend" } else { "reword" };
-                        println!("Reword plan:");
-                        println!("  {verb} {short} {subject}", subject = commit.subject);
+                    mergify_stack::commands::reword::Outcome::DryRun { plan } => {
+                        for line in mergify_stack::plan_display::render_plan("Reword plan:", &plan) {
+                            println!("{line}");
+                        }
                         println!("Dry run — no changes made");
                     }
                     mergify_stack::commands::reword::Outcome::EmptyStack => {
@@ -1970,10 +1959,9 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 match outcome {
                     mergify_stack::commands::reorder::Outcome::Reordered { plan }
                     | mergify_stack::commands::reorder::Outcome::DryRun { plan } => {
-                        println!("Reorder plan:");
-                        for (i, c) in plan.iter().enumerate() {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("  {n}. {short} {subject}", n = i + 1, subject = c.subject);
+                        for line in mergify_stack::plan_display::render_plan("Reorder plan:", &plan)
+                        {
+                            println!("{line}");
                         }
                         if opts.dry_run {
                             println!("Dry run — no changes made");
@@ -2015,10 +2003,8 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 match outcome {
                     mergify_stack::commands::move_cmd::Outcome::Moved { plan }
                     | mergify_stack::commands::move_cmd::Outcome::DryRun { plan } => {
-                        println!("Move plan:");
-                        for (i, c) in plan.iter().enumerate() {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("  {n}. {short} {subject}", n = i + 1, subject = c.subject);
+                        for line in mergify_stack::plan_display::render_plan("Move plan:", &plan) {
+                            println!("{line}");
                         }
                         if opts.dry_run {
                             println!("Dry run — no changes made");
@@ -2054,10 +2040,8 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 match outcome {
                     mergify_stack::commands::squash::Outcome::Squashed { plan }
                     | mergify_stack::commands::squash::Outcome::DryRun { plan } => {
-                        println!("Squash plan:");
-                        for (i, c) in plan.iter().enumerate() {
-                            let short = &c.sha[..c.sha.len().min(12)];
-                            println!("  {n}. {short} {subject}", n = i + 1, subject = c.subject);
+                        for line in mergify_stack::plan_display::render_plan("Squash plan:", &plan) {
+                            println!("{line}");
                         }
                         if opts.dry_run {
                             println!("Dry run — no changes made");

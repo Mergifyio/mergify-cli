@@ -17,18 +17,28 @@ use mergify_core::CliError;
 use crate::change_id;
 use crate::git::{resolve_repo_toplevel, run_git_capture, shell_quote, spawn_rebase};
 use crate::local_commits::{self, LocalCommit};
+use crate::plan_display::PlanRow;
 use crate::trunk;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrderedCommit {
-    pub sha: String,
-    pub subject: String,
+struct OrderedCommit {
+    sha: String,
+    subject: String,
+    change_id: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    Squashed { plan: Vec<OrderedCommit> },
-    DryRun { plan: Vec<OrderedCommit> },
+    /// Squash ran to completion. `plan` is the reordered full stack
+    /// (sources folded behind the target) with `[fixup]` tags on
+    /// the source rows.
+    Squashed {
+        plan: Vec<PlanRow>,
+    },
+    /// `--dry-run` short-circuit. Same full-stack `plan`, no rebase.
+    DryRun {
+        plan: Vec<PlanRow>,
+    },
     EmptyStack,
 }
 
@@ -91,14 +101,27 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         new_order.push(OrderedCommit {
             sha: c.commit_sha.clone(),
             subject: c.title.clone(),
+            change_id: c.change_id.clone(),
         });
         if c.commit_sha == target.sha {
             new_order.extend(srcs.iter().cloned());
         }
     }
 
+    let plan: Vec<PlanRow> = new_order
+        .iter()
+        .map(|c| PlanRow {
+            sha: c.sha.clone(),
+            subject: c.subject.clone(),
+            change_id: c.change_id.clone(),
+            action: src_sha_set
+                .contains(c.sha.as_str())
+                .then(|| "fixup".to_string()),
+        })
+        .collect();
+
     if opts.dry_run {
-        return Ok(Outcome::DryRun { plan: new_order });
+        return Ok(Outcome::DryRun { plan });
     }
 
     let ordered_shas: Vec<String> = new_order.iter().map(|c| c.sha.clone()).collect();
@@ -124,7 +147,7 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         exec_after_sha.as_deref(),
         exec_command.as_deref(),
     )?;
-    Ok(Outcome::Squashed { plan: new_order })
+    Ok(Outcome::Squashed { plan })
 }
 
 fn match_commit(prefix: &str, commits: &[LocalCommit]) -> Result<OrderedCommit, CliError> {
@@ -152,6 +175,7 @@ fn match_commit(prefix: &str, commits: &[LocalCommit]) -> Result<OrderedCommit, 
         [only] => Ok(OrderedCommit {
             sha: only.commit_sha.clone(),
             subject: only.title.clone(),
+            change_id: only.change_id.clone(),
         }),
         many => {
             let listing = many
