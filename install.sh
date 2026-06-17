@@ -40,6 +40,9 @@ detect_target() {
     case "${os}" in
         Linux)  os_part="unknown-linux-gnu" ;;
         Darwin) os_part="apple-darwin"      ;;
+        # git-bash, MSYS2 and Cygwin all report a `*_NT-*` kernel
+        # name from `uname -s`; they run a POSIX shell on Windows.
+        MINGW*|MSYS*|CYGWIN*) os_part="pc-windows-msvc" ;;
         *) die "unsupported OS '${os}' — see https://github.com/${REPO}/releases for available assets" ;;
     esac
     case "${arch}" in
@@ -47,6 +50,13 @@ detect_target() {
         arm64|aarch64) arch_part="aarch64" ;;
         *) die "unsupported architecture '${arch}'" ;;
     esac
+    # We only publish an x86_64 Windows binary, so reject other
+    # Windows arches up front instead of 404ing on an asset that
+    # was never built. x86_64 git-bash runs fine on ARM Windows
+    # under emulation, so this rarely bites in practice.
+    if [ "${os_part}" = "pc-windows-msvc" ] && [ "${arch_part}" != "x86_64" ]; then
+        die "unsupported architecture '${arch}' on Windows — only x86_64 is published"
+    fi
     printf '%s-%s' "${arch_part}" "${os_part}"
 }
 
@@ -65,7 +75,6 @@ sha256_check() {
 
 main() {
     command -v curl > /dev/null 2>&1 || die "curl is required"
-    command -v tar  > /dev/null 2>&1 || die "tar is required"
 
     # Resolve VERSION to the actual tag so we can embed it in the
     # asset filename. When MERGIFY_BASE_URL is set (fixture mode used
@@ -91,7 +100,25 @@ main() {
     BASE_URL="${MERGIFY_BASE_URL:-https://github.com/${REPO}/releases/download/${VERSION}}"
 
     target=$(detect_target)
-    asset="mergify-${VERSION}-${target}.tar.gz"
+    # Windows releases ship a `.zip` holding `mergify.exe`; every
+    # other target ships a `.tar.gz` holding `mergify`. Branch on the
+    # triple the same way the release workflow does so the names line
+    # up bit-for-bit with what it published.
+    case "${target}" in
+        *windows*) ext="zip";    bin="mergify.exe" ;;
+        *)         ext="tar.gz"; bin="mergify"     ;;
+    esac
+
+    # Need the matching extractor available. `tar` is everywhere we
+    # ship a tarball; `unzip` is the portable choice on the POSIX
+    # shells that run on Windows (git-bash, MSYS2, Cygwin).
+    case "${ext}" in
+        zip) command -v unzip > /dev/null 2>&1 \
+                || die "unzip is required to install the Windows binary" ;;
+        *)   command -v tar   > /dev/null 2>&1 || die "tar is required" ;;
+    esac
+
+    asset="mergify-${VERSION}-${target}.${ext}"
     url="${BASE_URL}/${asset}"
     sums_url="${BASE_URL}/SHA256SUMS"
 
@@ -127,15 +154,20 @@ main() {
         || die "checksum verification failed for ${asset}"
     cd - > /dev/null
 
-    tar -xzf "${tmp}/${asset}" -C "${tmp}"
+    case "${ext}" in
+        zip) unzip -oq "${tmp}/${asset}" -d "${tmp}" ;;
+        *)   tar -xzf "${tmp}/${asset}" -C "${tmp}"  ;;
+    esac
 
     mkdir -p "${INSTALL_DIR}"
     # `install -m 0755` is in coreutils on Linux and BSD install on
-    # macOS; both honour `-m`. Avoids a separate chmod step.
-    install -m 0755 "${tmp}/mergify" "${INSTALL_DIR}/mergify"
+    # macOS; both honour `-m`. Avoids a separate chmod step. On
+    # Windows git-bash the mode is cosmetic (the exec bit is
+    # meaningless there) but `install` still copies the file.
+    install -m 0755 "${tmp}/${bin}" "${INSTALL_DIR}/${bin}"
 
-    printf '\nmergify installed to %s/mergify\n' "${INSTALL_DIR}"
-    "${INSTALL_DIR}/mergify" --version
+    printf '\nmergify installed to %s/%s\n' "${INSTALL_DIR}" "${bin}"
+    "${INSTALL_DIR}/${bin}" --version
 
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*) ;;
