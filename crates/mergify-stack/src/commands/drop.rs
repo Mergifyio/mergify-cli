@@ -15,11 +15,11 @@ use mergify_core::CliError;
 use crate::change_id;
 use crate::git::{resolve_repo_toplevel, run_git_capture, shell_quote, spawn_rebase};
 use crate::local_commits::{self, LocalCommit};
+use crate::plan_display::PlanRow;
 use crate::trunk;
 
-/// One commit the caller wants to drop. Returned in order so the
-/// binary handler can render the "Drop plan" header without a
-/// second walk.
+/// One commit the caller wants to drop, used for prefix
+/// resolution before building the full-stack plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DroppedCommit {
     pub sha: String,
@@ -28,12 +28,11 @@ pub struct DroppedCommit {
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// Drop ran to completion. `dropped` is the resolved set of
-    /// commits in the order the user passed them — printed as
-    /// `Commits dropped successfully.`.
-    Dropped { dropped: Vec<DroppedCommit> },
-    /// `--dry-run` short-circuit. Plan was rendered, no git rebase.
-    DryRun { plan: Vec<DroppedCommit> },
+    /// Drop ran to completion. `plan` is the full stack in
+    /// `base..HEAD` order with `[drop]` tags on the dropped rows.
+    Dropped { plan: Vec<PlanRow> },
+    /// `--dry-run` short-circuit. Same full-stack `plan`, no rebase.
+    DryRun { plan: Vec<PlanRow> },
     /// Stack is empty — Python prints `No commits in the stack`
     /// and exits 0.
     EmptyStack,
@@ -85,14 +84,26 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         resolved.push(matched);
     }
 
+    let plan: Vec<PlanRow> = commits
+        .iter()
+        .map(|c| PlanRow {
+            sha: c.commit_sha.clone(),
+            subject: c.title.clone(),
+            change_id: c.change_id.clone(),
+            action: seen_shas
+                .contains(&c.commit_sha)
+                .then(|| "drop".to_string()),
+        })
+        .collect();
+
     if opts.dry_run {
-        return Ok(Outcome::DryRun { plan: resolved });
+        return Ok(Outcome::DryRun { plan });
     }
 
     let shas: Vec<String> = resolved.iter().map(|c| c.sha.clone()).collect();
     let editor = build_sequence_editor(opts.mergify_binary, &shas);
     spawn_rebase(&repo_dir, &base, Some(&editor))?;
-    Ok(Outcome::Dropped { dropped: resolved })
+    Ok(Outcome::Dropped { plan })
 }
 
 fn match_commit(prefix: &str, commits: &[LocalCommit]) -> Result<DroppedCommit, CliError> {
@@ -223,9 +234,14 @@ mod tests {
         .unwrap();
         match outcome {
             Outcome::DryRun { plan } => {
-                assert_eq!(plan.len(), 1);
-                assert_eq!(plan[0].sha, commits[1].0);
-                assert_eq!(plan[0].subject, "Commit B");
+                // Plan lists the whole stack (A, B, C); only B is
+                // tagged for drop.
+                assert_eq!(plan.len(), 3);
+                assert_eq!(plan[1].sha, commits[1].0);
+                assert_eq!(plan[1].subject, "Commit B");
+                assert_eq!(plan[1].action.as_deref(), Some("drop"));
+                assert_eq!(plan[0].action, None);
+                assert_eq!(plan[2].action, None);
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -269,7 +285,10 @@ mod tests {
         .unwrap();
         match outcome {
             Outcome::DryRun { plan } => {
-                assert_eq!(plan[0].sha, commits[2].0);
+                // C (index 2 in the stack) is the change-id match
+                // and the only tagged row.
+                assert_eq!(plan[2].sha, commits[2].0);
+                assert_eq!(plan[2].action.as_deref(), Some("drop"));
             }
             other => panic!("unexpected: {other:?}"),
         }
