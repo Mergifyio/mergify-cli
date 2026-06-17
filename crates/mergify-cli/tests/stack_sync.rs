@@ -226,6 +226,93 @@ async fn sync_dry_run_lists_merged_commits() {
     assert!(stdout.contains("#42"), "stdout: {stdout}");
 }
 
+/// Real (non-dry-run) sync where the merged commit was
+/// squash-merged into trunk with an identical patch. Git's default
+/// `--no-reapply-cherry-picks` would silently omit it from the
+/// rebase todo, leaving the drop editor with no `pick` line to
+/// remove — the abort we guard against with `--reapply-cherry-picks`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sync_drops_squash_merged_commit_with_matching_patch() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let (work, commits) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let a_sha = commits[0].0.clone();
+    let a_cid = commits[0].1.clone();
+
+    // Simulate the merge-queue squashing commit A onto trunk: a new
+    // commit on `main` that adds the *same* `a.txt` with the *same*
+    // content, so its patch-id matches commit A and git treats A as
+    // already-applied during the rebase.
+    run_in(&local, &["checkout", "-q", "main"]);
+    std::fs::write(local.join("a.txt"), "content A").unwrap();
+    run_in(&local, &["add", "a.txt"]);
+    run_in(&local, &["commit", "-q", "-m", "Commit A (squashed #42)"]);
+    run_in(&local, &["push", "-q", "origin", "main"]);
+    run_in(&local, &["checkout", "-q", "feature"]);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "items": [{"number": 42}],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/myorg/myrepo/pulls/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "number": 42,
+            "title": "Commit A",
+            "state": "closed",
+            "merged_at": "2025-01-01T00:00:00Z",
+            "head": {"sha": a_sha, "ref": format!("stack/tester/feature/feat-a--{}", &a_cid[1..9])},
+            "base": {"ref": "main"},
+            "html_url": "https://github.com/myorg/myrepo/pull/42",
+        })))
+        .mount(&server)
+        .await;
+
+    let output = run_mergify(
+        &local,
+        &server.uri(),
+        &[
+            "stack",
+            "sync",
+            "--trunk",
+            "origin/main",
+            "--author",
+            "tester",
+            "--branch-prefix",
+            "stack/tester",
+            "--repo",
+            "myorg/myrepo",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Commit A is gone; only commit B remains, rebased onto the new
+    // trunk tip (which now carries the squashed a.txt).
+    let ahead = capture(&local, &["rev-list", "--count", "origin/main..HEAD"]);
+    assert_eq!(ahead, "1", "exactly commit B should remain on the stack");
+    let a_reachable = isolated_git()
+        .arg("-C")
+        .arg(&local)
+        .args(["merge-base", "--is-ancestor", &a_sha, "HEAD"])
+        .status()
+        .unwrap()
+        .success();
+    assert!(!a_reachable, "the squash-merged commit A should be dropped");
+    let head_subject = capture(&local, &["log", "-1", "--format=%s"]);
+    assert_eq!(head_subject, "Commit B");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sync_rejects_auto_generated_branch_names() {
     // Create a repo whose current branch matches the
