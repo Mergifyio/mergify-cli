@@ -79,7 +79,7 @@ main() {
     # Resolve VERSION to the actual tag so we can embed it in the
     # asset filename. When MERGIFY_BASE_URL is set (fixture mode used
     # by the CI smoke test) the fixture already serves a
-    # `latest-release.json` stub; otherwise call the GitHub API.
+    # `latest-release.json` stub; otherwise resolve against GitHub.
     if [ "${VERSION}" = "latest" ]; then
         if [ -n "${MERGIFY_BASE_URL:-}" ]; then
             # Fixture mode: the stub JSON lives next to the assets.
@@ -87,10 +87,22 @@ main() {
                 | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
                 | sed 's/.*"tag_name":[[:space:]]*"//; s/".*//')
         else
-            VERSION=$(curl -fsSL \
-                "https://api.github.com/repos/${REPO}/releases/latest" \
-                | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
-                | sed 's/.*"tag_name":[[:space:]]*"//; s/".*//')
+            # Follow the `releases/latest` redirect to its
+            # `releases/tag/<tag>` target and read the tag off the
+            # final URL. The `api.github.com` JSON endpoint is
+            # unauthenticated and per-IP rate-limited, so it 403s on
+            # shared CI runner IPs; the plain github.com redirect has
+            # no such limit and needs no API token.
+            # A repo with no releases redirects to `.../releases`
+            # (HTTP 200, no `/tag/`), so require the segment before
+            # stripping rather than letting the full URL flow into the
+            # asset name.
+            VERSION=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+                "https://github.com/${REPO}/releases/latest")
+            case "${VERSION}" in
+                */tag/*) VERSION="${VERSION##*/tag/}" ;;
+                *)       VERSION="" ;;
+            esac
         fi
         [ -n "${VERSION}" ] || die "could not resolve latest release version"
     fi
