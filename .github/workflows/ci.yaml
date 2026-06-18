@@ -111,14 +111,15 @@ jobs:
   # sha256 verification, the `install -m 0755` step, and the final
   # `--version` exec.
   #
-  # Linux + macOS only (Windows users go through a separate
-  # PowerShell installer, TBD).
+  # Windows runs the same POSIX `install.sh` under git-bash
+  # (`shell: bash`), pulling the `.zip` asset and `mergify.exe`
+  # instead of the `.tar.gz` + `mergify` the Unix legs use.
   install-script-smoke:
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6.0.3
@@ -148,24 +149,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # `sha256sum` (Linux, git-bash) or `shasum -a 256` (macOS) —
+          # same fallback install.sh uses; git-bash ships no `shasum`.
+          sha256sums() {
+              if command -v sha256sum > /dev/null 2>&1; then sha256sum "$@"
+              else shasum -a 256 "$@"; fi
+          }
           target=$(rustc -vV | awk '/^host:/ {print $2}')
           echo "Building fixture for target: ${target}"
+          # Mirror what install.sh derives from the triple: Windows
+          # ships a `.zip` holding `mergify.exe`, everything else a
+          # `.tar.gz` holding `mergify`.
+          case "${target}" in
+              *windows*) ext="zip";    bin="mergify.exe" ;;
+              *)         ext="tar.gz"; bin="mergify"     ;;
+          esac
+          asset="mergify-2099.1.1.1-${target}.${ext}"
           mkdir -p fixture/release
           # install.sh resolves the version from latest-release.json (fixture
           # mode) before building the per-version asset name.
           echo '{"tag_name":"2099.1.1.1"}' > fixture/release/latest-release.json
-          tar -C target/release -czf "fixture/release/mergify-2099.1.1.1-${target}.tar.gz" mergify
-          (cd fixture/release && shasum -a 256 "mergify-2099.1.1.1-${target}.tar.gz" > SHA256SUMS)
+          if [ "${ext}" = "zip" ]; then
+              # Pack with python's zipfile rather than betting on a
+              # `zip` binary in git-bash; python is already required
+              # below for the fixture server. Resolve the interpreter
+              # name the same way the serve step does (`python3` on
+              # Unix, `python` on the Windows runner).
+              py=python3; command -v "$py" > /dev/null 2>&1 || py=python
+              ( cd target/release \
+                && "$py" -m zipfile -c "${OLDPWD}/fixture/release/${asset}" "${bin}" )
+          else
+              tar -C target/release -czf "fixture/release/${asset}" "${bin}"
+          fi
+          # Normalise to the canonical "HASH␣␣filename" form the
+          # release pipeline emits on Linux. git-bash's `sha256sum`
+          # tags binary files with a `*` marker (`HASH *file`), which
+          # would break install.sh's `$2 == asset` lookup and its
+          # two-space line-shape check.
+          ( cd fixture/release \
+            && hash=$(sha256sums "${asset}" | awk '{print $1}') \
+            && printf '%s  %s\n' "${hash}" "${asset}" > SHA256SUMS )
           ls -la fixture/release
 
       - name: Serve fixture
         shell: bash
         run: |
           cd fixture/release
-          # `python3 -m http.server` is preinstalled on both runners.
-          # Bind to localhost only; the runner is ephemeral but
-          # there's no point exposing the fixture.
-          python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
+          # `python3` on the Unix runners, `python` on the Windows
+          # runner (it ships no `python3` shim). The http.server
+          # module is in the stdlib on all of them. Bind to localhost
+          # only; the runner is ephemeral but there's no point
+          # exposing the fixture.
+          py=python3; command -v "$py" > /dev/null 2>&1 || py=python
+          "$py" -m http.server 8765 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
           echo $! > /tmp/server.pid
           # Wait for the server to actually accept connections.
           for _ in $(seq 1 50); do
@@ -182,8 +218,13 @@ jobs:
           ./install.sh
           # `install.sh` runs `--version` itself, but pin it here
           # too so a future refactor that drops the post-install
-          # smoke from the script still trips this job.
-          /tmp/mergify-install/mergify --version
+          # smoke from the script still trips this job. The binary
+          # is `mergify.exe` on Windows.
+          case "$(rustc -vV | awk '/^host:/ {print $2}')" in
+              *windows*) bin=mergify.exe ;;
+              *)         bin=mergify     ;;
+          esac
+          "/tmp/mergify-install/${bin}" --version
 
       # Negative paths: corrupted SHA256SUMS must fail closed, not
       # silently install a tampered binary. Tests both the
@@ -196,7 +237,8 @@ jobs:
         run: |
           set -euo pipefail
           target=$(rustc -vV | awk '/^host:/ {print $2}')
-          asset="mergify-2099.1.1.1-${target}.tar.gz"
+          case "${target}" in *windows*) ext=zip ;; *) ext=tar.gz ;; esac
+          asset="mergify-2099.1.1.1-${target}.${ext}"
           # Keep a clean copy so the malformed test below can write
           # its own bad version without losing the original.
           cp fixture/release/SHA256SUMS fixture/release/SHA256SUMS.orig
