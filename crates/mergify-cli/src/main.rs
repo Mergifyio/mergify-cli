@@ -2384,12 +2384,15 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     } => {
                         println!("Opening PR #{pull_number}: {title}");
                         println!("  {pull_url}");
+                        Ok(mergify_core::ExitCode::Success)
                     }
                     mergify_stack::commands::open::Outcome::EmptyStack => {
+                        // Python exits STACK_NOT_FOUND (3) so callers
+                        // can detect the empty stack via `$?`.
                         println!("No commits in stack");
+                        Ok(mergify_core::ExitCode::StackNotFound)
                     }
                 }
-                Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackHooks(opts) => {
                 if opts.do_setup {

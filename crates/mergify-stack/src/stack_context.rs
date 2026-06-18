@@ -52,6 +52,36 @@ pub fn check_local_branch(branch_name: &str, branch_prefix: &str) -> Result<(), 
     Ok(())
 }
 
+/// Build the "your local branch targets itself" error every stack
+/// command that resolves a trunk raises when the checked-out branch
+/// *is* the trunk it would land on.
+///
+/// Mirrors `sync.py` / `list.py`: a first line carrying the resolved
+/// remote URL (`git remote get-url <remote>`, omitted gracefully
+/// when that fails) followed by the two copy-pasteable git commands.
+/// Returns [`CliError::InvalidState`] (exit 7), matching Python.
+#[must_use]
+pub fn targets_itself_error(
+    repo_dir: Option<&Path>,
+    dest_branch: &str,
+    remote: &str,
+    base_branch: &str,
+) -> CliError {
+    let location = run_git_capture(repo_dir, &["remote", "get-url", remote])
+        .ok()
+        .filter(|url| !url.is_empty())
+        .map(|url| format!(" (at {url}@{base_branch})"))
+        .unwrap_or_default();
+    CliError::InvalidState(format!(
+        "your local branch `{dest_branch}` targets itself: \
+         `{remote}/{base_branch}`{location}\n\
+         * To fix the target branch: \
+         `git branch {dest_branch} --set-upstream-to={remote}/{base_branch}`\n\
+         * To rename your local branch: \
+         `git branch -M {dest_branch} new-branch-name`"
+    ))
+}
+
 /// Owner + repository name pair, e.g. `("Mergifyio", "mergify-cli")`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoSlug {
@@ -236,6 +266,83 @@ mod tests {
         let slug = parse_slug("https://github.com/owner/repo.git").unwrap();
         assert_eq!(slug.owner, "owner");
         assert_eq!(slug.repo, "repo");
+    }
+
+    #[test]
+    fn targets_itself_includes_remote_url_and_both_git_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/owner/repo.git",
+            ],
+        ] {
+            let ok = crate::test_env::isolated_git()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?} failed");
+        }
+        let err = targets_itself_error(Some(dir.path()), "main", "origin", "main");
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(
+                    msg.contains(
+                        "your local branch `main` targets itself: `origin/main` \
+                         (at https://github.com/owner/repo.git@main)"
+                    ),
+                    "got: {msg}"
+                );
+                assert!(
+                    msg.contains(
+                        "* To fix the target branch: \
+                         `git branch main --set-upstream-to=origin/main`"
+                    ),
+                    "got: {msg}"
+                );
+                assert!(
+                    msg.contains(
+                        "* To rename your local branch: \
+                         `git branch -M main new-branch-name`"
+                    ),
+                    "got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidState, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn targets_itself_omits_location_when_remote_url_unresolvable() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = crate::test_env::isolated_git()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["init", "-q", "-b", "main"])
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        // No remote configured → `git remote get-url` fails; the
+        // `(at ...)` parenthetical is dropped without erroring.
+        let err = targets_itself_error(Some(dir.path()), "main", "origin", "main");
+        match err {
+            CliError::InvalidState(msg) => {
+                assert!(
+                    msg.contains("targets itself: `origin/main`\n"),
+                    "location parenthetical should be absent: {msg}"
+                );
+                assert!(!msg.contains("(at "), "got: {msg}");
+                assert!(msg.contains("--set-upstream-to=origin/main"), "got: {msg}");
+            }
+            other => panic!("expected InvalidState, got: {other:?}"),
+        }
     }
 
     #[test]
