@@ -1,0 +1,15 @@
+# typos spell-check allow-list. Reproduce CI locally with `typos`.
+
+[default.extend-words]
+# Spelling used consistently across the crates, including the
+# queue::Unparseable variant — accept it rather than churn a rename.
+unparseable = "unparseable"
+# Hyphenated prefix in comments: "mis-configured", "mis-resolved",
+# "mis-indent" — typos splits on the hyphen and flags "mis".
+mis = "mis"
+# Relative-time format tokens: Nm / Nh / Nd (N minutes/hours/days).
+nd = "nd"
+# French input exercised by the slug tests ("l'authentification").
+authentification = "authentification"
+# Hex-like test Change-Id fixture token ("Idead0000…ff").
+idead = "idead"

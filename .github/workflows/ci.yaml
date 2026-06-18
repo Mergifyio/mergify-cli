@@ -7,6 +7,13 @@ on:
       - main
       - devs/**
 
+# Cancel superseded runs on the same ref — a force-push or a new
+# commit makes the in-flight matrix obsolete, so don't keep runners
+# busy finishing it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
     timeout-minutes: 10
@@ -26,13 +33,63 @@ jobs:
         run: cargo fmt --all --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets --workspace -- -D warnings
+        run: cargo clippy --all-targets --all-features --workspace --locked -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features --locked
 
       - name: cargo build --release
-        run: cargo build --release
+        run: cargo build --release --locked
+
+  # Verify the workspace compiles on the declared MSRV. The version
+  # is read from Cargo.toml so the floor stays a single source of
+  # truth — bump rust-version there and this job follows it. `--locked`
+  # makes the committed lockfile part of the contract.
+  msrv:
+    name: cargo check (MSRV)
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - name: Resolve MSRV from Cargo.toml
+        id: msrv
+        run: |
+          set -euo pipefail
+          msrv=$(grep -m1 '^rust-version' Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
+          echo "Declared MSRV: ${msrv}"
+          echo "version=${msrv}" >> "${GITHUB_OUTPUT}"
+      - name: Install MSRV toolchain
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          rustup default "${{ steps.msrv.outputs.version }}"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - name: cargo check --locked on MSRV
+        run: cargo check --workspace --all-targets --locked
+
+  # Supply-chain gate: RUSTSEC advisories, license policy, banned /
+  # duplicate crates, and source provenance. Policy lives in
+  # deny.toml; reproduce locally with `cargo deny check`.
+  cargo-deny:
+    name: cargo-deny
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  # Spellcheck source, comments, and docs. Allow-list of project
+  # nouns lives in _typos.toml; reproduce locally with `typos`.
+  typos:
+    name: typos
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: crate-ci/typos@master
 
   # Smoke build the full release wheel matrix on every PR so a
   # cross-compile or platform-specific maturin failure is caught
@@ -382,6 +439,9 @@ jobs:
     if: ${{ !cancelled() }}
     needs:
       - rust
+      - msrv
+      - cargo-deny
+      - typos
       - wheels
       - smoke-test-binary
       - install-script-smoke

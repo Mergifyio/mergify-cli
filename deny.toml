@@ -1,0 +1,41 @@
+# cargo-deny supply-chain policy for the workspace.
+# Reproduce CI locally with `cargo deny check`.
+
+[advisories]
+# RUSTSEC advisory database. A yanked crate in the lockfile is a
+# hard fail — it signals the resolved version was pulled.
+yanked = "deny"
+
+[bans]
+# Duplicate versions of a crate are usually a feature/version-drift
+# symptom; surface them as a warning rather than blocking, since a
+# transitive diamond is often out of our hands.
+multiple-versions = "warn"
+# A wildcard ("*") version on a third-party crate is never
+# intentional — but the workspace's own path deps have no version
+# requirement and would register as wildcards, so exempt them.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[licenses]
+# SPDX identifiers we accept for anything we redistribute. Keep this
+# list tight; add an entry (with the crate that needs it) rather than
+# loosening confidence-threshold.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "MIT-0",                 # borrow-or-share (via jsonschema)
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",   # webpki-root-certs (via rustls)
+    "Zlib",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+# crates.io only — no git or alternative registries slip in unnoticed.
+unknown-registry = "deny"
+unknown-git = "deny"
