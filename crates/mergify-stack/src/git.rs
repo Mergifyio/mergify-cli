@@ -90,13 +90,29 @@ pub fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<PathBuf, CliErro
 /// to dispatch back into the rebase-todo rewriter without
 /// spawning a real interactive editor (or falling through to
 /// it when the caller wants the user in the loop).
+///
+/// `reapply_cherry_picks` maps to git's `--reapply-cherry-picks`;
+/// set it when the editor drops commits by SHA against a base
+/// that already contains their squash-merged equivalents.
 pub fn spawn_rebase(
     repo_dir: &Path,
     base: &str,
     sequence_editor: Option<&str>,
+    reapply_cherry_picks: bool,
 ) -> Result<(), CliError> {
     let mut cmd = git_cmd(Some(repo_dir));
-    cmd.args(["rebase", "-i", base]);
+    cmd.arg("rebase").arg("-i");
+    if reapply_cherry_picks {
+        // Keep commits whose patch-id already matches the base in
+        // the rebase todo. Git's default (`--no-reapply-cherry-picks`)
+        // silently omits them, which breaks callers that hand the
+        // rebase-todo rewriter an explicit drop list: the dropped
+        // SHAs would have no `pick` line left and the rewrite aborts.
+        // Letting them through keeps the drop editor the sole
+        // authority on what the rebase removes.
+        cmd.arg("--reapply-cherry-picks");
+    }
+    cmd.arg(base);
     if let Some(editor) = sequence_editor {
         cmd.env("GIT_SEQUENCE_EDITOR", editor);
     }
