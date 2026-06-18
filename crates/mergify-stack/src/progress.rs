@@ -444,12 +444,19 @@ impl Default for Progress {
 /// Render one row to a single line.
 ///
 /// A step row is just `glyph + label`. A PR row is `glyph [status]
-/// detail  url  title`, where `detail` (the dim SHA transition) is
-/// omitted when absent. With `cols = Some((status_w, url_w))` the
-/// status and url are space-padded to those widths so rows line up
-/// under each other (the live view). With `cols = None` the fields
-/// are tab-separated instead — keeps the piped transcript
-/// `cut -f`-able, where streaming can't align anyway. The whole
+/// detail  url  title`, where `detail` (the dim SHA transition) is a
+/// reserved column — a row without one keeps a blank slot rather than
+/// dropping the field, so the url and title hold a fixed position
+/// instead of sliding left: a display column in the live view, a
+/// stable `cut -f` field when piped (tabs can't align display columns
+/// once details differ in width). With
+/// `cols = Some((status_w, url_w, detail_w))` status, detail, and url
+/// are space-padded to those widths so rows line up under each other
+/// (the live view); the detail column collapses only when no row in
+/// the block carries one. With `cols = None` the same four fields are
+/// tab-separated instead — every PR row emits all four (empty
+/// detail/url included) so the piped transcript stays `cut -f`-able,
+/// where streaming can't align anyway. The whole
 /// line is truncated (tab-aware, Unicode-width-aware) to `width` so
 /// the cursor-up redraw never wraps; pass `usize::MAX` for the
 /// un-truncated transcript. Only the glyph and the `[status]`/detail
@@ -480,27 +487,29 @@ fn render_row(
             // field is just the title.
             let url = row.url.as_deref().unwrap_or("");
             let title = &row.title;
-            match cols {
-                // Aligned (live view): pad status, the SHA detail, and
-                // url to fixed columns so titles line up even across
-                // rows where some carry a detail and some don't. The
-                // detail column is dropped entirely when no row has one.
-                Some((status_w, url_w, detail_w)) => {
-                    if detail_w > 0 {
-                        let detail = row.detail.as_deref().unwrap_or("");
-                        format!(
-                            "    {glyph} {status:<status_w$}  {detail:<detail_w$}  {url:<url_w$}  {title}"
-                        )
-                    } else {
-                        format!("    {glyph} {status:<status_w$}  {url:<url_w$}  {title}")
-                    }
+            // Aligned (live view): pad status, the SHA detail, and url
+            // to fixed columns so titles line up even across rows where
+            // some carry a detail and some don't. The detail column is
+            // dropped entirely when no row has one.
+            if let Some((status_w, url_w, detail_w)) = cols {
+                if detail_w > 0 {
+                    let detail = row.detail.as_deref().unwrap_or("");
+                    format!(
+                        "    {glyph} {status:<status_w$}  {detail:<detail_w$}  {url:<url_w$}  {title}"
+                    )
+                } else {
+                    format!("    {glyph} {status:<status_w$}  {url:<url_w$}  {title}")
                 }
-                // Tab-separated (piped transcript): cut -f-able; no
-                // alignment since streaming can't align anyway.
-                None => match row.detail.as_deref() {
-                    Some(detail) => format!("    {glyph} {status}\t{detail}\t{url}\t{title}"),
-                    None => format!("    {glyph} {status}\t{url}\t{title}"),
-                },
+            } else {
+                // Tab-separated (piped transcript): always four fields —
+                // status, the SHA detail (empty when this row has none),
+                // url, title — so `cut -f` columns stay fixed and a
+                // detail-less row (a skip or an orphan delete) doesn't
+                // shift its url a field left of the create/update rows it
+                // streams beside. Mirrors the aligned view's reserved
+                // detail column.
+                let detail = row.detail.as_deref().unwrap_or("");
+                format!("    {glyph} {status}\t{detail}\t{url}\t{title}")
             }
         }
     };
@@ -610,7 +619,10 @@ mod tests {
     }
 
     #[test]
-    fn resolved_pr_row_is_tab_separated_status_url_title() {
+    fn resolved_pr_row_reserves_a_blank_detail_field() {
+        // Tab mode always emits status, detail, url, title; a row with
+        // no SHA detail keeps a blank field so its url stays in the
+        // same `cut -f` column as the create/update rows beside it.
         let r = pr_row(
             "fix(stack): restore prefix-match",
             "updated",
@@ -619,7 +631,7 @@ mod tests {
         );
         assert_eq!(
             render_row(&r, 0, usize::MAX, &plain(), None),
-            "    ✓ [updated]\thttps://example/pull/1618\tfix(stack): restore prefix-match"
+            "    ✓ [updated]\t\thttps://example/pull/1618\tfix(stack): restore prefix-match"
         );
     }
 
@@ -633,11 +645,11 @@ mod tests {
     }
 
     #[test]
-    fn pending_pr_row_has_an_empty_url_field() {
+    fn pending_pr_row_has_empty_detail_and_url_fields() {
         let r = pr_row("title", "queued", State::Pending, None);
         assert_eq!(
             render_row(&r, 0, usize::MAX, &plain(), None),
-            "    ◦ [queued]\t\ttitle"
+            "    ◦ [queued]\t\t\ttitle"
         );
     }
 
@@ -673,6 +685,33 @@ mod tests {
         r.detail = Some("old7→new7".to_string());
         let line = render_row(&r, 0, usize::MAX, &plain(), None);
         assert_eq!(line, "    ✓ [updated]\told7→new7\tu\tt");
+    }
+
+    #[test]
+    fn tab_mode_keeps_url_in_a_fixed_field_with_or_without_detail() {
+        // The reported regression: a created row carries a SHA detail,
+        // the orphan-delete row beside it carries none. Tab mode
+        // reserves the detail field on both, so the url stays the same
+        // `cut -f` field (field 3) rather than sliding a field left on
+        // the detail-less row.
+        let created = {
+            let mut r = pr_row("t", "created", State::Resolved(Mark::Done), Some("u1645"));
+            r.detail = Some("a649c67".to_string());
+            r
+        };
+        let deleted = pr_row("t", "deleted", State::Resolved(Mark::Noop), Some("u1644"));
+        let fields = |r: &Row| {
+            render_row(r, 0, usize::MAX, &plain(), None)
+                .split('\t')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let fc = fields(&created);
+        let fd = fields(&deleted);
+        assert_eq!(fc.len(), 4, "created: {fc:?}");
+        assert_eq!(fd.len(), 4, "deleted: {fd:?}");
+        assert_eq!((fc[1].as_str(), fc[2].as_str()), ("a649c67", "u1645"));
+        assert_eq!((fd[1].as_str(), fd[2].as_str()), ("", "u1644"));
     }
 
     #[test]
@@ -835,7 +874,7 @@ mod tests {
         let idx = p.add_pr("title", "queued", None, None);
         assert!(p.transcript.is_empty(), "pending must not record");
         p.resolve(idx, Mark::Done, Some("updated"));
-        assert_eq!(p.transcript, vec!["    ✓ [updated]\t\ttitle".to_string()]);
+        assert_eq!(p.transcript, vec!["    ✓ [updated]\t\t\ttitle".to_string()]);
     }
 
     #[test]
@@ -858,7 +897,7 @@ mod tests {
         p.resolve(idx, Mark::Done, Some("created"));
         assert_eq!(
             p.transcript,
-            vec!["    ✓ [created]\thttps://example/pull/1630\tnew pr".to_string()]
+            vec!["    ✓ [created]\t\thttps://example/pull/1630\tnew pr".to_string()]
         );
     }
 
