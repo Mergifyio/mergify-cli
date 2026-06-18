@@ -65,8 +65,15 @@ pub fn get_trunk(repo_dir: Option<&Path>) -> Result<Trunk, CliError> {
     }
 
     let (default_remote, default_branch) = get_default_remote_branch(repo_dir).map_err(|e| {
+        // Mirror Python's `get_trunk`: name the branch in a
+        // ready-to-run `git branch … --set-upstream-to=` hint so the
+        // user can fix the missing tracking without guessing the
+        // syntax. `<remote>/<branch>` stay literal — we couldn't
+        // resolve them, which is exactly why we're erroring.
         CliError::Generic(format!(
-            "can't detect the remote target branch for {current_branch}: {e}"
+            "can't detect the remote target branch for {current_branch}: {e}. \
+             Please set it with `git branch {current_branch} \
+             --set-upstream-to=<remote>/<branch>`"
         ))
     })?;
 

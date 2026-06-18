@@ -64,9 +64,11 @@ pub enum Outcome {
 ///
 /// Errors:
 /// - [`CliError::InvalidState`] for an empty message (inline `-m ""`
-///   or editor returning only comment lines), and for an
-///   ambiguous / missing Change-Id prefix match. Matches Python's
-///   `sys.exit(ExitCode.INVALID_STATE)` flow.
+///   or editor returning only comment lines) and for an ambiguous
+///   Change-Id prefix match (exit 7).
+/// - [`CliError::StackNotFound`] when a Change-Id prefix matches no
+///   commit in the stack (exit 3) — matches Python's
+///   `sys.exit(ExitCode.STACK_NOT_FOUND)`.
 /// - [`CliError::Generic`] for git invocation failures and editor
 ///   process errors.
 pub fn run(
@@ -183,19 +185,22 @@ fn resolve_change_id_prefix(repo_dir: Option<&Path>, prefix: &str) -> Result<Str
         .filter(|c| c.change_id.starts_with(prefix))
         .collect();
     match matches.as_slice() {
-        [] => Err(CliError::InvalidState(format!(
-            "no commit found matching Change-Id prefix '{prefix}'"
-        ))),
+        [] => Err(crate::match_commit::not_found("Change-Id", prefix)),
         [only] => Ok(only.commit_sha.clone()),
         many => {
-            let listing = many
+            let candidates: Vec<crate::match_commit::Candidate<'_>> = many
                 .iter()
-                .map(|c| format!("{} {}", &c.commit_sha[..7], c.title))
-                .collect::<Vec<_>>()
-                .join("\n  ");
-            Err(CliError::InvalidState(format!(
-                "Change-Id prefix '{prefix}' matches multiple commits:\n  {listing}"
-            )))
+                .map(|c| crate::match_commit::Candidate {
+                    commit_sha: &c.commit_sha,
+                    title: &c.title,
+                    change_id: &c.change_id,
+                })
+                .collect();
+            Err(crate::match_commit::ambiguous(
+                "Change-Id",
+                prefix,
+                &candidates,
+            ))
         }
     }
 }
@@ -604,7 +609,7 @@ mod tests {
         )
         .unwrap_err();
         match err {
-            CliError::InvalidState(m) => {
+            CliError::StackNotFound(m) => {
                 assert!(m.contains("no commit found matching Change-Id"), "got: {m}");
             }
             other => panic!("unexpected: {other:?}"),
