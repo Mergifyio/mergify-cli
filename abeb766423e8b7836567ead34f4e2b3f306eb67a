@@ -1,0 +1,1 @@
+ALL no longer hard-codes its length: an exit_codes! macro generates the enum, ALL, name(), and description() from one variant list, so a new variant can't drift out of the schema
