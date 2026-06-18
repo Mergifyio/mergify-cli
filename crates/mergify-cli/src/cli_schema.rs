@@ -7,10 +7,18 @@
 //! every field is sourced from a clap getter that the derive macro
 //! populates from the Rust doc comments and `#[arg]`/`#[command]`
 //! attributes — there is no hand-maintained docs metadata.
+//!
+//! The exit-code contract rides alongside the command tree: the
+//! top-level `exitCodes` block is sourced from [`mergify_core::ExitCode`]
+//! (the single source of truth, compat-tested), so it can't drift from
+//! the binary either. The per-command "which code can this command
+//! return" mapping is *not* introspectable and stays in the compat-test
+//! harness — it deliberately doesn't live here.
 
 use std::collections::BTreeSet;
 
 use clap::CommandFactory;
+use mergify_core::ExitCode;
 use serde::Serialize;
 
 use crate::CliRoot;
@@ -41,7 +49,15 @@ pub struct CliSchema {
     schema_version: u32,
     generator: &'static str,
     cli: CliInfo,
+    exit_codes: Vec<ExitCodeNode>,
     command: CommandNode,
+}
+
+#[derive(Serialize)]
+struct ExitCodeNode {
+    code: u8,
+    name: &'static str,
+    description: &'static str,
 }
 
 #[derive(Serialize)]
@@ -112,6 +128,15 @@ pub fn build() -> CliSchema {
     // can't drift from `cli.name`.
     let command = command_node(&root, vec![root.get_name().to_string()], &BTreeSet::new());
 
+    let exit_codes = ExitCode::ALL
+        .iter()
+        .map(|code| ExitCodeNode {
+            code: code.as_u8(),
+            name: code.name(),
+            description: code.description(),
+        })
+        .collect();
+
     CliSchema {
         schema_version: SCHEMA_VERSION,
         generator: "mergify _internal dump-cli-schema",
@@ -120,6 +145,7 @@ pub fn build() -> CliSchema {
             version: crate::VERSION,
             about: root.get_about().map(ToString::to_string),
         },
+        exit_codes,
         command,
     }
 }
