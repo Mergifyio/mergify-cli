@@ -131,7 +131,10 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         let merged_shas: Vec<String> = status.merged.iter().map(|m| m.commit_sha.clone()).collect();
         let editor = build_drop_editor(opts.mergify_binary, &merged_shas);
         let trunk_ref_owned = trunk_ref.clone();
-        spawn_rebase(&repo_dir, &trunk_ref_owned, Some(&editor))?;
+        // Trunk already carries the squash-merged equivalents of the
+        // commits we're dropping, so they must stay in the todo for
+        // the drop editor to find them — see `spawn_rebase`.
+        spawn_rebase(&repo_dir, &trunk_ref_owned, Some(&editor), true)?;
     }
     Ok(Outcome::Synced {
         status,
