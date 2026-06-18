@@ -1,0 +1,1 @@
+Address Copilot review: reword the tab-mode docstring to promise a stable cut -f field (not a display column), and assert tab field positions directly in the regression test.
