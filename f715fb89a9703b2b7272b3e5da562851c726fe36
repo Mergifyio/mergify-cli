@@ -1,0 +1,1 @@
+address code-review findings: terminal-height + unicode-width robustness, reuse mergify-tui Theme, RowKind/Mark::Merged typing, dedup helpers (spawn_git_blocking/run_optional/compute_base), fix sync double-fetch + rebase error UX, restore SHA detail as an aligned column
