@@ -226,5 +226,5 @@ fn spawn_squash_rebase(
         editor.push_str(" --command ");
         editor.push_str(&shell_quote(cmd));
     }
-    spawn_rebase(repo_dir, base, Some(&editor))
+    spawn_rebase(repo_dir, base, Some(&editor), false)
 }

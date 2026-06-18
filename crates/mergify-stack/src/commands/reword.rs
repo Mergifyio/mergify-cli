@@ -110,7 +110,7 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     } else {
         build_sequence_editor_reword(opts.mergify_binary, &target.sha)
     };
-    spawn_rebase(&repo_dir, &base, Some(&editor))?;
+    spawn_rebase(&repo_dir, &base, Some(&editor), false)?;
     Ok(Outcome::Reworded { plan })
 }
 

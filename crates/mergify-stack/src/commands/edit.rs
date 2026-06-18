@@ -77,7 +77,7 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     let base = run_git_capture(Some(&repo_dir), &["merge-base", &trunk.refspec(), "HEAD"])?;
 
     let Some(commit_prefix) = opts.commit_prefix else {
-        spawn_rebase(&repo_dir, &base, None)?;
+        spawn_rebase(&repo_dir, &base, None, false)?;
         return Ok(Outcome::InteractiveCompleted);
     };
 
@@ -98,7 +98,7 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         subject = target.subject
     );
     let editor = build_sequence_editor(opts.mergify_binary, &target.sha);
-    spawn_rebase(&repo_dir, &base, Some(&editor))?;
+    spawn_rebase(&repo_dir, &base, Some(&editor), false)?;
 
     Ok(Outcome::PausedAt { commit: target })
 }

@@ -102,7 +102,7 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
 
     let shas: Vec<String> = resolved.iter().map(|c| c.sha.clone()).collect();
     let editor = build_sequence_editor(opts.mergify_binary, &shas);
-    spawn_rebase(&repo_dir, &base, Some(&editor))?;
+    spawn_rebase(&repo_dir, &base, Some(&editor), false)?;
     Ok(Outcome::Dropped { plan })
 }
 
