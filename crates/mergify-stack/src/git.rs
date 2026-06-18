@@ -8,6 +8,7 @@
 //! captured stderr" mapping so the per-command modules don't have
 //! to maintain their own slight variations of each helper.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -94,11 +95,38 @@ pub fn resolve_repo_toplevel(repo_dir: Option<&Path>) -> Result<PathBuf, CliErro
 /// `reapply_cherry_picks` maps to git's `--reapply-cherry-picks`;
 /// set it when the editor drops commits by SHA against a base
 /// that already contains their squash-merged equivalents.
+///
+/// Inherits the terminal — git's rebase progress prints live. Use
+/// [`spawn_rebase_captured`] when a progress spinner owns the
+/// terminal and git's output would corrupt the in-place redraw.
 pub fn spawn_rebase(
     repo_dir: &Path,
     base: &str,
     sequence_editor: Option<&str>,
     reapply_cherry_picks: bool,
+) -> Result<(), CliError> {
+    spawn_rebase_inner(repo_dir, base, sequence_editor, reapply_cherry_picks, false)
+}
+
+/// Like [`spawn_rebase`] but captures git's output instead of
+/// letting it reach the terminal — for spinner-driven rebases. On
+/// success the output is discarded; on failure it's flushed to the
+/// real streams first so a conflict is never swallowed.
+pub fn spawn_rebase_captured(
+    repo_dir: &Path,
+    base: &str,
+    sequence_editor: Option<&str>,
+    reapply_cherry_picks: bool,
+) -> Result<(), CliError> {
+    spawn_rebase_inner(repo_dir, base, sequence_editor, reapply_cherry_picks, true)
+}
+
+fn spawn_rebase_inner(
+    repo_dir: &Path,
+    base: &str,
+    sequence_editor: Option<&str>,
+    reapply_cherry_picks: bool,
+    capture: bool,
 ) -> Result<(), CliError> {
     let mut cmd = git_cmd(Some(repo_dir));
     cmd.arg("rebase").arg("-i");
@@ -116,22 +144,101 @@ pub fn spawn_rebase(
     if let Some(editor) = sequence_editor {
         cmd.env("GIT_SEQUENCE_EDITOR", editor);
     }
-    let status = cmd
-        .status()
-        .map_err(|e| CliError::Generic(format!("failed to spawn `git rebase -i`: {e}")))?;
-    if !status.success() {
-        // A non-zero `git rebase -i` almost always means conflicts.
-        // Surface the recovery steps and map to the dedicated
-        // Conflict exit code (4) so scripts can branch on it — same
-        // contract as the Python `run_scripted_rebase`.
-        return Err(CliError::Conflict(
-            "rebase failed — there may be conflicts\n\
-             Resolve conflicts then run: git rebase --continue\n\
-             Or abort the rebase with: git rebase --abort"
-                .to_string(),
-        ));
+
+    let (success, stderr) = if capture {
+        // Null stdin so a mid-rebase prompt (e.g. an unexpected
+        // interactive editor invocation) fails fast instead of
+        // blocking invisibly behind the progress spinner that owns
+        // the terminal.
+        cmd.stdin(std::process::Stdio::null());
+        let output = cmd
+            .output()
+            .map_err(|e| CliError::Generic(format!("failed to spawn `git rebase -i`: {e}")))?;
+        if !output.status.success() {
+            // The spinner suppressed git's output, so replay it now
+            // that we've hit a failure and the user needs to see it.
+            let _ = std::io::stdout().write_all(&output.stdout);
+            let _ = std::io::stderr().write_all(&output.stderr);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        (output.status.success(), stderr)
+    } else {
+        let success = cmd
+            .status()
+            .map_err(|e| CliError::Generic(format!("failed to spawn `git rebase -i`: {e}")))?
+            .success();
+        (success, String::new())
+    };
+
+    if !success {
+        if rebase_in_progress(repo_dir) {
+            // An interrupted rebase left a `rebase-merge`/`rebase-apply`
+            // state dir — this is the conflict case. Surface the
+            // recovery steps and map to the dedicated Conflict exit
+            // code (4) so scripts can branch on it — same contract as
+            // the Python `run_scripted_rebase`.
+            return Err(CliError::Conflict(
+                "rebase failed — there may be conflicts\n\
+                 Resolve conflicts then run: git rebase --continue\n\
+                 Or abort the rebase with: git rebase --abort"
+                    .to_string(),
+            ));
+        }
+        // No rebase in progress: git failed before/while starting
+        // (bad base, todo-editor error, …). The continue/abort advice
+        // would be misleading, so report the failure plainly.
+        return Err(CliError::Generic(if stderr.is_empty() {
+            "git rebase failed".to_string()
+        } else {
+            format!("git rebase failed: {stderr}")
+        }));
     }
     Ok(())
+}
+
+/// Whether an interrupted rebase left a state directory under the
+/// repo's git dir. Distinguishes a real conflict (recoverable with
+/// `--continue`/`--abort`) from a rebase that failed before it
+/// started, which has no such state.
+fn rebase_in_progress(repo_dir: &Path) -> bool {
+    let git_dir = run_git_capture(Some(repo_dir), &["rev-parse", "--git-dir"])
+        .map_or_else(|_| repo_dir.join(".git"), PathBuf::from);
+    // `git rev-parse --git-dir` may return a path relative to
+    // `repo_dir`; resolve it against the repo so the existence check
+    // works regardless of the process CWD.
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        repo_dir.join(git_dir)
+    };
+    git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
+}
+
+/// Base commit SHA of the stack: the merge-base between the trunk
+/// ref and `HEAD`.
+///
+/// `--fork-point` is the precise answer when the reflog has history;
+/// falls back to a plain merge-base for fresh clones / CI sandboxes
+/// where the reflog is empty. An empty result from both is a
+/// [`CliError::StackNotFound`] — the branch shares no history with
+/// the trunk.
+pub fn compute_base_commit_sha(
+    repo_dir: &Path,
+    trunk_ref: &str,
+    dest_branch: &str,
+) -> Result<String, CliError> {
+    if let Ok(sha) = run_git_capture(Some(repo_dir), &["merge-base", "--fork-point", trunk_ref]) {
+        if !sha.is_empty() {
+            return Ok(sha);
+        }
+    }
+    let sha = run_git_capture(Some(repo_dir), &["merge-base", trunk_ref, "HEAD"])?;
+    if sha.is_empty() {
+        return Err(CliError::StackNotFound(format!(
+            "common commit between `{trunk_ref}` and `{dest_branch}` branches not found",
+        )));
+    }
+    Ok(sha)
 }
 
 /// POSIX shell single-quote a value so it survives substitution
@@ -171,11 +278,136 @@ mod tests {
         dir
     }
 
+    fn capture(path: &Path, args: &[&str]) -> String {
+        run_git_capture(Some(path), args).unwrap()
+    }
+
+    /// A repo whose trunk already carries the squash-merged
+    /// equivalent of a stacked commit. Returns `(dir, [base_sha,
+    /// reapplied_sha, kept_sha])`:
+    ///
+    /// - `main` has `root` then `feat` (the squash-merge landing).
+    /// - `feature` branches off `root`, re-adds the same patch as
+    ///   `feat` (so its patch-id matches what's now on `main`), then
+    ///   adds a distinct `extra` commit on top.
+    ///
+    /// Rebasing `feature` onto `main` therefore needs
+    /// `--reapply-cherry-picks` to keep the cherry-picked commit in
+    /// the todo, or the drop editor has nothing to drop.
+    fn squash_merged_repo() -> (TempDir, String, String, String) {
+        let dir = init_repo();
+        let p = dir.path().to_path_buf();
+        let root = capture(&p, &["rev-parse", "HEAD"]);
+
+        // The patch that gets both squash-merged to main and
+        // re-created on the feature branch.
+        std::fs::write(p.join("feat.txt"), "feature\n").unwrap();
+        run(&p, &["add", "feat.txt"]);
+        run(&p, &["commit", "-q", "-m", "feat"]);
+
+        // Feature branch off root: re-apply the same patch, then a
+        // distinct commit.
+        run(&p, &["checkout", "-q", "-b", "feature", &root]);
+        std::fs::write(p.join("feat.txt"), "feature\n").unwrap();
+        run(&p, &["add", "feat.txt"]);
+        run(&p, &["commit", "-q", "-m", "feat (reapplied)"]);
+        let reapplied = capture(&p, &["rev-parse", "HEAD"]);
+        std::fs::write(p.join("extra.txt"), "extra\n").unwrap();
+        run(&p, &["add", "extra.txt"]);
+        run(&p, &["commit", "-q", "-m", "extra"]);
+        let kept = capture(&p, &["rev-parse", "HEAD"]);
+
+        (dir, root, reapplied, kept)
+    }
+
     #[test]
     fn run_git_capture_returns_trimmed_stdout() {
         let dir = init_repo();
         let out = run_git_capture(Some(dir.path()), &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(out.len(), 40, "SHA1 hex without trailing newline");
+    }
+
+    /// Build a sequence editor that copies the rebase todo it's
+    /// handed to `todo_copy`, then deletes the reapplied commit's
+    /// line so the rebase can complete. Lets a test both assert on
+    /// the todo git produced AND drive the drop.
+    fn capturing_drop_editor(todo_copy: &Path) -> String {
+        // `$1` is the todo path git passes to the editor.
+        let copy = todo_copy.to_string_lossy();
+        format!("sh -c 'cp \"$1\" \"{copy}\"; sed -i.bak \"/feat (reapplied)/d\" \"$1\"' --")
+    }
+
+    #[test]
+    fn captured_rebase_drops_squash_merged_commit_via_reapply_cherry_picks() {
+        // Regression guard for `--reapply-cherry-picks` on the
+        // captured (quiet) rebase path. The flag forces git to keep
+        // the cherry-picked (already-on-trunk) commit in the todo so
+        // the drop editor has a line to remove; the test asserts the
+        // todo contained that line and the commit was dropped while
+        // the distinct `extra` commit survived.
+        let (dir, _root, _reapplied, kept) = squash_merged_repo();
+        let p = dir.path();
+        let todo = p.join("captured-todo");
+        let editor = capturing_drop_editor(&todo);
+
+        spawn_rebase_captured(p, "main", Some(&editor), true).unwrap();
+
+        let todo_text = std::fs::read_to_string(&todo).unwrap();
+        assert!(
+            todo_text.contains("feat (reapplied)"),
+            "--reapply-cherry-picks must keep the cherry-picked commit \
+             in the todo, else there's nothing to drop:\n{todo_text}"
+        );
+        let subjects = capture(p, &["log", "--format=%s", "main..HEAD"]);
+        assert!(
+            subjects.contains("extra"),
+            "kept commit survives: {subjects}"
+        );
+        assert!(
+            !subjects.contains("feat (reapplied)"),
+            "squash-merged commit dropped: {subjects}"
+        );
+        assert_ne!(capture(p, &["rev-parse", "HEAD"]), kept);
+    }
+
+    #[test]
+    fn captured_rebase_without_reapply_omits_cherry_picked_from_todo() {
+        // The negative side of the guard: dropping
+        // `--reapply-cherry-picks` makes git silently omit the
+        // already-on-trunk commit from the todo — so a drop editor
+        // keyed on it would find nothing. This is exactly the
+        // regression the positive test catches.
+        let (dir, _root, _reapplied, _kept) = squash_merged_repo();
+        let p = dir.path();
+        let todo = p.join("captured-todo");
+        let editor = capturing_drop_editor(&todo);
+
+        spawn_rebase_captured(p, "main", Some(&editor), false).unwrap();
+
+        let todo_text = std::fs::read_to_string(&todo).unwrap();
+        assert!(
+            !todo_text.contains("feat (reapplied)"),
+            "without --reapply-cherry-picks the cherry-picked commit \
+             must be absent from the todo:\n{todo_text}"
+        );
+    }
+
+    #[test]
+    fn rebase_failure_without_conflict_is_generic_not_conflict() {
+        // A rebase that fails before it starts (here: an
+        // unresolvable base) must not hand back the conflict
+        // continue/abort advice — there is no rebase in progress to
+        // continue.
+        let dir = init_repo();
+        let err = spawn_rebase_captured(dir.path(), "no-such-base", None, false).unwrap_err();
+        match err {
+            CliError::Generic(msg) => {
+                assert!(msg.contains("rebase failed"), "got: {msg}");
+            }
+            other => panic!("expected Generic, got: {other:?}"),
+        }
+        // No rebase state dir was left behind.
+        assert!(!rebase_in_progress(dir.path()));
     }
 
     #[test]

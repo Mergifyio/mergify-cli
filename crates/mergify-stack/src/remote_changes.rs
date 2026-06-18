@@ -69,6 +69,21 @@ pub async fn get_remote_changes(
     stack_prefix: &str,
     author: &str,
 ) -> Result<Vec<RemoteChange>, CliError> {
+    get_remote_changes_reporting(client, user, repo, stack_prefix, author, |_| {}).await
+}
+
+/// Same as [`get_remote_changes`], but calls `on_pull` with each
+/// pull-request number just before fetching it — so a caller can
+/// surface per-pull progress through the otherwise-silent
+/// sequential fetch loop.
+pub async fn get_remote_changes_reporting(
+    client: &Client,
+    user: &str,
+    repo: &str,
+    stack_prefix: &str,
+    author: &str,
+    mut on_pull: impl FnMut(u64),
+) -> Result<Vec<RemoteChange>, CliError> {
     let q = format!("repo:{user}/{repo} author:{author} is:pull-request head:{stack_prefix}/");
     let search: SearchResponse = client
         .get_with_query(
@@ -87,6 +102,7 @@ pub async fn get_remote_changes(
     // each = a few seconds for the largest realistic stacks).
     let mut pulls: Vec<serde_json::Value> = Vec::with_capacity(search.items.len());
     for item in &search.items {
+        on_pull(item.number);
         let path = format!("/repos/{user}/{repo}/pulls/{number}", number = item.number);
         let pull: serde_json::Value = client.get(&path).await?;
         pulls.push(pull);
