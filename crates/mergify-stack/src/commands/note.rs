@@ -236,7 +236,8 @@ fn read_note_from_editor() -> Result<String, CliError> {
     let status = invoke_editor(&editor, path.to_string_lossy().as_ref())?;
     if !status.success() {
         return Err(CliError::Generic(format!(
-            "editor {editor:?} exited with status {status:?}"
+            "editor {} exited with status {status:?}",
+            editor.display()
         )));
     }
 

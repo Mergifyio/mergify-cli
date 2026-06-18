@@ -227,10 +227,10 @@ pub fn compute_base_commit_sha(
     trunk_ref: &str,
     dest_branch: &str,
 ) -> Result<String, CliError> {
-    if let Ok(sha) = run_git_capture(Some(repo_dir), &["merge-base", "--fork-point", trunk_ref]) {
-        if !sha.is_empty() {
-            return Ok(sha);
-        }
+    if let Ok(sha) = run_git_capture(Some(repo_dir), &["merge-base", "--fork-point", trunk_ref])
+        && !sha.is_empty()
+    {
+        return Ok(sha);
     }
     let sha = run_git_capture(Some(repo_dir), &["merge-base", trunk_ref, "HEAD"])?;
     if sha.is_empty() {

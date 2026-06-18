@@ -195,12 +195,13 @@ pub async fn run(
     // non-zero but the JUnit report has no failures, the runner
     // probably crashed — fail loudly so the user knows the report
     // is incomplete.
-    if let Some(exit_code) = test_exit_code {
-        if exit_code != 0 && nb_failures == 0 {
-            write_silent_failure(&mut report, exit_code);
-            emit(output, &report)?;
-            return Ok(ExitCode::GenericError);
-        }
+    if let Some(exit_code) = test_exit_code
+        && exit_code != 0
+        && nb_failures == 0
+    {
+        write_silent_failure(&mut report, exit_code);
+        emit(output, &report)?;
+        return Ok(ExitCode::GenericError);
     }
 
     // ── Verdict.
