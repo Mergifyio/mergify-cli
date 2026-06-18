@@ -132,10 +132,10 @@ fn row_for(freeze: &ScheduledFreeze, now: DateTime<Utc>) -> [String; 6] {
 fn format_conditions(matching: &[String], exclude: &[String]) -> String {
     let mut out = matching.join(", ");
     if !exclude.is_empty() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str("(exclude: ");
+        // Python always prefixes " (exclude: …)" with a leading
+        // space (`conditions += f" (exclude: …)"`), so an
+        // exclude-only cell keeps the leading space too.
+        out.push_str(" (exclude: ");
         out.push_str(&exclude.join(", "));
         out.push(')');
     }
@@ -466,10 +466,11 @@ mod tests {
 
     #[test]
     fn format_conditions_exclude_only() {
-        // Edge case the Python format produces a leading space-free
-        // `(exclude: …)`. Mirror that.
+        // Python emits a leading space before `(exclude: …)` even
+        // when there are no matching conditions (`conditions += f"
+        // (exclude: …)"` on an empty string). Mirror that.
         let m: Vec<String> = vec![];
         let e = vec!["label=hotfix".to_string()];
-        assert_eq!(format_conditions(&m, &e), "(exclude: label=hotfix)");
+        assert_eq!(format_conditions(&m, &e), " (exclude: label=hotfix)");
     }
 }

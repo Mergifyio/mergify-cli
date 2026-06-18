@@ -87,6 +87,16 @@ pub fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     }
 
     let target = match_commit(commit_prefix, &commits)?;
+    // Print the editing notice *before* spawning the rebase so it
+    // precedes git's interactive-rebase output, matching Python's
+    // ordering (`console.print` then `_run_edit_rebase`). The
+    // "Amend the commit…" hint is printed by the caller after the
+    // rebase pauses.
+    let short = &target.sha[..target.sha.len().min(12)];
+    println!(
+        "Editing commit: {short} {subject}",
+        subject = target.subject
+    );
     let editor = build_sequence_editor(opts.mergify_binary, &target.sha);
     spawn_rebase(&repo_dir, &base, Some(&editor))?;
 
