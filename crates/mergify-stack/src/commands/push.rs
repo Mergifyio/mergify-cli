@@ -687,7 +687,15 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         prog.note(note);
     }
     // Real-push streams live; the buffered transcript is unused.
-    let _ = prog.finish("Finished.");
+    // When nothing reached the remote — no branch pushed, no orphan
+    // deleted — the stack already matched GitHub. A preceding rebase
+    // only rewrote local refs, so it still reports as up to date.
+    let closing = if pushed == 0 && planned.orphans.is_empty() {
+        "Already up to date."
+    } else {
+        "Finished."
+    };
+    let _ = prog.finish(closing);
 
     Ok(Outcome::Pushed {
         planned,
