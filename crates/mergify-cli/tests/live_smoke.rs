@@ -4,13 +4,20 @@
 //! Each test fires when the real API's URL, auth, or wire format
 //! diverges from what the CLI expects. API-hitting tests skip
 //! (early-return with a `SKIP:` line) unless their token
-//! (`LIVE_TEST_MERGIFY_TOKEN_CI` or `_ADMIN`) is set in the env;
-//! locally-evaluated tests run unconditionally. Driven by
+//! (`LIVE_TEST_MERGIFY_TOKEN_CI` or `_ADMIN`) is set in the env, and
+//! also skip (via the `cli_live!` macro) when a call exceeds
+//! `CLI_TIMEOUT` — a timeout against the live endpoint means the API
+//! is unreachable, an environment problem rather than a CLI
+//! regression, so it must not turn the suite red. Locally-evaluated
+//! tests run unconditionally and still fail hard on a hang. Driven by
 //! `.github/workflows/func-tests-live.yaml` on every PR.
 //!
-//! Implementation deliberately mirrors the Python version 1:1 —
-//! same scrubbed env list, same assertion messages, same fixture
-//! shape — so the port can't drift the contract by accident.
+//! Implementation mirrors the Python version closely — same scrubbed
+//! env list, same assertion messages, same fixture shape — so the
+//! port can't drift the contract by accident. The one deliberate
+//! divergence: Python's `subprocess.run(timeout=30)` raises on
+//! timeout, whereas here a live-call timeout skips, so a transient API
+//! outage doesn't fail CI across every PR at once.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -103,7 +110,33 @@ fn cli(args: &[&str]) -> CliResult {
 /// Tests that need to drop a config file before invoking the CLI
 /// (e.g. `ci_scopes_select_all_when_no_base`) pass `cwd` so the
 /// CLI runs inside the directory holding that file.
+///
+/// Panics on timeout — for a local, non-API command a hang is a real
+/// bug, not an environment blip. API-hitting tests use the `cli_live!`
+/// macro (over [`run_cli`]) instead, which skips on timeout.
 fn cli_with(args: &[&str], extra_env: &[(&str, &str)], cwd: Option<&Path>) -> CliResult {
+    run_cli(args, extra_env, cwd)
+        .unwrap_or_else(|| panic!("mergify {args:?} exceeded {CLI_TIMEOUT:?}"))
+}
+
+/// Run `mergify <args>` with a scrubbed env and a fresh tmp cwd,
+/// returning `None` when the CLI exceeds [`CLI_TIMEOUT`] instead of
+/// panicking. A timeout against a live endpoint means the API is
+/// unreachable — an environment problem, not a CLI bug — so the
+/// API-hitting tests skip on `None` (via `cli_live!`) and the cleanup
+/// guards warn on it, rather than failing CI on a transient outage.
+///
+/// Mirrors Python `conftest.py::cli`: closes stdin so an accidental
+/// interactive prompt fails fast instead of blocking; caps wall-clock
+/// at [`CLI_TIMEOUT`] so a pathological hang doesn't drag the CI
+/// matrix down with it.
+///
+/// **Concurrency.** Cargo's stock test harness runs every `#[test]`
+/// in this binary in a single process across a thread pool (default =
+/// number of CPUs). A shared CWD or shared tempdir would let parallel
+/// tests race on filesystem state, so each call allocates its own
+/// `TempDir` that lives only for the duration of the call.
+fn run_cli(args: &[&str], extra_env: &[(&str, &str)], cwd: Option<&Path>) -> Option<CliResult> {
     let scrub: HashSet<&str> = CI_ENV_VARS.iter().copied().collect();
     let mut cmd = Command::new(mergify_binary());
     cmd.args(args)
@@ -133,15 +166,14 @@ fn cli_with(args: &[&str], extra_env: &[(&str, &str)], cwd: Option<&Path>) -> Cl
     let mut child = cmd
         .spawn()
         .unwrap_or_else(|e| panic!("spawn mergify {args:?}: {e}"));
-    let pid = child.id();
-    // `wait_timeout` keeps the test from hanging forever on a
-    // hung binary. On timeout we kill the process and surface a
-    // clear panic rather than letting cargo's own timeout (longer
-    // and less specific) absorb it.
+    // `wait_timeout` keeps the test from hanging forever on a hung
+    // binary or an unreachable API. On timeout we kill the process and
+    // return `None` so the caller can skip (API tests) or warn
+    // (cleanup guards) instead of treating it as a hard failure.
     let Some(status) = wait_timeout(&mut child, CLI_TIMEOUT) else {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("mergify {args:?} exceeded {CLI_TIMEOUT:?} (pid {pid})");
+        return None;
     };
     let mut stdout = String::new();
     let mut stderr = String::new();
@@ -153,14 +185,34 @@ fn cli_with(args: &[&str], extra_env: &[(&str, &str)], cwd: Option<&Path>) -> Cl
         use std::io::Read;
         let _ = s.read_to_string(&mut stderr);
     }
-    CliResult {
+    Some(CliResult {
         // `code()` is `None` on signal termination; surface it as
         // a sentinel exit so assertions still produce a useful
         // error message instead of unwrap-panicking on `None`.
         returncode: status.code().unwrap_or(-1),
         stdout,
         stderr,
-    }
+    })
+}
+
+/// Run a CLI command that hits the live API; on timeout the API is
+/// unreachable, so log a `SKIP:` line and early-return the test
+/// (cargo has no skip outcome, so an early return counts as pass)
+/// rather than failing CI on a transient outage. Returns a
+/// [`CliResult`] when the command completed in time.
+macro_rules! cli_live {
+    ($args:expr) => {
+        match run_cli($args, &[], None) {
+            Some(result) => result,
+            None => {
+                eprintln!(
+                    "SKIP: live API unreachable — `mergify {:?}` exceeded {CLI_TIMEOUT:?}",
+                    $args
+                );
+                return;
+            }
+        }
+    };
 }
 
 /// Poll [`Child::try_wait`] up to `timeout`. `std` doesn't ship
@@ -240,16 +292,23 @@ struct UnpauseOnDrop<'a> {
 }
 impl Drop for UnpauseOnDrop<'_> {
     fn drop(&mut self) {
-        let unpause = cli(&[
-            "queue",
-            "unpause",
-            "--api-url",
-            API_URL,
-            "--token",
-            self.token,
-            "--repository",
-            REPOSITORY,
-        ]);
+        let Some(unpause) = run_cli(
+            &[
+                "queue",
+                "unpause",
+                "--api-url",
+                API_URL,
+                "--token",
+                self.token,
+                "--repository",
+                REPOSITORY,
+            ],
+            &[],
+            None,
+        ) else {
+            eprintln!("WARNING: cleanup unpause timed out (live API unreachable)");
+            return;
+        };
         if unpause.returncode != 0 {
             eprintln!("WARNING: cleanup unpause failed{}", unpause.context());
         }
@@ -273,19 +332,26 @@ struct DeleteFreezeOnDrop<'a> {
 }
 impl Drop for DeleteFreezeOnDrop<'_> {
     fn drop(&mut self) {
-        let delete = cli(&[
-            "freeze",
-            "--api-url",
-            API_URL,
-            "--token",
-            self.token,
-            "--repository",
-            REPOSITORY,
-            "delete",
-            self.freeze_id,
-            "--reason",
-            &format!("{}-cleanup", self.reason),
-        ]);
+        let Some(delete) = run_cli(
+            &[
+                "freeze",
+                "--api-url",
+                API_URL,
+                "--token",
+                self.token,
+                "--repository",
+                REPOSITORY,
+                "delete",
+                self.freeze_id,
+                "--reason",
+                &format!("{}-cleanup", self.reason),
+            ],
+            &[],
+            None,
+        ) else {
+            eprintln!("WARNING: freeze cleanup delete timed out (live API unreachable)");
+            return;
+        };
         if delete.returncode != 0 {
             eprintln!("WARNING: freeze cleanup delete failed{}", delete.context());
         }
@@ -317,7 +383,7 @@ fn queue_pause_unpause_roundtrip() {
     // just refreshes the reason.
     let token = skip_if_unset!(live_admin_token());
 
-    let pause = cli(&[
+    let pause = cli_live!(&[
         "queue",
         "pause",
         "--api-url",
@@ -361,7 +427,7 @@ fn queue_status() {
     // group); clap accepts both orders via `global = true`. Put
     // them on the group so the same invocation shape works
     // against both ends of the port.
-    let result = cli(&[
+    let result = cli_live!(&[
         "queue",
         "--api-url",
         API_URL,
@@ -408,7 +474,7 @@ fn queue_show_not_in_queue() {
     // or schema drift.
     let token = skip_if_unset!(live_admin_token());
 
-    let result = cli(&[
+    let result = cli_live!(&[
         "queue",
         "--api-url",
         API_URL,
@@ -451,7 +517,7 @@ fn freeze_list() {
     // auth, and the array shape of the `--json` output.
     let token = skip_if_unset!(live_admin_token());
 
-    let result = cli(&[
+    let result = cli_live!(&[
         "freeze",
         "--api-url",
         API_URL,
@@ -523,7 +589,7 @@ fn freeze_create_update_delete_roundtrip() {
     };
     let reason = format!("func-tests-live-smoke-{suffix}");
 
-    let create = cli(&[
+    let create = cli_live!(&[
         "freeze",
         "--api-url",
         API_URL,
@@ -574,7 +640,7 @@ fn freeze_create_update_delete_roundtrip() {
     };
 
     let updated_reason = format!("{reason}-updated");
-    let update = cli(&[
+    let update = cli_live!(&[
         "freeze",
         "--api-url",
         API_URL,
@@ -690,7 +756,7 @@ fn scopes_send() {
     // `POST /v1/repos/{owner}/{repo}/pulls/{n}/scopes`.
     let token = skip_if_unset!(live_token());
 
-    let result = cli(&[
+    let result = cli_live!(&[
         "ci",
         "scopes-send",
         "--api-url",
@@ -723,7 +789,7 @@ fn tests_show_no_match() {
     // `{"tests": []}` payload on stdout.
     let token = skip_if_unset!(live_token());
 
-    let result = cli(&[
+    let result = cli_live!(&[
         "tests",
         "show",
         "--api-url",
@@ -779,7 +845,7 @@ fn junit_process() {
 
     let junit_fixture = junit_fail_fixture();
     let junit_str = junit_fixture.to_string_lossy().into_owned();
-    let result = cli(&[
+    let result = cli_live!(&[
         "ci",
         "junit-process",
         "--api-url",
