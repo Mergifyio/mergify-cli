@@ -86,6 +86,7 @@ pub mod notes_push;
 pub mod plan;
 pub mod plan_display;
 pub mod pr_upsert;
+pub mod progress;
 pub mod push_helpers;
 pub mod rebase_log;
 pub mod rebase_todo;
