@@ -4216,6 +4216,17 @@ mod tests {
             std::collections::BTreeSet::from(["native"]),
             "expected only `native` stack subcommands",
         );
+
+        // The exit-code contract rides alongside the command tree,
+        // sourced from `mergify_core::ExitCode`. Pin the codes so a
+        // dropped or renumbered variant surfaces here.
+        let codes: Vec<u64> = v["exitCodes"]
+            .as_array()
+            .expect("exitCodes array")
+            .iter()
+            .map(|c| c["code"].as_u64().expect("code"))
+            .collect();
+        assert_eq!(codes, [0, 1, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]
