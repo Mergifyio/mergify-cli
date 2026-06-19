@@ -10,29 +10,29 @@ description = "Native implementation of `mergify ci` subcommands."
 publish = false
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
-flate2 = "1"
-getrandom = "0.4"
-glob = "0.3"
-globset = "0.4"
+chrono = { workspace = true }
+flate2 = { workspace = true }
+getrandom = { workspace = true }
+glob = { workspace = true }
+globset = { workspace = true }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
-prost = "0.14"
-quick-xml = "0.40"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml_ng = "0.10"
-tokio = { version = "1", default-features = false, features = ["rt"] }
-url = "2"
+opentelemetry-proto = { workspace = true }
+prost = { workspace = true }
+quick-xml = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 mergify-test-support = { path = "../mergify-test-support" }
-tempfile = "3.14"
-temp-env = { version = "0.3", features = ["async_closure"] }
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
-wiremock = "0.6"
+tempfile = { workspace = true }
+temp-env = { workspace = true, features = ["async_closure"] }
+tokio = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true
