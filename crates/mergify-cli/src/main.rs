@@ -841,43 +841,68 @@ fn quarantine_get_opts(args: TestsQuarantineGetCliArgs) -> TestsQuarantineGetOpt
     }
 }
 
-/// Empty-subcommand-list clap parser used only by
-/// [`dispatch_stack`]'s "unknown subcommand" fallback. Triggering
-/// it on `mergify stack <bogus>` yields clap's "unrecognized
-/// subcommand … did you mean?" formatting and exits 2.
+// Side parser for the `stack` group. Its fieldless variants are
+// never constructed; they exist only to drive clap's
+// `mergify stack --help` listing and its "unrecognized subcommand …
+// did you mean?" suggestions — the latter used by [`dispatch_stack`]'s
+// unknown-subcommand fallback, which exits 2. The doc comment below is
+// the user-facing `stack` group description.
+/// Create and maintain stacked pull requests.
+///
+/// Manage a stack of dependent branches and their pull requests:
+/// create, push, sync, reorder, reword, squash, and check out stacks
+/// built on top of your trunk. Run `mergify stack <command> --help`
+/// for detailed help on any subcommand.
 #[derive(Parser)]
-#[command(
-    name = "stack",
-    about = "Manage stacked pull requests",
-    disable_help_subcommand = true
-)]
+#[command(name = "stack", disable_help_subcommand = true)]
 struct StackProbeCli {
     #[command(subcommand)]
     command: StackProbeSubcommand,
 }
 
+/// Subcommands shown by `mergify stack --help`. The live `stack`
+/// group routes through this probe parser, so each variant's short
+/// description must stay in sync with the matching `Stack*Cli`
+/// struct's `about` line.
+//
+// Names mirror the real handlers so clap's Levenshtein suggestions
+// point at actually-supported names instead of an empty list. The
+// variants are intentionally fieldless — we never construct one; we
+// only want clap's parser to know what's a valid subcommand for
+// suggestion and help purposes.
 #[derive(Subcommand)]
 enum StackProbeSubcommand {
-    // Names mirror the real handlers so clap's Levenshtein
-    // suggestions point at actually-supported names instead of
-    // an empty list. The variants are intentionally `Empty` — we
-    // never construct one; we only want clap's parser to know
-    // what's a valid subcommand for suggestion purposes.
+    /// Check out a pull request stack from GitHub.
     Checkout,
+    /// Drop commits from the stack.
     Drop,
+    /// Edit a commit in the stack.
     Edit,
+    /// Fold commits into their parent.
     Fixup,
+    /// Show or install the stack git hooks.
     Hooks,
+    /// List the stack's commits and their pull requests.
     List,
+    /// Move a commit within the stack.
     Move,
+    /// Create a new stack branch.
     New,
+    /// Attach a note explaining why a commit was amended.
     Note,
+    /// Open a stack commit's pull request in the browser.
     Open,
+    /// Push the stack and create or update its pull requests.
     Push,
+    /// Reorder the stack's commits.
     Reorder,
+    /// Change a commit's message.
     Reword,
+    /// Install the stack git hooks.
     Setup,
+    /// Squash commits into a target commit.
     Squash,
+    /// Sync the stack with its trunk.
     Sync,
 }
 
@@ -2677,15 +2702,29 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
     }
 }
 
+/// Mergify command-line interface.
+///
+/// Drive Mergify from your terminal. Validate and simulate your
+/// configuration, manage and inspect the merge queue, schedule merge
+/// freezes, look at the tests tracked by CI Insights, and create and
+/// maintain stacked pull requests.
+///
+/// Most commands talk to the Mergify API and need a token. Set
+/// `MERGIFY_TOKEN` (or `GITHUB_TOKEN`) to apply it to every command,
+/// or pass `--token` to an individual command — there is no global
+/// `--token` on `mergify` itself. Run `mergify <command> --help` for
+/// detailed help and options on any command.
 #[derive(Parser)]
 #[command(name = "mergify", disable_help_subcommand = true, version = VERSION)]
 struct CliRoot {
-    /// Enable verbose debug logging. Mirrors the Python CLI's
-    /// top-level `--debug` flag so the same invocations work
-    /// against either binary; native commands accept it as a no-op
-    /// today (no native code path consults it yet), shimmed ones
-    /// re-inject it into the forwarded argv so the Python side can
-    /// honor it.
+    /// Enable verbose debug logging.
+    ///
+    /// Print extra internal diagnostics, useful when reporting a bug
+    /// or investigating unexpected behavior. Accepted on every
+    /// command.
+    // Shimmed (Python) subcommands re-inject `--debug` into the argv
+    // forwarded to the Python implementation; native commands don't
+    // consult it yet.
     #[arg(long, global = true)]
     debug: bool,
 
@@ -2695,21 +2734,49 @@ struct CliRoot {
 
 #[derive(Subcommand)]
 enum Subcommands {
-    /// Manage Mergify configuration.
+    /// Validate and simulate your Mergify configuration.
+    ///
+    /// Check your `.mergify.yml` against the schema before pushing it,
+    /// or simulate how Mergify's rules would evaluate against a given
+    /// pull request using your local configuration.
     Config(ConfigArgs),
-    /// Mergify CI-related commands.
+    /// Run Mergify CI Insights commands from your pipeline.
+    ///
+    /// Helpers meant to run inside a CI job: upload test reports,
+    /// detect the build's git references, report the merge queue
+    /// batch the build belongs to, and compute the scopes impacted by
+    /// the changed files.
     Ci(CiArgs),
-    /// Inspect tests tracked by Mergify CI Insights.
+    /// Inspect the tests tracked by Mergify CI Insights.
+    ///
+    /// Look up a test's health and flakiness metrics, and manage the
+    /// quarantine that keeps known-flaky tests from failing the merge
+    /// queue.
     Tests(TestsArgs),
-    /// Manage the Mergify merge queue.
+    /// Inspect and control the Mergify merge queue.
+    ///
+    /// Check the status of queued pull requests, inspect a single
+    /// pull request's queue state, and pause or resume merging for a
+    /// repository.
     Queue(QueueArgs),
-    /// Manage scheduled freezes.
+    /// Schedule and manage merge freezes.
+    ///
+    /// Create, list, update, and delete freezes that temporarily stop
+    /// the merge queue from merging — for release windows, incidents,
+    /// or code freezes.
     Freeze(FreezeArgs),
-    /// Manage stacked pull requests.
+    /// Create and maintain stacked pull requests.
+    ///
+    /// Manage a stack of dependent branches and their pull requests:
+    /// create, push, sync, reorder, reword, squash, and check out
+    /// stacks built on top of your trunk.
     Stack(ShimmedArgs),
-    /// Replace the running binary with the latest release. Verifies
-    /// the download against `SHA256SUMS` before swap, matching the
-    /// curl|sh installer's contract.
+    /// Update mergify to the latest release.
+    ///
+    /// Download the newest published binary, verify it against the
+    /// release `SHA256SUMS`, and atomically replace the running
+    /// executable. Uses the same artifact and checksum contract as the
+    /// `curl | sh` installer.
     #[command(name = "self-update")]
     SelfUpdate(SelfUpdateCli),
     /// Internal helpers the Python side of the wheel calls during
@@ -2802,12 +2869,16 @@ struct InternalRebaseTodoRewriteArgs {
     todo_path: PathBuf,
 }
 
-/// `mergify stack new <name>` — clap definition for the natively-
-/// ported `stack new` subcommand. Parsed as a side step after the
-/// top-level clap pass captures `Stack(ShimmedArgs)`, so the rest
-/// of the `stack` group still flows through the Python shim.
+/// Create a new stack branch.
+///
+/// Create a branch that tracks your trunk and start a fresh stack on
+/// top of it. The new branch is checked out by default; pass
+/// `--no-checkout` to only create the ref and stay on the current
+/// branch.
+// Parsed as a secondary clap pass after the top-level parse captures
+// `Stack(ShimmedArgs)`.
 #[derive(Parser)]
-#[command(name = "new", about = "Create a new stack branch")]
+#[command(name = "new")]
 struct StackNewCli {
     /// Name of the new branch.
     name: String,
@@ -2849,11 +2920,13 @@ impl From<StackNewCli> for StackNewOpts {
     }
 }
 
-/// `mergify stack edit [<commit>]` — clap definition for the
-/// natively-ported `stack edit` subcommand. Same secondary-parse
-/// pattern as `stack new` / `stack note`.
+/// Edit a commit in the stack.
+///
+/// Pause an interactive rebase on the target commit so you can amend
+/// it, then resume. Omit the commit to start a fully interactive
+/// rebase of the whole stack.
 #[derive(Parser)]
-#[command(name = "edit", about = "Edit the stack history")]
+#[command(name = "edit")]
 struct StackEditCli {
     /// Commit to pause the rebase on. Accepts a SHA prefix or a
     /// Change-Id prefix; omit for a fully interactive rebase.
@@ -2868,10 +2941,13 @@ impl From<StackEditCli> for StackEditOpts {
     }
 }
 
-/// `mergify stack drop <COMMIT>... [--dry-run]` — clap definition
-/// for the natively-ported `stack drop` subcommand.
+/// Drop commits from the stack.
+///
+/// Remove one or more commits from the stack and rebase the commits
+/// above them down. Each accepts a SHA prefix or a Change-Id prefix.
+/// Use `--dry-run` to preview the resulting order first.
 #[derive(Parser)]
-#[command(name = "drop", about = "Drop commits from the stack")]
+#[command(name = "drop")]
 struct StackDropCli {
     /// Commits to drop. Each accepts a SHA prefix or a Change-Id
     /// prefix.
@@ -2892,13 +2968,16 @@ impl From<StackDropCli> for StackDropOpts {
     }
 }
 
-/// `mergify stack fixup <COMMIT>... [--dry-run]` — clap definition.
+/// Fold commits into their parent.
+///
+/// Squash each given commit into the commit below it, discarding the
+/// folded commit's message (the parent's message is kept). Each
+/// accepts a SHA prefix or a Change-Id prefix. Use `--dry-run` to
+/// preview.
 #[derive(Parser)]
-#[command(
-    name = "fixup",
-    about = "Fixup commits into their parent (drops their messages)"
-)]
+#[command(name = "fixup")]
 struct StackFixupCli {
+    /// Commits to fold into their parent.
     #[arg(required = true)]
     commits: Vec<String>,
 
@@ -2916,10 +2995,15 @@ impl From<StackFixupCli> for StackFixupOpts {
     }
 }
 
-/// `mergify stack reword <COMMIT> [-m <msg>] [--dry-run]`.
+/// Change a commit's message.
+///
+/// Rewrite the message of a commit in the stack. Pass `-m` to set the
+/// new message inline, or omit it to edit the message in your editor.
+/// Use `--dry-run` to preview.
 #[derive(Parser)]
-#[command(name = "reword", about = "Change a commit's message")]
+#[command(name = "reword")]
 struct StackRewordCli {
+    /// Commit to reword. Accepts a SHA prefix or a Change-Id prefix.
     commit: String,
 
     /// New message. When omitted, `git rebase -i` pauses at the
@@ -2942,10 +3026,15 @@ impl From<StackRewordCli> for StackRewordOpts {
     }
 }
 
-/// `mergify stack reorder <COMMIT>... [--dry-run]`.
+/// Reorder the stack's commits.
+///
+/// Rebase the stack into the commit order you list. Commits you don't
+/// mention keep their relative order. Each accepts a SHA prefix or a
+/// Change-Id prefix. Use `--dry-run` to preview.
 #[derive(Parser)]
-#[command(name = "reorder", about = "Reorder the stack's commits")]
+#[command(name = "reorder")]
 struct StackReorderCli {
+    /// Commits in the order you want them rebased into.
     #[arg(required = true)]
     commits: Vec<String>,
 
@@ -2963,11 +3052,15 @@ impl From<StackReorderCli> for StackReorderOpts {
     }
 }
 
-/// `mergify stack move <COMMIT> <POSITION> [<TARGET>] [--dry-run]`.
+/// Move a commit within the stack.
+///
+/// Move one commit to a new position in the stack: to the `first` or
+/// `last` slot, or `before`/`after` another commit (passed as
+/// TARGET). Use `--dry-run` to preview.
 #[derive(Parser)]
-#[command(name = "move", about = "Move a commit within the stack")]
+#[command(name = "move")]
 struct StackMoveCli {
-    /// Commit to move.
+    /// Commit to move. Accepts a SHA prefix or a Change-Id prefix.
     commit: String,
 
     /// Where to put it: `first`, `last`, `before`, `after`.
@@ -2993,13 +3086,17 @@ impl From<StackMoveCli> for StackMoveOpts {
     }
 }
 
-/// `mergify stack squash <SRC>... into <TARGET> [-m <msg>]
-/// [--dry-run]`. The `<SRC>... into <TARGET>` shape doesn't fit
-/// clap's positional model directly, so we accept a flat
-/// `Vec<String>` and split on the literal `into` keyword inside
-/// [`StackSquashOpts::try_from`].
+/// Squash commits into a target commit.
+///
+/// Fold one or more source commits into a target commit, reordering
+/// them adjacent to it first. Use the form `SRC... into TARGET`. Pass
+/// `-m` to set the combined message; otherwise the target's message
+/// is kept. Use `--dry-run` to preview.
+// The `<SRC>... into <TARGET>` shape doesn't fit clap's positional
+// model directly, so we accept a flat `Vec<String>` and split on the
+// literal `into` keyword inside [`StackSquashOpts::try_from`].
 #[derive(Parser)]
-#[command(name = "squash", about = "Squash commits into a target commit")]
+#[command(name = "squash")]
 struct StackSquashCli {
     /// `SRC1 SRC2 ... into TARGET` — must contain exactly one
     /// `into` token; everything before is a source, the single
@@ -3017,10 +3114,16 @@ struct StackSquashCli {
     dry_run: bool,
 }
 
-/// `mergify stack checkout <NAME>`.
+/// Check out a pull request stack from GitHub.
+///
+/// Fetch a stack of pull requests by name and create a local branch
+/// that tracks its leaf, so you can continue working on a stack
+/// created elsewhere (a teammate's, or your own from another
+/// machine).
 #[derive(Parser)]
-#[command(name = "checkout", about = "Checkout the pull requests stack")]
+#[command(name = "checkout")]
 struct StackCheckoutCli {
+    /// Name of the stack to check out.
     name: String,
 
     /// Author of the stack. Defaults to the token's user.
@@ -3069,28 +3172,37 @@ impl From<StackCheckoutCli> for StackCheckoutOpts {
     }
 }
 
-/// `mergify stack sync [--dry-run]`.
+/// Sync the stack with its trunk.
+///
+/// Fetch the latest trunk, drop commits whose pull request has
+/// already merged, and rebase the remaining stack on top. Use
+/// `--dry-run` to preview.
 #[derive(Parser)]
-#[command(
-    name = "sync",
-    about = "Sync the stack: fetch trunk, remove merged commits, rebase"
-)]
+#[command(name = "sync")]
 struct StackSyncCli {
+    /// Author of the stack. Defaults to the token's user.
     #[arg(long)]
     author: Option<String>,
 
+    /// `owner/repo`. Falls back to the URL of `--trunk`'s remote.
     #[arg(long = "repository", alias = "repo")]
     repository: Option<String>,
 
+    /// Override the stack branch prefix.
     #[arg(long = "branch-prefix")]
     branch_prefix: Option<String>,
 
+    /// Show the plan without changing anything.
     #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
     dry_run: bool,
 
+    /// Target trunk as `REMOTE/BRANCH`. Defaults to the resolved
+    /// trunk for the current branch.
     #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
     trunk: Option<(String, String)>,
 
+    /// GitHub token (falls back to `MERGIFY_TOKEN` / `GITHUB_TOKEN`
+    /// / `gh auth token`).
     #[arg(long)]
     token: Option<String>,
 }
@@ -3108,28 +3220,39 @@ impl From<StackSyncCli> for StackSyncOpts {
     }
 }
 
-/// `mergify stack push [flags...]` — full orchestrator. The
-/// flag set mirrors the Python `stack push` click command 1:1
-/// so a user's muscle memory survives the port.
+/// Push the stack and create or update its pull requests.
+///
+/// Walk the local stack, optionally rebase it on trunk, push each
+/// commit to its own branch, and create or update the matching pull
+/// request and its Depends-On chain on GitHub. Use `--dry-run` to
+/// preview the plan and the rebase decision without touching
+/// anything.
 #[derive(Parser)]
-#[command(name = "push", about = "Push/sync the stack's pull requests on GitHub")]
+#[command(name = "push")]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "mirrors the Python CLI's flag surface 1:1"
 )]
 struct StackPushCli {
+    /// Author of the stack. Defaults to the token's user.
     #[arg(long)]
     author: Option<String>,
 
+    /// `owner/repo`. Falls back to the URL of `--trunk`'s remote.
     #[arg(long = "repository", alias = "repo")]
     repository: Option<String>,
 
+    /// Override the stack branch prefix.
     #[arg(long = "branch-prefix")]
     branch_prefix: Option<String>,
 
+    /// Target trunk as `REMOTE/BRANCH`. Defaults to the resolved
+    /// trunk for the current branch.
     #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
     trunk: Option<(String, String)>,
 
+    /// GitHub token (falls back to `MERGIFY_TOKEN` / `GITHUB_TOKEN`
+    /// / `gh auth token`).
     #[arg(long)]
     token: Option<String>,
 
@@ -3225,25 +3348,33 @@ impl From<StackPushCli> for StackPushOpts {
     }
 }
 
-/// `mergify stack list [--json] [--verbose]`.
+/// List the stack's commits and their pull requests.
+///
+/// Show each commit in the current stack alongside its pull request,
+/// CI, and review state. Pass `--verbose` for per-check and
+/// per-reviewer detail, or `--json` for machine-readable output.
 #[derive(Parser)]
-#[command(
-    name = "list",
-    about = "List the stack's commits and their associated PRs"
-)]
+#[command(name = "list")]
 struct StackListCli {
+    /// Author of the stack. Defaults to the token's user.
     #[arg(long)]
     author: Option<String>,
 
+    /// `owner/repo`. Falls back to the URL of `--trunk`'s remote.
     #[arg(long = "repository", alias = "repo")]
     repository: Option<String>,
 
+    /// Override the stack branch prefix.
     #[arg(long = "branch-prefix")]
     branch_prefix: Option<String>,
 
+    /// Target trunk as `REMOTE/BRANCH`. Defaults to the resolved
+    /// trunk for the current branch.
     #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
     trunk: Option<(String, String)>,
 
+    /// GitHub token (falls back to `MERGIFY_TOKEN` / `GITHUB_TOKEN`
+    /// / `gh auth token`).
     #[arg(long)]
     token: Option<String>,
 
@@ -3270,24 +3401,36 @@ impl From<StackListCli> for StackListOpts {
     }
 }
 
-/// `mergify stack open [<commit>]`.
+/// Open a stack commit's pull request in the browser.
+///
+/// Open the GitHub pull request for a commit in the stack in your
+/// default browser. Defaults to the commit at HEAD.
 #[derive(Parser)]
-#[command(name = "open", about = "Open a PR from the stack in the browser")]
+#[command(name = "open")]
 struct StackOpenCli {
+    /// Commit whose pull request to open. Accepts a SHA prefix or a
+    /// Change-Id prefix; defaults to HEAD.
     commit: Option<String>,
 
+    /// Author of the stack. Defaults to the token's user.
     #[arg(long)]
     author: Option<String>,
 
+    /// `owner/repo`. Falls back to the URL of `--trunk`'s remote.
     #[arg(long = "repository", alias = "repo")]
     repository: Option<String>,
 
+    /// Override the stack branch prefix.
     #[arg(long = "branch-prefix")]
     branch_prefix: Option<String>,
 
+    /// Target trunk as `REMOTE/BRANCH`. Defaults to the resolved
+    /// trunk for the current branch.
     #[arg(short = 't', long = "trunk", value_parser = parse_remote_branch)]
     trunk: Option<(String, String)>,
 
+    /// GitHub token (falls back to `MERGIFY_TOKEN` / `GITHUB_TOKEN`
+    /// / `gh auth token`).
     #[arg(long)]
     token: Option<String>,
 }
@@ -3305,12 +3448,13 @@ impl From<StackOpenCli> for StackOpenOpts {
     }
 }
 
-/// `mergify stack hooks [--setup] [--force]`.
+/// Show or install the stack git hooks.
+///
+/// Report the status of the git hooks that keep `Change-Id` trailers
+/// on your commits (stacks rely on them to track commits across
+/// rebases). Pass `--setup` to install or upgrade them.
 #[derive(Parser)]
-#[command(
-    name = "hooks",
-    about = "Show git hooks status and manage installation"
-)]
+#[command(name = "hooks")]
 struct StackHooksCli {
     /// Install or upgrade hooks.
     #[arg(long = "setup", action = clap::ArgAction::SetTrue)]
@@ -3330,12 +3474,13 @@ impl From<StackHooksCli> for StackHooksOpts {
     }
 }
 
-/// `mergify stack setup [--force] [--check]`.
+/// Install the stack git hooks.
+///
+/// Install or upgrade the git hooks that add `Change-Id` trailers to
+/// your commits. This is an alias for `stack hooks --setup`; pass
+/// `--check` to report status instead of installing.
 #[derive(Parser)]
-#[command(
-    name = "setup",
-    about = "Configure git hooks (alias for 'stack hooks --setup')"
-)]
+#[command(name = "setup")]
 struct StackSetupCli {
     /// Force reinstall of hook wrappers, even if user modified them.
     #[arg(short = 'f', long = "force", action = clap::ArgAction::SetTrue)]
@@ -3355,12 +3500,14 @@ impl From<StackSetupCli> for StackSetupOpts {
     }
 }
 
-/// `mergify self-update [--force] [--check]`.
+/// Update mergify to the latest release.
+///
+/// Download the newest published binary, verify it against the
+/// release `SHA256SUMS`, and atomically replace the running
+/// executable. Pass `--check` to only compare versions, or `--force`
+/// to reinstall even when already up to date.
 #[derive(Parser)]
-#[command(
-    name = "self-update",
-    about = "Replace the running binary with the latest release"
-)]
+#[command(name = "self-update")]
 struct SelfUpdateCli {
     /// Re-download and re-install even when the running binary
     /// already matches the latest release tag. Useful for
@@ -3416,14 +3563,14 @@ impl TryFrom<StackSquashCli> for StackSquashOpts {
     }
 }
 
-/// `mergify stack note [<commit>]` — clap definition for the
-/// natively-ported `stack note` subcommand. Same secondary-parse
-/// pattern as `stack new`.
+/// Attach a note explaining why a commit was amended.
+///
+/// Record a note on a stack commit describing why it changed; the
+/// note is surfaced when reviewing the stack. Edit it in your editor
+/// or pass `-m`, add to an existing note with `--append`, or clear it
+/// with `--remove`. Defaults to the commit at HEAD.
 #[derive(Parser)]
-#[command(
-    name = "note",
-    about = "Attach a 'why was this commit amended' note to a commit"
-)]
+#[command(name = "note")]
 struct StackNoteCli {
     /// Target commit. Accepts a SHA prefix, a ref (`HEAD~1`,
     /// branch name, …), or a Change-Id prefix (resolved against
@@ -3532,9 +3679,20 @@ struct ConfigArgs {
 #[derive(Subcommand)]
 enum ConfigSubcommand {
     /// Validate the Mergify configuration file against the schema.
+    ///
+    /// Check that your configuration file parses and conforms to the
+    /// Mergify schema, reporting the first error with its location.
+    /// Run it locally or in CI to catch mistakes before they reach
+    /// the default branch. The file is auto-detected unless you pass
+    /// `--config-file`.
     Validate(ValidateArgs),
     /// Simulate Mergify actions on a pull request using the local
     /// configuration.
+    ///
+    /// Evaluate your local configuration against a real pull request
+    /// and report which rules match and what actions Mergify would
+    /// take — without changing anything on GitHub. Useful to test a
+    /// configuration change before pushing it.
     Simulate(SimulateCliArgs),
 }
 
@@ -3572,22 +3730,52 @@ struct CiArgs {
 #[allow(clippy::doc_markdown)]
 enum CiSubcommand {
     /// Send scopes tied to a pull request to Mergify.
+    ///
+    /// Upload the scopes affected by a pull request so CI Insights can
+    /// attribute test results to them. Reads scopes from repeated
+    /// --scope flags or from a file produced by "mergify ci scopes
+    /// --write". Exits 0 without doing anything when no pull request
+    /// can be determined.
     #[command(name = "scopes-send")]
     ScopesSend(ScopesSendCliArgs),
     /// Print the base/head git references for the current build.
+    ///
+    /// Detect and print the base and head git references for the build
+    /// from the CI environment, as plain text, eval-friendly shell
+    /// lines, or JSON. Useful for wiring later steps to the same refs
+    /// Mergify computed.
     #[command(name = "git-refs")]
     GitRefs(GitRefsCliArgs),
     /// Print the current build's merge queue batch metadata (from the
     /// Mergify git note).
+    ///
+    /// Read the Mergify git note attached to the current HEAD and print
+    /// the merge queue batch the build belongs to. Needs only plain
+    /// git and no token, so it works in any CI runner.
     #[command(name = "queue-info")]
     QueueInfo(QueueInfoCliArgs),
     /// Give the list of scopes impacted by changed files.
+    ///
+    /// Compute the configured scopes impacted by the files changed
+    /// between two git references, using your Mergify configuration.
+    /// Print them, or write them to a file with --write for a later
+    /// "mergify ci scopes-send".
     Scopes(ScopesCliArgs),
     /// Upload JUnit XML reports and ignore failed tests with
     /// Mergify's CI Insights Quarantine.
+    ///
+    /// Parse one or more JUnit XML reports, upload the results to CI
+    /// Insights, and reconcile them against the quarantine so
+    /// known-flaky tests don't fail the build. Accepts file paths or
+    /// glob patterns; pass the runner's exit code with --test-exit-code
+    /// to detect silent failures.
     #[command(name = "junit-process")]
     JunitProcess(JunitProcessCliArgs),
-    /// Upload JUnit XML reports (deprecated: use `junit-process`).
+    /// Upload JUnit XML reports (deprecated: use junit-process).
+    ///
+    /// Deprecated alias for junit-process, kept for backward
+    /// compatibility. It runs the same processing and prints a
+    /// deprecation warning; use junit-process instead.
     #[command(name = "junit-upload")]
     JunitUpload(JunitProcessCliArgs),
 }
@@ -3758,8 +3946,16 @@ struct TestsArgs {
 #[derive(Subcommand)]
 enum TestsSubcommand {
     /// Look up tests by name and print their health and metrics.
+    ///
+    /// Search CI Insights for one or more tests (by exact name or
+    /// glob) and report their flakiness, failure rate, and recent
+    /// history. Pass `--json` for machine-readable output.
     Show(TestsShowCliArgs),
     /// Manage the CI Insights quarantine.
+    ///
+    /// Add, remove, inspect, and list the tests held in the CI
+    /// Insights quarantine — the set of known-flaky tests whose
+    /// failures are ignored so they don't block the merge queue.
     Quarantines(TestsQuarantinesArgs),
 }
 
@@ -3772,12 +3968,27 @@ struct TestsQuarantinesArgs {
 #[derive(Subcommand)]
 enum QuarantinesSubcommand {
     /// Add a test to the CI Insights quarantine.
+    ///
+    /// Quarantine a test by its fully qualified name so its failures
+    /// stop blocking the merge queue. A reason is required; scope it
+    /// to a branch with `--branch`, or quarantine on all branches by
+    /// default.
     Add(TestsQuarantineCliArgs),
     /// Remove a test from the CI Insights quarantine.
+    ///
+    /// Take a test out of the quarantine so its results count again.
+    /// Identify it by test name or by quarantine id.
     Remove(TestsUnquarantineCliArgs),
     /// Print a single quarantine by test name or id.
+    ///
+    /// Show the details of one quarantined test — its reason, branch
+    /// scope, and when it was added. Identify it by test name or by
+    /// quarantine id.
     Get(TestsQuarantineGetCliArgs),
     /// List the tests currently in the CI Insights quarantine.
+    ///
+    /// Print every test currently held in the quarantine for the
+    /// repository. Pass `--json` for machine-readable output.
     List(TestsQuarantinedCliArgs),
 }
 
@@ -3984,12 +4195,29 @@ struct QueueArgs {
 #[derive(Subcommand)]
 enum QueueSubcommand {
     /// Pause the merge queue for the repository.
+    ///
+    /// Stop the queue from merging any pull request until it is
+    /// resumed — useful during an incident or release window. A
+    /// reason is required and shown to your team; queued pull
+    /// requests stay in place.
     Pause(PauseCliArgs),
     /// Unpause the merge queue for the repository.
+    ///
+    /// Resume merging after a pause. The queue picks up where it left
+    /// off with the pull requests still queued.
     Unpause,
     /// Show merge queue status for the repository.
+    ///
+    /// List the pull requests currently in the queue with their
+    /// position and state. Filter by branch with `--branch`, or pass
+    /// `--json` for machine-readable output.
     Status(StatusCliArgs),
     /// Show detailed state of a pull request in the merge queue.
+    ///
+    /// Report the full queue state of a single pull request: its
+    /// checks, the conditions it still needs to satisfy, and why it
+    /// is or isn't mergeable. Pass `--verbose` for the full checks
+    /// table and conditions tree, or `--json` for the raw response.
     Show(ShowCliArgs),
 }
 
@@ -4056,12 +4284,27 @@ struct FreezeArgs {
 #[derive(Subcommand)]
 enum FreezeSubcommand {
     /// List scheduled freezes for a repository.
+    ///
+    /// Show the freezes currently configured for the repository, with
+    /// their name, schedule, and state. Pass `--json` for
+    /// machine-readable output.
     List(FreezeListCliArgs),
     /// Create a new scheduled freeze.
+    ///
+    /// Add a freeze that stops the merge queue from merging while it
+    /// is active — for a release window, incident, or code freeze.
     Create(FreezeCreateCliArgs),
     /// Update an existing scheduled freeze.
+    ///
+    /// Change the settings of an existing freeze, identified by its
+    /// ID. Only the fields you pass are changed; the rest are left as
+    /// they are.
     Update(FreezeUpdateCliArgs),
     /// Delete a scheduled freeze.
+    ///
+    /// Remove a freeze by its ID. If the freeze is currently active a
+    /// reason is required, and the queue resumes merging once it's
+    /// gone.
     Delete(FreezeDeleteCliArgs),
 }
 
