@@ -10,8 +10,8 @@ description = "Reusable terminal-UI primitives for mergify-cli: ANSI styling, re
 publish = false
 
 [dependencies]
-anstyle = "1"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+anstyle = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true
