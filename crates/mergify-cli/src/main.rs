@@ -4367,6 +4367,27 @@ mod tests {
             "expected only `native` stack subcommands",
         );
 
+        // The stack subcommand set in the generated schema must match
+        // the NATIVE_COMMANDS registry exactly. Under the old shim
+        // these were two hand-maintained lists that could drift (a
+        // dropped leaf would silently vanish from the reference); now
+        // both derive from the same clap tree, so pin the invariant.
+        let schema_stack: std::collections::BTreeSet<&str> = stack["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().expect("name"))
+            .collect();
+        let registry_stack: std::collections::BTreeSet<&str> = NATIVE_COMMANDS
+            .iter()
+            .filter(|(group, _)| *group == "stack")
+            .map(|(_, sub)| *sub)
+            .collect();
+        assert_eq!(
+            schema_stack, registry_stack,
+            "stack subcommands in the schema drifted from NATIVE_COMMANDS",
+        );
+
         // The exit-code contract rides alongside the command tree,
         // sourced from `mergify_core::ExitCode`. Pin the codes so a
         // dropped or renumbered variant surfaces here.
@@ -4377,6 +4398,18 @@ mod tests {
             .map(|c| c["code"].as_u64().expect("code"))
             .collect();
         assert_eq!(codes, [0, 1, 3, 4, 5, 6, 7, 8]);
+    }
+
+    /// Golden snapshot of the whole CLI surface. Catches drift the
+    /// structural checks above can't — a dropped flag, a renamed leaf
+    /// subcommand, a changed `value_hint`, reworded help. Review
+    /// intentional changes with `cargo insta review`. The
+    /// version field is release-stamped, so redact it.
+    #[test]
+    fn cli_schema_golden() {
+        let schema: serde_json::Value =
+            serde_json::from_str(&cli_schema::dump()).expect("schema is valid JSON");
+        insta::assert_json_snapshot!(schema, { ".cli.version" => "[version]" });
     }
 
     #[test]

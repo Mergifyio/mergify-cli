@@ -52,6 +52,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 regex = { workspace = true }
 serde_yaml_ng = { workspace = true }
 temp-env = { workspace = true }
