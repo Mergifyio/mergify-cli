@@ -1,7 +1,7 @@
 //! `mergify queue unpause` — resume the merge queue for a
 //! repository.
 //!
-//! DELETEs ``/v1/repos/<repo>/merge-queue/pause``. When the API
+//! Sends a DELETE to ``/v1/repos/<repo>/merge-queue/pause``. When the API
 //! responds 404 the command prints "Queue is not currently paused"
 //! and exits with `MERGIFY_API_ERROR` — matches Python's behavior.
 
