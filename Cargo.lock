@@ -1218,6 +1218,7 @@ dependencies = [
  "mergify-freeze",
  "mergify-queue",
  "mergify-stack",
+ "mergify-tui",
  "regex",
  "reqwest",
  "self-replace",

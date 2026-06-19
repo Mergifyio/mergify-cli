@@ -361,17 +361,18 @@ fn print_checks_summary(w: &mut dyn Write, theme: &Theme, checks: &[Check]) -> s
     Ok(())
 }
 
-/// Map a check state string to its [`StyledGlyph`]. Mirrors Python's
-/// `CHECK_STATE_STYLES`; unknown states fall back to a dim `?` so
-/// the renderer never crashes on a new API code.
+/// Map a check state string to its [`StyledGlyph`], using the
+/// single-width terminal vocabulary (✓ ✗ ● ○ —); unknown states fall
+/// back to a dim `—` so the renderer never crashes on a new API code.
 fn check_state_glyph(theme: &Theme, state: &str) -> StyledGlyph {
     match state {
         "success" => StyledGlyph::new("✓", theme.fg(AnsiColor::Green)),
-        "pending" => StyledGlyph::new("◌", theme.fg(AnsiColor::Yellow)),
-        "failure" | "error" | "action_required" => StyledGlyph::new("✗", theme.fg(AnsiColor::Red)),
-        "timed_out" => StyledGlyph::new("⏰", theme.fg(AnsiColor::Red)),
+        "pending" => StyledGlyph::new("●", theme.fg(AnsiColor::Yellow)),
+        "failure" | "error" | "action_required" | "timed_out" => {
+            StyledGlyph::new("✗", theme.fg(AnsiColor::Red))
+        }
         "cancelled" | "neutral" | "skipped" | "stale" => StyledGlyph::new("○", theme.dim),
-        _ => StyledGlyph::new("?", theme.dim),
+        _ => StyledGlyph::new("—", theme.dim),
     }
 }
 
