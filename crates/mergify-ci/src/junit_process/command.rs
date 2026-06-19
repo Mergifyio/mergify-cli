@@ -24,9 +24,9 @@
 
 use std::path::{Path, PathBuf};
 
+use mergify_core::auth;
 use mergify_core::env::var_non_empty;
 use mergify_core::{CliError, ExitCode, Output};
-use url::Url;
 
 use crate::detector;
 use crate::junit_process::junit::{self, ParseResult, TestCase};
@@ -71,10 +71,8 @@ pub async fn run(
     // printing any of the banner — matches Python's click defaults
     // surfacing as exit code 2 when a required flag is missing,
     // before the command body runs.
-    let api_url_raw = resolve_api_url(opts.api_url);
-    let api_url = Url::parse(&api_url_raw)
-        .map_err(|e| CliError::Configuration(format!("--api-url is not a valid URL: {e}")))?;
-    let token = resolve_token(opts.token)?;
+    let api_url = auth::resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_token(opts.token)?;
     let repository = detector::resolve_repository(opts.repository)?;
     let tests_target_branch = resolve_tests_target_branch(opts.tests_target_branch)?;
     let test_exit_code = resolve_test_exit_code(opts.test_exit_code)?;
@@ -163,9 +161,15 @@ pub async fn run(
     let built = spans::build_traces(&parsed, &metadata);
 
     let client = upload::default_client();
-    let upload_error = upload::upload(&client, &api_url_raw, &token, &repository, &built.request)
-        .await
-        .err();
+    let upload_error = upload::upload(
+        &client,
+        api_url.as_str(),
+        &token,
+        &repository,
+        &built.request,
+    )
+    .await
+    .err();
     maybe_write_github_output(upload_status_label(upload_error.as_ref()));
 
     // ── Report sections — order matches Python verbatim.
@@ -229,14 +233,6 @@ fn emit(output: &mut dyn Output, report: &str) -> Result<(), CliError> {
         .map_err(|e| CliError::Generic(format!("could not write output: {e}")))
 }
 
-fn resolve_api_url(explicit: Option<&str>) -> String {
-    explicit
-        .filter(|s| !s.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| var_non_empty("MERGIFY_API_URL"))
-        .unwrap_or_else(|| "https://api.mergify.com".to_string())
-}
-
 /// Resolve `--test-exit-code` / `MERGIFY_TEST_EXIT_CODE`. Empty
 /// env value is treated as "unset" so callers like the
 /// `gha-mergify-ci` action can export `MERGIFY_TEST_EXIT_CODE=""`
@@ -257,18 +253,6 @@ fn resolve_test_exit_code(explicit: Option<i32>) -> Result<Option<i32>, CliError
             "MERGIFY_TEST_EXIT_CODE={raw:?} is not a valid integer: {e}",
         ))
     })
-}
-
-fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
-    explicit
-        .filter(|s| !s.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| var_non_empty("MERGIFY_TOKEN"))
-        .ok_or_else(|| {
-            CliError::Configuration(
-                "--token not provided and MERGIFY_TOKEN env var is empty".to_string(),
-            )
-        })
 }
 
 fn resolve_tests_target_branch(explicit: Option<&str>) -> Result<String, CliError> {
