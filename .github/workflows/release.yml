@@ -79,7 +79,7 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # `git tag -l` needs the full tag list to find today's
           # highest counter.
@@ -151,15 +151,19 @@ jobs:
     permissions:
       # `gh release create` writes the release.
       contents: write
+      # actions/attest-build-provenance mints a signed provenance for
+      # each binary asset (id-token to sign, attestations to record).
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # `--generate-notes` needs full history to walk back to
           # the previous tag.
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           # Skip `wheel-sdist` (single dash); each wheel artifact is
           # `wheel-<target>` with multiple dashes in the target.
@@ -212,6 +216,15 @@ jobs:
           (cd dist && sha256sum mergify-* > SHA256SUMS)
           echo "Built release assets:"
           ls -la dist
+
+      # Sign every binary asset with a build-provenance attestation,
+      # so a downloader can prove it was built by this workflow from
+      # this repo: `gh attestation verify <file> --repo Mergifyio/mergify-cli`.
+      # SHA256SUMS already chains integrity to these subjects, so it
+      # needs no separate attestation.
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/mergify-*
 
       # Dump the CLI schema straight off the released binary so the
       # docs site renders the command reference from the same artifact
@@ -343,7 +356,7 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           # `wheel-*` covers both `wheel-<target>` artifacts and
           # `wheel-sdist` — PyPI gets both.
@@ -355,6 +368,9 @@ jobs:
         run: ls -la dist
 
       - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: dist
+          # Mint PEP 740 attestations for the wheels/sdist via the
+          # same Trusted Publishing identity (id-token: write above).
+          attestations: true

@@ -66,17 +66,22 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: 3.14
 
       - name: Stamp wheel version
         if: inputs.stamp-version
+        env:
+          # Read the input through the environment, not `${{ }}` shell
+          # interpolation, so a value with shell metacharacters reaches
+          # bash as a plain string and can't break out of the script.
+          OVERRIDE_VERSION: ${{ inputs.override-version }}
         shell: bash
         run: |
           set -eu
@@ -85,8 +90,8 @@ jobs:
           # passes `inputs.tag` here because no tag exists yet — it
           # gets created by `gh release create` later in the
           # workflow.
-          if [ -n "${{ inputs.override-version }}" ]; then
-              VERSION='${{ inputs.override-version }}'
+          if [ -n "${OVERRIDE_VERSION}" ]; then
+              VERSION="${OVERRIDE_VERSION}"
           else
               VERSION="${GITHUB_REF#refs/tags/}"
           fi
@@ -110,7 +115,7 @@ jobs:
           echo "MERGIFY_RELEASE_VERSION=${VERSION}" >> "${GITHUB_ENV}"
 
       - name: Build wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
           # `manylinux: auto` picks the most-compatible glibc the
@@ -146,7 +151,7 @@ jobs:
       # builds just need the build to succeed — keeping the
       # artifact upload off saves cache space and a few seconds per
       # platform.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: inputs.stamp-version
         with:
           name: wheel-${{ matrix.target }}
@@ -157,24 +162,27 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: 3.14
 
       - name: Stamp wheel version
         if: inputs.stamp-version
+        env:
+          # Through the environment, not `${{ }}` — see the wheel job.
+          OVERRIDE_VERSION: ${{ inputs.override-version }}
         shell: bash
         run: |
           set -eu
           # Same source-priority as the wheel job above —
           # `override-version` wins, falls back to the tag.
-          if [ -n "${{ inputs.override-version }}" ]; then
-              VERSION='${{ inputs.override-version }}'
+          if [ -n "${OVERRIDE_VERSION}" ]; then
+              VERSION="${OVERRIDE_VERSION}"
           else
               VERSION="${GITHUB_REF#refs/tags/}"
           fi
@@ -185,7 +193,7 @@ jobs:
           sed -i.bak -E "s/^version = \".*\"$/version = \"${VERSION}\"/" pyproject.toml
           rm -f pyproject.toml.bak
 
-      - uses: PyO3/maturin-action@v1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           command: sdist
           args: --out target/wheels
@@ -200,7 +208,7 @@ jobs:
           python -m pip install --quiet twine
           twine check --strict target/wheels/*.tar.gz
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: inputs.stamp-version
         with:
           name: wheel-sdist
