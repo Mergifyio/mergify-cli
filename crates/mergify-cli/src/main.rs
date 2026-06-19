@@ -13,6 +13,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
 use mergify_ci::git_refs::Format as GitRefsFormat;
@@ -147,6 +148,8 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     // Emits the machine-readable CLI schema the docs site renders
     // into the command reference. Hidden; not a stable surface.
     ("_internal", "dump-cli-schema"),
+    // Renders the roff man page to stdout, for packaging. Hidden.
+    ("_internal", "man"),
 ];
 
 /// Native commands the Rust binary handles without delegating to
@@ -264,6 +267,12 @@ enum NativeCommand {
     /// to JSON for the docs site. Pure introspection; no async, no I/O
     /// beyond stdout.
     InternalDumpCliSchema,
+    /// `mergify completions <shell>` — print a shell completion script
+    /// to stdout. Pure introspection.
+    Completions(clap_complete::Shell),
+    /// `_internal man` — render the roff man page to stdout for
+    /// packaging. Pure introspection.
+    InternalManPage,
     /// `mergify self-update [--force] [--check]` — replace the
     /// running binary with the latest release.
     SelfUpdate(self_update::Options),
@@ -757,6 +766,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             StackSubcommand::Setup(cli) => Dispatch::Native(NativeCommand::StackSetup(cli.into())),
         },
         Subcommands::SelfUpdate(cli) => Dispatch::Native(NativeCommand::SelfUpdate(cli.into())),
+        Subcommands::Completions(cli) => Dispatch::Native(NativeCommand::Completions(cli.shell)),
         Subcommands::Internal(InternalArgs {
             command:
                 InternalSubcommand::StackLocalCommits(InternalStackLocalCommitsArgs {
@@ -814,6 +824,9 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
         Subcommands::Internal(InternalArgs {
             command: InternalSubcommand::DumpCliSchema,
         }) => Dispatch::Native(NativeCommand::InternalDumpCliSchema),
+        Subcommands::Internal(InternalArgs {
+            command: InternalSubcommand::Man,
+        }) => Dispatch::Native(NativeCommand::InternalManPage),
         Subcommands::Ci(CiArgs {
             command:
                 CiSubcommand::Scopes(ScopesCliArgs {
@@ -1379,6 +1392,25 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
     if matches!(cmd, NativeCommand::InternalDumpCliSchema) {
         return cli_schema::run();
     }
+    // Completions and the man page are pure introspection over the
+    // clap tree — emit to stdout and exit before tokio spins up.
+    match cmd {
+        NativeCommand::Completions(shell) => {
+            let mut command = CliRoot::command();
+            clap_complete::generate(shell, &mut command, "mergify", &mut std::io::stdout());
+            return ExitCode::SUCCESS;
+        }
+        NativeCommand::InternalManPage => {
+            return match clap_mangen::Man::new(CliRoot::command()).render(&mut std::io::stdout()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("mergify: render man page: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        _ => {}
+    }
 
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1407,8 +1439,10 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
     let result: Result<mergify_core::ExitCode, mergify_core::CliError> = rt.block_on(async {
         match cmd {
             // Handled above, before the runtime was built.
-            NativeCommand::InternalDumpCliSchema => {
-                unreachable!("dump-cli-schema is handled before the runtime starts")
+            NativeCommand::InternalDumpCliSchema
+            | NativeCommand::Completions(_)
+            | NativeCommand::InternalManPage => {
+                unreachable!("introspection commands are handled before the runtime starts")
             }
             NativeCommand::ConfigValidate { config_file } => {
                 mergify_config::validate::run(config_file.as_deref(), &mut output)
@@ -2650,6 +2684,8 @@ enum Subcommands {
     /// `curl | sh` installer.
     #[command(name = "self-update")]
     SelfUpdate(SelfUpdateCli),
+    /// Print a shell completion script (e.g. `mergify completions zsh`).
+    Completions(CompletionsCli),
     /// Internal helpers the Python side of the wheel calls during
     /// the Python→Rust migration. Hidden from `--help` because it
     /// is not part of the user-facing CLI; the wire format is not
@@ -2811,6 +2847,10 @@ enum InternalSubcommand {
     /// code, never hand-maintained. Not a stable user-facing surface.
     #[command(name = "dump-cli-schema")]
     DumpCliSchema,
+    /// Render the roff man page to stdout, for packaging to install
+    /// into `man/`. Not a stable user-facing surface.
+    #[command(name = "man")]
+    Man,
 }
 
 #[derive(clap::Args)]
@@ -3399,6 +3439,13 @@ impl From<SelfUpdateCli> for self_update::Options {
             check_only: cli.check,
         }
     }
+}
+
+#[derive(clap::Args)]
+struct CompletionsCli {
+    /// Shell to generate a completion script for.
+    #[arg(value_enum)]
+    shell: clap_complete::Shell,
 }
 
 impl TryFrom<StackSquashCli> for StackSquashOpts {
@@ -4293,7 +4340,8 @@ mod tests {
                 "queue",
                 "freeze",
                 "stack",
-                "self-update"
+                "self-update",
+                "completions"
             ]
         );
         assert!(!groups.contains(&"_internal"), "hidden group leaked");
