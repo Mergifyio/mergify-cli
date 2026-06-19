@@ -12,16 +12,16 @@ publish = false
 [dependencies]
 mergify-core = { path = "../mergify-core" }
 mergify-tui = { path = "../mergify-tui" }
-anstyle = "1"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-url = "2"
+anstyle = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 mergify-test-support = { path = "../mergify-test-support" }
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
-wiremock = "0.6"
+tokio = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

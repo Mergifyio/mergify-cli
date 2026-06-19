@@ -10,17 +10,17 @@ description = "Shared foundations for mergify-cli: HTTP, auth, errors, output, g
 publish = false
 
 [dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
-url = "2"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
-temp-env = "0.3"
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time"] }
-wiremock = "0.6"
+temp-env = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

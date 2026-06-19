@@ -22,6 +22,38 @@ license = "Apache-2.0"
 repository = "https://github.com/Mergifyio/mergify-cli"
 authors = ["Mergify Team <hello@mergify.com>"]
 
+[workspace.dependencies]
+anstyle = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+flate2 = "1"
+getrandom = "0.4"
+glob = "0.3"
+globset = "0.4"
+iana-time-zone = "0.1"
+jsonschema = { version = "0.46", default-features = false }
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
+quick-xml = "0.40"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+self-replace = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+sha2 = "0.11"
+tempfile = "3.14"
+terminal_size = "0.4"
+thiserror = "2.0"
+# tokio: rt-multi-thread is intentionally NOT here — it is added only
+# in the dev-dependency entries that need it, so the shipped binary's
+# single current-thread runtime never pulls in the MT scheduler.
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
+unicode-width = "0.2"
+url = "2"
+temp-env = "0.3"
+wiremock = "0.6"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
