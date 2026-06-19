@@ -165,7 +165,9 @@ impl std::error::Error for InvalidJunitXml {}
 
 impl From<InvalidJunitXml> for CliError {
     fn from(err: InvalidJunitXml) -> Self {
-        Self::Generic(err.to_string())
+        // Preserve the typed error as a transparent source instead of
+        // flattening it to a string (same Display, stays downcastable).
+        Self::Source(Box::new(err))
     }
 }
 

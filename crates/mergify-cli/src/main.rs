@@ -2504,6 +2504,13 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
         Err(err) => {
             let code = err.exit_code();
             eprintln!("mergify: {err}");
+            // Print any preserved cause chain (CliError::wrap /
+            // #[source]) so the underlying reason isn't lost.
+            let mut source = std::error::Error::source(&err);
+            while let Some(cause) = source {
+                eprintln!("  caused by: {cause}");
+                source = cause.source();
+            }
             ExitCode::from(code.as_u8())
         }
     }
