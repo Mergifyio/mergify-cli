@@ -1,0 +1,1 @@
+address review (copilot): clarify in root help that --token is per-command (no global --token); fix stale StackProbeCli comment now that its variants drive help + suggestions
