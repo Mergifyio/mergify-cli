@@ -49,6 +49,8 @@ thiserror = "2.0"
 # in the dev-dependency entries that need it, so the shipped binary's
 # single current-thread runtime never pulls in the MT scheduler.
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 unicode-width = "0.2"
 url = "2"
 temp-env = "0.3"
