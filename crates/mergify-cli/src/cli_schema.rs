@@ -22,22 +22,6 @@ use mergify_core::ExitCode;
 use serde::Serialize;
 
 use crate::CliRoot;
-use crate::StackCheckoutCli;
-use crate::StackDropCli;
-use crate::StackEditCli;
-use crate::StackFixupCli;
-use crate::StackHooksCli;
-use crate::StackListCli;
-use crate::StackMoveCli;
-use crate::StackNewCli;
-use crate::StackNoteCli;
-use crate::StackOpenCli;
-use crate::StackPushCli;
-use crate::StackReorderCli;
-use crate::StackRewordCli;
-use crate::StackSetupCli;
-use crate::StackSquashCli;
-use crate::StackSyncCli;
 
 /// Internal contract version. Bump when a field is renamed or removed
 /// so the docs renderer can move in lockstep.
@@ -185,8 +169,7 @@ fn command_node(
     for arg in cmd.get_arguments() {
         let id = arg.get_id().as_str();
         // clap's synthetic `--help`/`--version` and any `hide`-d arg
-        // (e.g. the `stack` shim's trailing var-arg) are not part of
-        // the user-facing reference.
+        // are not part of the user-facing reference.
         if id == "help" || id == "version" || arg.is_hide_set() {
             continue;
         }
@@ -199,21 +182,15 @@ fn command_node(
         args.push(arg_node(arg));
     }
 
-    // `stack` is the last Python-shimmed group: its native subcommands
-    // live in standalone parser structs outside the walkable tree, and
-    // the rest are still in Python. Graft both in.
-    let commands = if path.last().map(String::as_str) == Some("stack") {
-        stack_subcommands(&path)
-    } else {
-        cmd.get_subcommands()
-            .filter(|sub| !sub.is_hide_set())
-            .map(|sub| {
-                let mut child = path.clone();
-                child.push(sub.get_name().to_string());
-                command_node(sub, child, &globals_seen)
-            })
-            .collect()
-    };
+    let commands = cmd
+        .get_subcommands()
+        .filter(|sub| !sub.is_hide_set())
+        .map(|sub| {
+            let mut child = path.clone();
+            child.push(sub.get_name().to_string());
+            command_node(sub, child, &globals_seen)
+        })
+        .collect();
 
     let usage = render_usage(cmd, &path);
 
@@ -326,39 +303,4 @@ fn render_usage(cmd: &clap::Command, path: &[String]) -> String {
     let usage = cmd.render_usage().to_string();
     // `render_usage` prefixes "Usage: "; the schema carries the bare line.
     usage.strip_prefix("Usage: ").unwrap_or(&usage).to_string()
-}
-
-/// Subcommands of `stack`: every native parser grafted in. They're
-/// side-parsed outside `CliRoot` (the `stack` group is a
-/// `trailing_var_arg` forwarder for clap's "did you mean?" suggestion
-/// machinery), so a plain walk of `CliRoot` would silently drop them
-/// from the published reference.
-fn stack_subcommands(stack_path: &[String]) -> Vec<CommandNode> {
-    let mut out = Vec::new();
-
-    for mut native in [
-        StackCheckoutCli::command(),
-        StackDropCli::command(),
-        StackEditCli::command(),
-        StackFixupCli::command(),
-        StackHooksCli::command(),
-        StackListCli::command(),
-        StackMoveCli::command(),
-        StackNewCli::command(),
-        StackNoteCli::command(),
-        StackOpenCli::command(),
-        StackPushCli::command(),
-        StackReorderCli::command(),
-        StackRewordCli::command(),
-        StackSetupCli::command(),
-        StackSquashCli::command(),
-        StackSyncCli::command(),
-    ] {
-        native.build();
-        let mut child = stack_path.to_vec();
-        child.push(native.get_name().to_string());
-        out.push(command_node(&native, child, &BTreeSet::new()));
-    }
-
-    out
 }

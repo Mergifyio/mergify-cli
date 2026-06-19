@@ -639,163 +639,6 @@ fn detect_dispatch(argv: &[String]) -> Dispatch {
     dispatch_from_parsed(parsed)
 }
 
-/// Route a captured `mergify stack <args…>` invocation to the
-/// matching native subcommand handler.
-///
-/// Every stack subcommand is native; an unrecognised subcommand
-/// exits with clap's "unrecognized subcommand `<name>` … did you
-/// mean `<closest>`?" formatting.
-#[allow(clippy::too_many_lines)] // one mechanical arm per native subcommand
-fn dispatch_stack(args: Vec<String>) -> Dispatch {
-    match args.first().map(String::as_str) {
-        Some("new") => {
-            // `args[0]` is the subcommand — clap consumes it as
-            // the program name in the secondary parse, leaving
-            // `args[1..]` as the actual arguments.
-            let parsed = match StackNewCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackNew(StackNewOpts::from(parsed)))
-        }
-        Some("note") => {
-            let parsed = match StackNoteCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackNote(StackNoteOpts::from(parsed)))
-        }
-        Some("edit") => {
-            let parsed = match StackEditCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackEdit(StackEditOpts::from(parsed)))
-        }
-        Some("drop") => {
-            let parsed = match StackDropCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackDrop(StackDropOpts::from(parsed)))
-        }
-        Some("fixup") => {
-            let parsed = match StackFixupCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackFixup(StackFixupOpts::from(parsed)))
-        }
-        Some("reword") => {
-            let parsed = match StackRewordCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackReword(StackRewordOpts::from(parsed)))
-        }
-        Some("reorder") => {
-            let parsed = match StackReorderCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackReorder(StackReorderOpts::from(parsed)))
-        }
-        Some("move") => {
-            let parsed = match StackMoveCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackMove(StackMoveOpts::from(parsed)))
-        }
-        Some("squash") => {
-            let parsed = match StackSquashCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            match StackSquashOpts::try_from(parsed) {
-                Ok(opts) => Dispatch::Native(NativeCommand::StackSquash(opts)),
-                Err(msg) => {
-                    eprintln!("error: {msg}");
-                    std::process::exit(2);
-                }
-            }
-        }
-        Some("checkout") => {
-            let parsed = match StackCheckoutCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackCheckout(StackCheckoutOpts::from(
-                parsed,
-            )))
-        }
-        Some("sync") => {
-            let parsed = match StackSyncCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackSync(StackSyncOpts::from(parsed)))
-        }
-        Some("push") => {
-            let parsed = match StackPushCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackPush(StackPushOpts::from(parsed)))
-        }
-        Some("list") => {
-            let parsed = match StackListCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackList(StackListOpts::from(parsed)))
-        }
-        Some("open") => {
-            let parsed = match StackOpenCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackOpen(StackOpenOpts::from(parsed)))
-        }
-        Some("hooks") => {
-            let parsed = match StackHooksCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackHooks(StackHooksOpts::from(parsed)))
-        }
-        Some("setup") => {
-            let parsed = match StackSetupCli::try_parse_from(&args) {
-                Ok(p) => p,
-                Err(err) => err.exit(),
-            };
-            Dispatch::Native(NativeCommand::StackSetup(StackSetupOpts::from(parsed)))
-        }
-        // Unknown / missing stack subcommand. Round-trip through a
-        // synthetic clap parse on the `stack` group so the user
-        // gets clap's "unrecognized subcommand `<name>` … did you
-        // mean `<closest>`?" formatting and exit code (2) instead
-        // of a hand-rolled message.
-        other => {
-            let probe: Vec<String> = std::iter::once("stack".to_string())
-                .chain(other.map(str::to_owned))
-                .chain(args.into_iter().skip(1))
-                .collect();
-            match StackProbeCli::try_parse_from(&probe) {
-                Err(err) => err.exit(),
-                // `StackProbeCli` requires a subcommand to be
-                // *picked* from a fixed list; an unknown one
-                // triggers `Err` above. An invocation with no
-                // subcommand also triggers `Err`
-                // (`DisplayHelpOnMissingArgumentOrSubcommand`).
-                // If clap ever accepts something here, treat it
-                // as an internal invariant violation.
-                Ok(_) => unreachable!("StackProbeCli has no valid subcommand to dispatch"),
-            }
-        }
-    }
-}
-
 /// Build the run options for `quarantines add`.
 fn quarantine_opts(args: TestsQuarantineCliArgs) -> TestsQuarantineOpts {
     TestsQuarantineOpts {
@@ -841,76 +684,40 @@ fn quarantine_get_opts(args: TestsQuarantineGetCliArgs) -> TestsQuarantineGetOpt
     }
 }
 
-// Side parser for the `stack` group. Its fieldless variants are
-// never constructed; they exist only to drive clap's
-// `mergify stack --help` listing and its "unrecognized subcommand …
-// did you mean?" suggestions — the latter used by [`dispatch_stack`]'s
-// unknown-subcommand fallback, which exits 2. The doc comment below is
-// the user-facing `stack` group description.
-/// Create and maintain stacked pull requests.
-///
-/// Manage a stack of dependent branches and their pull requests:
-/// create, push, sync, reorder, reword, squash, and check out stacks
-/// built on top of your trunk. Run `mergify stack <command> --help`
-/// for detailed help on any subcommand.
-#[derive(Parser)]
-#[command(name = "stack", disable_help_subcommand = true)]
-struct StackProbeCli {
-    #[command(subcommand)]
-    command: StackProbeSubcommand,
-}
-
-/// Subcommands shown by `mergify stack --help`. The live `stack`
-/// group routes through this probe parser, so each variant's short
-/// description must stay in sync with the matching `Stack*Cli`
-/// struct's `about` line.
-//
-// Names mirror the real handlers so clap's Levenshtein suggestions
-// point at actually-supported names instead of an empty list. The
-// variants are intentionally fieldless — we never construct one; we
-// only want clap's parser to know what's a valid subcommand for
-// suggestion and help purposes.
-#[derive(Subcommand)]
-enum StackProbeSubcommand {
-    /// Check out a pull request stack from GitHub.
-    Checkout,
-    /// Drop commits from the stack.
-    Drop,
-    /// Edit a commit in the stack.
-    Edit,
-    /// Fold commits into their parent.
-    Fixup,
-    /// Show or install the stack git hooks.
-    Hooks,
-    /// List the stack's commits and their pull requests.
-    List,
-    /// Move a commit within the stack.
-    Move,
-    /// Create a new stack branch.
-    New,
-    /// Attach a note explaining why a commit was amended.
-    Note,
-    /// Open a stack commit's pull request in the browser.
-    Open,
-    /// Push the stack and create or update its pull requests.
-    Push,
-    /// Reorder the stack's commits.
-    Reorder,
-    /// Change a commit's message.
-    Reword,
-    /// Install the stack git hooks.
-    Setup,
-    /// Squash commits into a target commit.
-    Squash,
-    /// Sync the stack with its trunk.
-    Sync,
-}
-
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
     let _ = parsed.debug; // global flag — consulted by command impls, not here
     match parsed.command {
-        Subcommands::Stack(ShimmedArgs { args }) => dispatch_stack(args),
+        Subcommands::Stack(StackArgs { command }) => match command {
+            StackSubcommand::New(cli) => Dispatch::Native(NativeCommand::StackNew(cli.into())),
+            StackSubcommand::Note(cli) => Dispatch::Native(NativeCommand::StackNote(cli.into())),
+            StackSubcommand::Edit(cli) => Dispatch::Native(NativeCommand::StackEdit(cli.into())),
+            StackSubcommand::Drop(cli) => Dispatch::Native(NativeCommand::StackDrop(cli.into())),
+            StackSubcommand::Fixup(cli) => Dispatch::Native(NativeCommand::StackFixup(cli.into())),
+            StackSubcommand::Reword(cli) => {
+                Dispatch::Native(NativeCommand::StackReword(cli.into()))
+            }
+            StackSubcommand::Reorder(cli) => {
+                Dispatch::Native(NativeCommand::StackReorder(cli.into()))
+            }
+            StackSubcommand::Move(cli) => Dispatch::Native(NativeCommand::StackMove(cli.into())),
+            StackSubcommand::Squash(cli) => match StackSquashOpts::try_from(cli) {
+                Ok(opts) => Dispatch::Native(NativeCommand::StackSquash(opts)),
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    std::process::exit(2);
+                }
+            },
+            StackSubcommand::Checkout(cli) => {
+                Dispatch::Native(NativeCommand::StackCheckout(cli.into()))
+            }
+            StackSubcommand::Sync(cli) => Dispatch::Native(NativeCommand::StackSync(cli.into())),
+            StackSubcommand::Push(cli) => Dispatch::Native(NativeCommand::StackPush(cli.into())),
+            StackSubcommand::List(cli) => Dispatch::Native(NativeCommand::StackList(cli.into())),
+            StackSubcommand::Open(cli) => Dispatch::Native(NativeCommand::StackOpen(cli.into())),
+            StackSubcommand::Hooks(cli) => Dispatch::Native(NativeCommand::StackHooks(cli.into())),
+            StackSubcommand::Setup(cli) => Dispatch::Native(NativeCommand::StackSetup(cli.into())),
+        },
         Subcommands::SelfUpdate(cli) => Dispatch::Native(NativeCommand::SelfUpdate(cli.into())),
         Subcommands::Internal(InternalArgs {
             command:
@@ -2722,9 +2529,7 @@ struct CliRoot {
     /// Print extra internal diagnostics, useful when reporting a bug
     /// or investigating unexpected behavior. Accepted on every
     /// command.
-    // Shimmed (Python) subcommands re-inject `--debug` into the argv
-    // forwarded to the Python implementation; native commands don't
-    // consult it yet.
+    // No command path consults it yet.
     #[arg(long, global = true)]
     debug: bool,
 
@@ -2770,7 +2575,7 @@ enum Subcommands {
     /// Manage a stack of dependent branches and their pull requests:
     /// create, push, sync, reorder, reword, squash, and check out
     /// stacks built on top of your trunk.
-    Stack(ShimmedArgs),
+    Stack(StackArgs),
     /// Update mergify to the latest release.
     ///
     /// Download the newest published binary, verify it against the
@@ -2789,19 +2594,119 @@ enum Subcommands {
     Internal(InternalArgs),
 }
 
-/// Catch-all positional args for a shimmed subcommand. We surface
-/// the command natively through clap (so `--help` listings are
-/// complete) but the execution still has to reach the Python
-/// implementation. `disable_help_flag` keeps clap from rendering
-/// its own placeholder help when the user does
-/// `mergify <group> <shimmed> --help`; the `--help` falls into
-/// `args` and we forward it to Python, which prints the real help.
 #[derive(clap::Args)]
-#[command(disable_help_flag = true)]
-struct ShimmedArgs {
-    /// All arguments forwarded verbatim to the Python implementation.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-    args: Vec<String>,
+struct StackArgs {
+    #[command(subcommand)]
+    command: StackSubcommand,
+}
+
+/// Subcommands of `mergify stack`. clap sources each subcommand's
+/// `about` from the variant doc comment (not the wrapped struct), so
+/// the help text lives here.
+#[derive(Subcommand)]
+enum StackSubcommand {
+    /// Create a new stack branch.
+    ///
+    /// Create a branch that tracks your trunk and start a fresh stack on
+    /// top of it. The new branch is checked out by default; pass
+    /// `--no-checkout` to only create the ref and stay on the current
+    /// branch.
+    New(StackNewCli),
+    /// Attach a note explaining why a commit was amended.
+    ///
+    /// Record a note on a stack commit describing why it changed; the
+    /// note is surfaced when reviewing the stack. Edit it in your editor
+    /// or pass `-m`, add to an existing note with `--append`, or clear it
+    /// with `--remove`. Defaults to the commit at HEAD.
+    Note(StackNoteCli),
+    /// Edit a commit in the stack.
+    ///
+    /// Pause an interactive rebase on the target commit so you can amend
+    /// it, then resume. Omit the commit to start a fully interactive
+    /// rebase of the whole stack.
+    Edit(StackEditCli),
+    /// Drop commits from the stack.
+    ///
+    /// Remove one or more commits from the stack and rebase the commits
+    /// above them down. Each accepts a SHA prefix or a Change-Id prefix.
+    /// Use `--dry-run` to preview the resulting order first.
+    Drop(StackDropCli),
+    /// Fold commits into their parent.
+    ///
+    /// Squash each given commit into the commit below it, discarding the
+    /// folded commit's message (the parent's message is kept). Each
+    /// accepts a SHA prefix or a Change-Id prefix. Use `--dry-run` to
+    /// preview.
+    Fixup(StackFixupCli),
+    /// Change a commit's message.
+    ///
+    /// Rewrite the message of a commit in the stack. Pass `-m` to set the
+    /// new message inline, or omit it to edit the message in your editor.
+    /// Use `--dry-run` to preview.
+    Reword(StackRewordCli),
+    /// Reorder the stack's commits.
+    ///
+    /// Rebase the stack into the commit order you list. Commits you don't
+    /// mention keep their relative order. Each accepts a SHA prefix or a
+    /// Change-Id prefix. Use `--dry-run` to preview.
+    Reorder(StackReorderCli),
+    /// Move a commit within the stack.
+    ///
+    /// Move one commit to a new position in the stack: to the `first` or
+    /// `last` slot, or `before`/`after` another commit (passed as
+    /// TARGET). Use `--dry-run` to preview.
+    Move(StackMoveCli),
+    /// Squash commits into a target commit.
+    ///
+    /// Fold one or more source commits into a target commit, reordering
+    /// them adjacent to it first. Use the form `SRC... into TARGET`. Pass
+    /// `-m` to set the combined message; otherwise the target's message
+    /// is kept. Use `--dry-run` to preview.
+    Squash(StackSquashCli),
+    /// Check out a pull request stack from GitHub.
+    ///
+    /// Fetch a stack of pull requests by name and create a local branch
+    /// that tracks its leaf, so you can continue working on a stack
+    /// created elsewhere (a teammate's, or your own from another
+    /// machine).
+    Checkout(StackCheckoutCli),
+    /// Sync the stack with its trunk.
+    ///
+    /// Fetch the latest trunk, drop commits whose pull request has
+    /// already merged, and rebase the remaining stack on top. Use
+    /// `--dry-run` to preview.
+    Sync(StackSyncCli),
+    /// Push the stack and create or update its pull requests.
+    ///
+    /// Walk the local stack, optionally rebase it on trunk, push each
+    /// commit to its own branch, and create or update the matching pull
+    /// request and its Depends-On chain on GitHub. Use `--dry-run` to
+    /// preview the plan and the rebase decision without touching
+    /// anything.
+    Push(StackPushCli),
+    /// List the stack's commits and their pull requests.
+    ///
+    /// Show each commit in the current stack alongside its pull request,
+    /// CI, and review state. Pass `--verbose` for per-check and
+    /// per-reviewer detail, or `--json` for machine-readable output.
+    List(StackListCli),
+    /// Open a stack commit's pull request in the browser.
+    ///
+    /// Open the GitHub pull request for a commit in the stack in your
+    /// default browser. Defaults to the commit at HEAD.
+    Open(StackOpenCli),
+    /// Show or install the stack git hooks.
+    ///
+    /// Report the status of the git hooks that keep `Change-Id` trailers
+    /// on your commits (stacks rely on them to track commits across
+    /// rebases). Pass `--setup` to install or upgrade them.
+    Hooks(StackHooksCli),
+    /// Install the stack git hooks.
+    ///
+    /// Install or upgrade the git hooks that add `Change-Id` trailers to
+    /// your commits. This is an alias for `stack hooks --setup`; pass
+    /// `--check` to report status instead of installing.
+    Setup(StackSetupCli),
 }
 
 #[derive(clap::Args)]
@@ -2869,16 +2774,7 @@ struct InternalRebaseTodoRewriteArgs {
     todo_path: PathBuf,
 }
 
-/// Create a new stack branch.
-///
-/// Create a branch that tracks your trunk and start a fresh stack on
-/// top of it. The new branch is checked out by default; pass
-/// `--no-checkout` to only create the ref and stay on the current
-/// branch.
-// Parsed as a secondary clap pass after the top-level parse captures
-// `Stack(ShimmedArgs)`.
-#[derive(Parser)]
-#[command(name = "new")]
+#[derive(clap::Args)]
 struct StackNewCli {
     /// Name of the new branch.
     name: String,
@@ -2920,13 +2816,7 @@ impl From<StackNewCli> for StackNewOpts {
     }
 }
 
-/// Edit a commit in the stack.
-///
-/// Pause an interactive rebase on the target commit so you can amend
-/// it, then resume. Omit the commit to start a fully interactive
-/// rebase of the whole stack.
-#[derive(Parser)]
-#[command(name = "edit")]
+#[derive(clap::Args)]
 struct StackEditCli {
     /// Commit to pause the rebase on. Accepts a SHA prefix or a
     /// Change-Id prefix; omit for a fully interactive rebase.
@@ -2941,13 +2831,7 @@ impl From<StackEditCli> for StackEditOpts {
     }
 }
 
-/// Drop commits from the stack.
-///
-/// Remove one or more commits from the stack and rebase the commits
-/// above them down. Each accepts a SHA prefix or a Change-Id prefix.
-/// Use `--dry-run` to preview the resulting order first.
-#[derive(Parser)]
-#[command(name = "drop")]
+#[derive(clap::Args)]
 struct StackDropCli {
     /// Commits to drop. Each accepts a SHA prefix or a Change-Id
     /// prefix.
@@ -2968,14 +2852,7 @@ impl From<StackDropCli> for StackDropOpts {
     }
 }
 
-/// Fold commits into their parent.
-///
-/// Squash each given commit into the commit below it, discarding the
-/// folded commit's message (the parent's message is kept). Each
-/// accepts a SHA prefix or a Change-Id prefix. Use `--dry-run` to
-/// preview.
-#[derive(Parser)]
-#[command(name = "fixup")]
+#[derive(clap::Args)]
 struct StackFixupCli {
     /// Commits to fold into their parent.
     #[arg(required = true)]
@@ -2995,13 +2872,7 @@ impl From<StackFixupCli> for StackFixupOpts {
     }
 }
 
-/// Change a commit's message.
-///
-/// Rewrite the message of a commit in the stack. Pass `-m` to set the
-/// new message inline, or omit it to edit the message in your editor.
-/// Use `--dry-run` to preview.
-#[derive(Parser)]
-#[command(name = "reword")]
+#[derive(clap::Args)]
 struct StackRewordCli {
     /// Commit to reword. Accepts a SHA prefix or a Change-Id prefix.
     commit: String,
@@ -3026,13 +2897,7 @@ impl From<StackRewordCli> for StackRewordOpts {
     }
 }
 
-/// Reorder the stack's commits.
-///
-/// Rebase the stack into the commit order you list. Commits you don't
-/// mention keep their relative order. Each accepts a SHA prefix or a
-/// Change-Id prefix. Use `--dry-run` to preview.
-#[derive(Parser)]
-#[command(name = "reorder")]
+#[derive(clap::Args)]
 struct StackReorderCli {
     /// Commits in the order you want them rebased into.
     #[arg(required = true)]
@@ -3052,13 +2917,7 @@ impl From<StackReorderCli> for StackReorderOpts {
     }
 }
 
-/// Move a commit within the stack.
-///
-/// Move one commit to a new position in the stack: to the `first` or
-/// `last` slot, or `before`/`after` another commit (passed as
-/// TARGET). Use `--dry-run` to preview.
-#[derive(Parser)]
-#[command(name = "move")]
+#[derive(clap::Args)]
 struct StackMoveCli {
     /// Commit to move. Accepts a SHA prefix or a Change-Id prefix.
     commit: String,
@@ -3086,17 +2945,10 @@ impl From<StackMoveCli> for StackMoveOpts {
     }
 }
 
-/// Squash commits into a target commit.
-///
-/// Fold one or more source commits into a target commit, reordering
-/// them adjacent to it first. Use the form `SRC... into TARGET`. Pass
-/// `-m` to set the combined message; otherwise the target's message
-/// is kept. Use `--dry-run` to preview.
 // The `<SRC>... into <TARGET>` shape doesn't fit clap's positional
 // model directly, so we accept a flat `Vec<String>` and split on the
 // literal `into` keyword inside [`StackSquashOpts::try_from`].
-#[derive(Parser)]
-#[command(name = "squash")]
+#[derive(clap::Args)]
 struct StackSquashCli {
     /// `SRC1 SRC2 ... into TARGET` — must contain exactly one
     /// `into` token; everything before is a source, the single
@@ -3114,14 +2966,7 @@ struct StackSquashCli {
     dry_run: bool,
 }
 
-/// Check out a pull request stack from GitHub.
-///
-/// Fetch a stack of pull requests by name and create a local branch
-/// that tracks its leaf, so you can continue working on a stack
-/// created elsewhere (a teammate's, or your own from another
-/// machine).
-#[derive(Parser)]
-#[command(name = "checkout")]
+#[derive(clap::Args)]
 struct StackCheckoutCli {
     /// Name of the stack to check out.
     name: String,
@@ -3172,13 +3017,7 @@ impl From<StackCheckoutCli> for StackCheckoutOpts {
     }
 }
 
-/// Sync the stack with its trunk.
-///
-/// Fetch the latest trunk, drop commits whose pull request has
-/// already merged, and rebase the remaining stack on top. Use
-/// `--dry-run` to preview.
-#[derive(Parser)]
-#[command(name = "sync")]
+#[derive(clap::Args)]
 struct StackSyncCli {
     /// Author of the stack. Defaults to the token's user.
     #[arg(long)]
@@ -3220,15 +3059,7 @@ impl From<StackSyncCli> for StackSyncOpts {
     }
 }
 
-/// Push the stack and create or update its pull requests.
-///
-/// Walk the local stack, optionally rebase it on trunk, push each
-/// commit to its own branch, and create or update the matching pull
-/// request and its Depends-On chain on GitHub. Use `--dry-run` to
-/// preview the plan and the rebase decision without touching
-/// anything.
-#[derive(Parser)]
-#[command(name = "push")]
+#[derive(clap::Args)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "mirrors the Python CLI's flag surface 1:1"
@@ -3348,13 +3179,7 @@ impl From<StackPushCli> for StackPushOpts {
     }
 }
 
-/// List the stack's commits and their pull requests.
-///
-/// Show each commit in the current stack alongside its pull request,
-/// CI, and review state. Pass `--verbose` for per-check and
-/// per-reviewer detail, or `--json` for machine-readable output.
-#[derive(Parser)]
-#[command(name = "list")]
+#[derive(clap::Args)]
 struct StackListCli {
     /// Author of the stack. Defaults to the token's user.
     #[arg(long)]
@@ -3401,12 +3226,7 @@ impl From<StackListCli> for StackListOpts {
     }
 }
 
-/// Open a stack commit's pull request in the browser.
-///
-/// Open the GitHub pull request for a commit in the stack in your
-/// default browser. Defaults to the commit at HEAD.
-#[derive(Parser)]
-#[command(name = "open")]
+#[derive(clap::Args)]
 struct StackOpenCli {
     /// Commit whose pull request to open. Accepts a SHA prefix or a
     /// Change-Id prefix; defaults to HEAD.
@@ -3448,13 +3268,7 @@ impl From<StackOpenCli> for StackOpenOpts {
     }
 }
 
-/// Show or install the stack git hooks.
-///
-/// Report the status of the git hooks that keep `Change-Id` trailers
-/// on your commits (stacks rely on them to track commits across
-/// rebases). Pass `--setup` to install or upgrade them.
-#[derive(Parser)]
-#[command(name = "hooks")]
+#[derive(clap::Args)]
 struct StackHooksCli {
     /// Install or upgrade hooks.
     #[arg(long = "setup", action = clap::ArgAction::SetTrue)]
@@ -3474,13 +3288,7 @@ impl From<StackHooksCli> for StackHooksOpts {
     }
 }
 
-/// Install the stack git hooks.
-///
-/// Install or upgrade the git hooks that add `Change-Id` trailers to
-/// your commits. This is an alias for `stack hooks --setup`; pass
-/// `--check` to report status instead of installing.
-#[derive(Parser)]
-#[command(name = "setup")]
+#[derive(clap::Args)]
 struct StackSetupCli {
     /// Force reinstall of hook wrappers, even if user modified them.
     #[arg(short = 'f', long = "force", action = clap::ArgAction::SetTrue)]
@@ -3563,14 +3371,7 @@ impl TryFrom<StackSquashCli> for StackSquashOpts {
     }
 }
 
-/// Attach a note explaining why a commit was amended.
-///
-/// Record a note on a stack commit describing why it changed; the
-/// note is surfaced when reviewing the stack. Edit it in your editor
-/// or pass `-m`, add to an existing note with `--append`, or clear it
-/// with `--remove`. Defaults to the commit at HEAD.
-#[derive(Parser)]
-#[command(name = "note")]
+#[derive(clap::Args)]
 struct StackNoteCli {
     /// Target commit. Accepts a SHA prefix, a ref (`HEAD~1`,
     /// branch name, …), or a Change-Id prefix (resolved against
@@ -4603,10 +4404,7 @@ mod tests {
         assert!(parsed.debug);
     }
 
-    // Note: the previous shimmed-dispatch tests verified that
-    // unknown stack subcommands fell through to a Python shim
-    // with the `--debug` flag re-injected. The shim is gone;
-    // unknown subcommands now exit via `clap::Error::exit()`
+    // Unknown stack subcommands exit via `clap::Error::exit()`
     // (process::exit(2) + "did you mean?" output), which can't
     // be unit-tested without subprocess plumbing. End-to-end
     // smoke is covered by clap's own conformance tests.
