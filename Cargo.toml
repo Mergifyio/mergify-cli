@@ -14,10 +14,10 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-# MSRV: the minimum supported toolchain. Set to the rustc that
-# ships edition 2024, so the project works on any stable from
-# early 2025 onwards. CI uses whatever stable is current.
-rust-version = "1.85"
+# MSRV: minimum supported toolchain. 1.88 is the floor — the code
+# uses let-chains (`if let Some(x) = … && cond`), stabilized in Rust
+# 1.88. The msrv CI job pins this exact version; move both together.
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/Mergifyio/mergify-cli"
 authors = ["Mergify Team <hello@mergify.com>"]

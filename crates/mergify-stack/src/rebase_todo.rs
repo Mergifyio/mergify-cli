@@ -364,12 +364,12 @@ fn rewrite_squash(
         out.push_str(rest);
         out.push_str(term_to_emit);
 
-        if let Some((after_sha, command)) = exec_set {
-            if sha_matches(sha, after_sha) {
-                out.push_str("exec ");
-                out.push_str(command);
-                out.push_str(term_to_emit);
-            }
+        if let Some((after_sha, command)) = exec_set
+            && sha_matches(sha, after_sha)
+        {
+            out.push_str("exec ");
+            out.push_str(command);
+            out.push_str(term_to_emit);
         }
     }
     out.push_str(&other_lines);

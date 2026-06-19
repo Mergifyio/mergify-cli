@@ -151,10 +151,10 @@ pub fn detect(
     output: &mut dyn Output,
     notes_reader: NotesReader<'_>,
 ) -> Result<References, CliError> {
-    if env::var("BUILDKITE").as_deref() == Ok("true") {
-        if let Some(refs) = detect_from_buildkite(notes_reader) {
-            return Ok(refs);
-        }
+    if env::var("BUILDKITE").as_deref() == Ok("true")
+        && let Some(refs) = detect_from_buildkite(notes_reader)
+    {
+        return Ok(refs);
     }
 
     let Some((event_name, event)) = load_event() else {
@@ -195,16 +195,15 @@ fn detect_from_buildkite(notes_reader: NotesReader<'_>) -> Option<References> {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "HEAD".to_string());
-    if let Ok(branch) = env::var("BUILDKITE_BRANCH") {
-        if !branch.is_empty() {
-            if let Some(base) = notes_reader(&branch, &commit) {
-                return Some(References {
-                    base: Some(base),
-                    head: commit,
-                    source: ReferencesSource::MergeQueue,
-                });
-            }
-        }
+    if let Ok(branch) = env::var("BUILDKITE_BRANCH")
+        && !branch.is_empty()
+        && let Some(base) = notes_reader(&branch, &commit)
+    {
+        return Some(References {
+            base: Some(base),
+            head: commit,
+            source: ReferencesSource::MergeQueue,
+        });
     }
     let base_branch = env::var("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
         .ok()
@@ -227,18 +226,16 @@ fn detect_from_pull_request_event(
         .and_then(|pr| pr.head.as_ref())
         .map_or_else(|| "HEAD".to_string(), |r| r.sha.clone());
 
-    if let Some(pr) = &event.pull_request {
-        if let Some(head_ref) = &pr.head {
-            if let Some(branch) = head_ref.r#ref.as_deref() {
-                if let Some(base) = notes_reader(branch, &head_ref.sha) {
-                    return Ok(Some(References {
-                        base: Some(base),
-                        head,
-                        source: ReferencesSource::MergeQueue,
-                    }));
-                }
-            }
-        }
+    if let Some(pr) = &event.pull_request
+        && let Some(head_ref) = &pr.head
+        && let Some(branch) = head_ref.r#ref.as_deref()
+        && let Some(base) = notes_reader(branch, &head_ref.sha)
+    {
+        return Ok(Some(References {
+            base: Some(base),
+            head,
+            source: ReferencesSource::MergeQueue,
+        }));
     }
 
     if let Some(meta) = extract_from_event(event, output)? {
@@ -249,24 +246,24 @@ fn detect_from_pull_request_event(
         }));
     }
 
-    if let Some(pr) = &event.pull_request {
-        if let Some(base) = &pr.base {
-            return Ok(Some(References {
-                base: Some(base.sha.clone()),
-                head,
-                source: ReferencesSource::GithubEventPullRequest,
-            }));
-        }
+    if let Some(pr) = &event.pull_request
+        && let Some(base) = &pr.base
+    {
+        return Ok(Some(References {
+            base: Some(base.sha.clone()),
+            head,
+            source: ReferencesSource::GithubEventPullRequest,
+        }));
     }
 
-    if let Some(repo) = &event.repository {
-        if let Some(default_branch) = &repo.default_branch {
-            return Ok(Some(References {
-                base: Some(default_branch.clone()),
-                head,
-                source: ReferencesSource::GithubEventPullRequest,
-            }));
-        }
+    if let Some(repo) = &event.repository
+        && let Some(default_branch) = &repo.default_branch
+    {
+        return Ok(Some(References {
+            base: Some(default_branch.clone()),
+            head,
+            source: ReferencesSource::GithubEventPullRequest,
+        }));
     }
 
     Ok(None)

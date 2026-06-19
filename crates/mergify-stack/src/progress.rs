@@ -523,14 +523,15 @@ fn render_row(
             &format!("{glyph_style}{status}{reset}", reset = theme.reset),
             1,
         );
-        if let Some(detail) = row.detail.as_deref() {
-            if !detail.is_empty() && out.contains(detail) {
-                out = out.replacen(
-                    detail,
-                    &format!("{dim}{detail}{reset}", dim = theme.dim, reset = theme.reset),
-                    1,
-                );
-            }
+        if let Some(detail) = row.detail.as_deref()
+            && !detail.is_empty()
+            && out.contains(detail)
+        {
+            out = out.replacen(
+                detail,
+                &format!("{dim}{detail}{reset}", dim = theme.dim, reset = theme.reset),
+                1,
+            );
         }
     }
     out

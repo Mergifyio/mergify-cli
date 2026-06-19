@@ -240,13 +240,11 @@ fn emit_scopes_listing(
         writeln!(w, "Scopes touched:")?;
         for s in hit {
             writeln!(w, "- {s}")?;
-            if actions_debug {
-                if let Some(files) = by_scope.get(s) {
-                    let mut files: Vec<&String> = files.iter().collect();
-                    files.sort();
-                    for f in files {
-                        writeln!(w, "    {f}")?;
-                    }
+            if actions_debug && let Some(files) = by_scope.get(s) {
+                let mut files: Vec<&String> = files.iter().collect();
+                files.sort();
+                for f in files {
+                    writeln!(w, "    {f}")?;
                 }
             }
         }

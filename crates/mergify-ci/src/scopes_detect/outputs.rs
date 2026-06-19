@@ -179,14 +179,14 @@ pub fn maybe_write_buildkite_annotation(
                 continue;
             }
         };
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Err(e) = stdin.write_all(md.as_bytes()) {
-                eprintln!(
-                    "warning: failed to pipe markdown to buildkite-agent annotate \
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(e) = stdin.write_all(md.as_bytes())
+        {
+            eprintln!(
+                "warning: failed to pipe markdown to buildkite-agent annotate \
                      ({scope_label} scope): {e}",
-                );
-                // fall through to wait() so the child is reaped
-            }
+            );
+            // fall through to wait() so the child is reaped
         }
         let output = match child.wait_with_output() {
             Ok(o) => o,

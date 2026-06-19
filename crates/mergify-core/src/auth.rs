@@ -41,10 +41,10 @@ pub fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
             return Ok(value);
         }
     }
-    if let Ok(token) = gh_auth_token() {
-        if !token.is_empty() {
-            return Ok(token);
-        }
+    if let Ok(token) = gh_auth_token()
+        && !token.is_empty()
+    {
+        return Ok(token);
     }
     Err(CliError::Configuration(
         "please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, \

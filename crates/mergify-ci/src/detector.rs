@@ -386,10 +386,10 @@ pub fn get_head_sha() -> Option<String> {
 }
 
 fn get_github_actions_head_sha() -> Option<String> {
-    if env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request") {
-        if let Some(sha) = read_github_event_pull_request_head_sha() {
-            return Some(sha);
-        }
+    if env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request")
+        && let Some(sha) = read_github_event_pull_request_head_sha()
+    {
+        return Some(sha);
     }
     non_empty_env("GITHUB_SHA")
 }
