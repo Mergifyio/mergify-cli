@@ -200,8 +200,7 @@ enum NativeCommand {
     InternalStackRemoteChanges(InternalStackRemoteChangesOpts),
     /// `mergify stack new <name> [--base REMOTE/BRANCH]
     /// [--checkout/--no-checkout]` — create a new stack branch
-    /// tracking the resolved trunk. First stack subcommand to land
-    /// natively; the rest still shim to Python.
+    /// tracking the resolved trunk.
     StackNew(StackNewOpts),
     /// `mergify stack note [<commit>] [-m <msg>] [--append]
     /// [--remove]` — attach/append/remove the "why was this commit
@@ -1385,6 +1384,19 @@ fn render_hooks_status(status: &mergify_stack::commands::setup::HooksStatus) {
     }
 }
 
+/// Absolute path to the running `mergify` binary. The rebase-family
+/// stack subcommands set it as `GIT_SEQUENCE_EDITOR` so the spawned
+/// `git rebase -i` re-invokes this binary to rewrite the todo file in
+/// place. Keeps the original I/O error as a `caused by:` source.
+fn mergify_self_exe() -> Result<PathBuf, mergify_core::CliError> {
+    std::env::current_exe().map_err(|e| {
+        mergify_core::CliError::wrap(
+            "could not locate current binary path for GIT_SEQUENCE_EDITOR",
+            e,
+        )
+    })
+}
+
 #[allow(clippy::too_many_lines)] // one match arm per native command
 fn run_native(cmd: NativeCommand) -> ExitCode {
     // Pure introspection — no async runtime, network, or shared output
@@ -1777,11 +1789,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackEdit(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let outcome = mergify_stack::commands::edit::run(
                     &mergify_stack::commands::edit::Options {
                         repo_dir: None,
@@ -1805,11 +1813,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackDrop(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let outcome = mergify_stack::commands::drop::run(
                     &mergify_stack::commands::drop::Options {
                         repo_dir: None,
@@ -1838,11 +1842,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackFixup(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let outcome = mergify_stack::commands::fixup::run(
                     &mergify_stack::commands::fixup::Options {
                         repo_dir: None,
@@ -1871,11 +1871,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackReword(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let outcome = mergify_stack::commands::reword::run(
                     &mergify_stack::commands::reword::Options {
                         repo_dir: None,
@@ -1905,11 +1901,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackReorder(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let outcome = mergify_stack::commands::reorder::run(
                     &mergify_stack::commands::reorder::Options {
                         repo_dir: None,
@@ -1941,11 +1933,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackMove(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let position = match opts.position {
                     StackMovePosition::First => mergify_stack::commands::move_cmd::Position::First,
                     StackMovePosition::Last => mergify_stack::commands::move_cmd::Position::Last,
@@ -1984,11 +1972,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackSquash(opts) => {
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
                 let outcome = mergify_stack::commands::squash::run(
                     &mergify_stack::commands::squash::Options {
                         repo_dir: None,
@@ -2149,11 +2133,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     mergify_stack::stack_context::resolve_default_branch_prefix(None, &author)
                 });
 
-                let mergify_binary = std::env::current_exe().map_err(|e| {
-                    mergify_core::CliError::Generic(format!(
-                        "could not locate current binary path for GIT_SEQUENCE_EDITOR: {e}"
-                    ))
-                })?;
+                let mergify_binary = mergify_self_exe()?;
 
                 let outcome = mergify_stack::commands::sync::run(
                     &mergify_stack::commands::sync::Options {
