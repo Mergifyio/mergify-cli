@@ -10,34 +10,34 @@ description = "Native implementation of `mergify stack` subcommands."
 publish = false
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { workspace = true }
 mergify-core = { path = "../mergify-core" }
 # `stack push` live progress reuses the shared TTY/`NO_COLOR`-aware
 # color palette instead of hand-rolling ANSI consts.
 mergify-tui = { path = "../mergify-tui" }
-regex = "1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tempfile = "3.14"
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 # `stack push` live progress: query the terminal width so each
 # in-place row is truncated to one physical line (multi-line
 # cursor-up redraw breaks if a row wraps).
-terminal_size = "0.4"
+terminal_size = { workspace = true }
 # Measure CJK/emoji/wide glyphs at their real terminal column width so
 # the in-place redraw's truncation never lets a row wrap (a wrap
 # desyncs the cursor-up math and corrupts the live block).
-unicode-width = "0.2"
+unicode-width = { workspace = true }
 # `rt` for `spawn_blocking` — runs the synchronous git fetch/push
 # off the async executor so the `stack push` progress spinner keeps
 # ticking smoothly across them.
-tokio = { version = "1", default-features = false, features = ["rt", "time"] }
-url = "2"
+tokio = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
-temp-env = "0.3"
-tokio = { version = "1", default-features = false, features = ["macros", "rt"] }
-url = "2"
-wiremock = "0.6"
+temp-env = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true
