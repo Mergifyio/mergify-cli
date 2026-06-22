@@ -1,0 +1,1 @@
+Unify the per-subcommand --verbose onto the global -v flag: the local --verbose on stack list and queue show shared the global verbose arg id and panicked clap at runtime (queue show exited 101 instead of the API-error code).
