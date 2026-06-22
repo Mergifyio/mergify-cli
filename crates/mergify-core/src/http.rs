@@ -25,6 +25,15 @@ use url::Url;
 use crate::error::CliError;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Per-connection TCP connect timeout, independent of the overall
+/// request budget — a black-holed host shouldn't burn the full 30s
+/// before the first byte.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Upper bound on a rate-limit-dictated wait. GitHub's reset window
+/// can be an hour out; the client honours `Retry-After` / reset only
+/// up to this cap, then fails fast rather than blocking the CLI on an
+/// interactive command.
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 /// User-Agent header sent on every request. GitHub's REST API
@@ -118,6 +127,7 @@ impl Client {
         let token_opt = (!token_str.is_empty()).then_some(token_str);
         let inner = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| CliError::Generic(format!("build HTTP client: {e}")))?;
@@ -303,9 +313,30 @@ impl Client {
                     if tolerate_not_found && status == StatusCode::NOT_FOUND {
                         return Ok(None);
                     }
+                    // Inspect rate-limit headers before `error_message`
+                    // consumes the body. GitHub signals secondary/abuse
+                    // limits with 429, or 403 carrying `Retry-After` /
+                    // an exhausted `X-RateLimit-Remaining`. A bare 403
+                    // (auth / permission denied) must NOT be retried.
+                    let rate_limit = rate_limit_wait(&resp);
+                    let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
+                        || (status == StatusCode::FORBIDDEN && rate_limit.is_some());
                     last_message = error_message(status, resp).await;
-                    if status.is_server_error() && attempt + 1 < self.retry.max_attempts {
-                        tokio::time::sleep(backoff).await;
+                    if (status.is_server_error() || rate_limited)
+                        && attempt + 1 < self.retry.max_attempts
+                    {
+                        // A rate-limit response dictates the wait, capped
+                        // so the CLI never blocks on a far-off reset;
+                        // everything else uses exponential backoff. A
+                        // reset beyond the cap fails fast.
+                        let delay = match rate_limit {
+                            Some(wait) if wait > MAX_RATE_LIMIT_WAIT => {
+                                return Err(self.api_error(last_message));
+                            }
+                            Some(wait) => wait,
+                            None => backoff,
+                        };
+                        tokio::time::sleep(delay).await;
                         backoff *= 2;
                         continue;
                     }
@@ -410,6 +441,38 @@ impl Client {
 
 fn is_transient(e: &reqwest::Error) -> bool {
     e.is_timeout() || e.is_connect()
+}
+
+/// The wait hinted by a rejection's rate-limit headers, if any.
+/// Prefers `Retry-After` (delta-seconds, as GitHub sends); falls back
+/// to `X-RateLimit-Reset` (epoch seconds) when `X-RateLimit-Remaining`
+/// is `0`. Returns `None` when there is no rate-limit signal — the
+/// caller uses that to tell a rate-limited 403 from a permission 403.
+fn rate_limit_wait(resp: &reqwest::Response) -> Option<Duration> {
+    let headers = resp.headers();
+    if let Some(secs) = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+    {
+        return Some(Duration::from_secs(secs));
+    }
+    let exhausted = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim() == "0");
+    if exhausted {
+        let reset = headers
+            .get("x-ratelimit-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        return Some(Duration::from_secs(reset.saturating_sub(now)));
+    }
+    None
 }
 
 async fn error_message(status: StatusCode, mut resp: reqwest::Response) -> String {
@@ -670,6 +733,63 @@ mod tests {
         let got: Foo = client.get("/foo").await.unwrap();
         assert_eq!(got, Foo { bar: 99 });
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    struct RateLimited {
+        attempts: Arc<AtomicU32>,
+        fail_first: u32,
+    }
+
+    impl Respond for RateLimited {
+        fn respond(&self, _req: &Request) -> ResponseTemplate {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt < self.fail_first {
+                // `Retry-After: 0` so the test honours the header path
+                // without actually sleeping.
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "0")
+                    .set_body_string("rate limited")
+            } else {
+                ResponseTemplate::new(200).set_body_json(Foo { bar: 7 })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_on_rate_limit_then_succeeds() {
+        let server = MockServer::start().await;
+        let attempts = Arc::new(AtomicU32::new(0));
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(RateLimited {
+                attempts: Arc::clone(&attempts),
+                fail_first: 1,
+            })
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::GitHub);
+        let got: Foo = client.get("/foo").await.unwrap();
+        assert_eq!(got, Foo { bar: 7 });
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn bare_403_is_not_retried() {
+        let server = MockServer::start().await;
+        // No rate-limit headers → a permission/auth 403, which must
+        // fail immediately. `expect(1)` fails on server drop if the
+        // client retried.
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::GitHub);
+        let err = client.get::<Foo>("/foo").await.unwrap_err();
+        assert!(matches!(err, CliError::GitHubApi(_)));
     }
 
     #[tokio::test]
