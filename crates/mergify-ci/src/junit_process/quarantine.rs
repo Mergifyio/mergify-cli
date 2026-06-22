@@ -182,7 +182,9 @@ pub async fn check_failing(
 /// callers can `?` it.
 impl From<QuarantineFailed> for CliError {
     fn from(err: QuarantineFailed) -> Self {
-        Self::Generic(err.message)
+        // Preserve the typed error as a transparent source instead of
+        // flattening it (same Display, stays downcastable).
+        Self::Source(Box::new(err))
     }
 }
 
