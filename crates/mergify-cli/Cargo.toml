@@ -25,11 +25,12 @@ mergify-stack = { path = "../mergify-stack" }
 # `mergify self-update`: hits the GitHub Releases API for the
 # latest tag, downloads the asset matching the current target,
 # verifies it against `SHA256SUMS` (same format the curl|sh
-# installer trusts), and atomically swaps the running binary. We
-# go through `reqwest` directly here instead of
-# `mergify-core::HttpClient` because the latter wraps GitHub-API
-# auth + retry, neither of which apply to unauthenticated public
-# release downloads. `self_replace` handles the Windows
+# installer trusts), and atomically swaps the running binary. Uses
+# `reqwest` directly rather than `mergify-core::http::Client`, which
+# is path/JSON/auth-oriented; self-update does unauthenticated
+# *binary* downloads across two hosts (api.github.com + asset CDN),
+# does its own retry, and maps GitHub failures to the GitHub-API
+# exit code. `self_replace` handles the Windows
 # can't-rename-over-a-running-exe dance cross-platform.
 reqwest = { workspace = true }
 self-replace = { workspace = true }

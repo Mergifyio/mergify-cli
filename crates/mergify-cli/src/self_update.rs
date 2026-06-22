@@ -119,7 +119,8 @@ pub async fn run(opts: &Options) -> Result<(), CliError> {
     let current = crate::VERSION;
     let target = current_target()?;
     let client = http_client()?;
-    let release = fetch_latest_release(&client, &latest_release_url()).await?;
+    let url = latest_release_url();
+    let release = with_retry(3, || fetch_latest_release(&client, &url)).await?;
     let latest = release.tag_name.as_str();
 
     if opts.check_only {
@@ -143,9 +144,12 @@ pub async fn run(opts: &Options) -> Result<(), CliError> {
         .assets
         .iter()
         .find(|a| a.name == "SHA256SUMS")
-        .ok_or_else(|| CliError::Generic("latest release has no SHA256SUMS asset".to_string()))?;
-    let archive = download(&client, &asset.browser_download_url).await?;
-    let sums = download_text(&client, &sums_asset.browser_download_url).await?;
+        .ok_or_else(|| CliError::GitHubApi("latest release has no SHA256SUMS asset".to_string()))?;
+    let archive = with_retry(3, || download(&client, &asset.browser_download_url)).await?;
+    let sums = with_retry(3, || {
+        download_text(&client, &sums_asset.browser_download_url)
+    })
+    .await?;
     // Verify against the asset's *actual* published name, so the
     // `SHA256SUMS` lookup matches whatever scheme the release used.
     verify_checksum(&archive, &asset.name, &sums)?;
@@ -220,12 +224,12 @@ async fn fetch_latest_release(
         .get(url)
         .send()
         .await
-        .map_err(|e| CliError::Generic(format!("GET {url}: {e}")))?
+        .map_err(|e| CliError::GitHubApi(format!("GET {url}: {e}")))?
         .error_for_status()
-        .map_err(|e| CliError::Generic(format!("GitHub API: {e}")))?
+        .map_err(|e| CliError::GitHubApi(format!("GitHub API: {e}")))?
         .json::<LatestRelease>()
         .await
-        .map_err(|e| CliError::Generic(format!("parse latest-release: {e}")))
+        .map_err(|e| CliError::GitHubApi(format!("parse latest-release: {e}")))
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, CliError> {
@@ -233,19 +237,48 @@ async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, CliErr
         .get(url)
         .send()
         .await
-        .map_err(|e| CliError::Generic(format!("GET {url}: {e}")))?
+        .map_err(|e| CliError::GitHubApi(format!("GET {url}: {e}")))?
         .error_for_status()
-        .map_err(|e| CliError::Generic(format!("GET {url}: {e}")))?
+        .map_err(|e| CliError::GitHubApi(format!("GET {url}: {e}")))?
         .bytes()
         .await
-        .map_err(|e| CliError::Generic(format!("read body {url}: {e}")))?
+        .map_err(|e| CliError::GitHubApi(format!("read body {url}: {e}")))?
         .to_vec())
 }
 
 async fn download_text(client: &reqwest::Client, url: &str) -> Result<String, CliError> {
     let bytes = download(client, url).await?;
     String::from_utf8(bytes)
-        .map_err(|e| CliError::Generic(format!("non-UTF8 body from {url}: {e}")))
+        .map_err(|e| CliError::GitHubApi(format!("non-UTF8 body from {url}: {e}")))
+}
+
+/// Retry a GitHub network read a few times on transient failures
+/// (connect/timeout). Release metadata and asset downloads are
+/// one-shot and idempotent, so a blip shouldn't fail the update.
+/// Only [`CliError::GitHubApi`] is retried — that's exactly what the
+/// network reads (`fetch_latest_release` / `download`) emit, so
+/// integrity errors (checksum/missing asset) that are raised outside
+/// the retried closure never get re-run.
+async fn with_retry<T, F, Fut>(attempts: u32, mut op: F) -> Result<T, CliError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, CliError>>,
+{
+    // 500ms, then 1s before the final try. Indexed by completed
+    // attempt; the last attempt's result is returned without sleeping.
+    let backoff = [Duration::from_millis(500), Duration::from_secs(1)];
+    for attempt in 1..attempts {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e @ CliError::GitHubApi(_)) => {
+                let idx = (attempt as usize - 1).min(backoff.len() - 1);
+                eprintln!("self-update: transient GitHub error ({e}); retrying...");
+                tokio::time::sleep(backoff[idx]).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    op().await
 }
 
 /// Render digest bytes as a lowercase hex string. `sha2` 0.11 returns
@@ -285,10 +318,10 @@ fn verify_checksum(archive: &[u8], asset_name: &str, sums: &str) -> Result<(), C
         }
     }
     let expected = expected.ok_or_else(|| {
-        CliError::Generic(format!("no checksum entry for {asset_name} in SHA256SUMS"))
+        CliError::GitHubApi(format!("no checksum entry for {asset_name} in SHA256SUMS"))
     })?;
     if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(CliError::Generic(format!(
+        return Err(CliError::GitHubApi(format!(
             "malformed checksum entry for {asset_name}"
         )));
     }
@@ -298,7 +331,7 @@ fn verify_checksum(archive: &[u8], asset_name: &str, sums: &str) -> Result<(), C
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
-        Err(CliError::Generic(format!(
+        Err(CliError::GitHubApi(format!(
             "checksum mismatch for {asset_name}: expected {expected}, got {actual}"
         )))
     }
