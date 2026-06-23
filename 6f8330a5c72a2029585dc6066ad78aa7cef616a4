@@ -1,0 +1,1 @@
+Reworked from auto-writing completion/man files to print-only completion instructions, aligning with rustup/starship: a curl|sh installer drops one binary and leaves shell config to the user. Auto-write was unreliable anyway (~/.zfunc off zsh fpath, ~/.local/share/man unsearched by macOS man). Man-page generation stays in the binary for real packaging.
