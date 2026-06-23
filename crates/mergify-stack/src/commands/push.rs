@@ -19,13 +19,11 @@
 //!    via [`crate::comment_upsert`].
 //! 10. Tear down orphan branches.
 //!
-//! Ported from `mergify_cli/stack/push.py::stack_push`. The
-//! Python version fans out PR upserts through `asyncio.gather +
-//! asyncio.Event` so a `Create` predecessor doesn't block its
-//! dependent; the Rust port runs them sequentially because for
-//! the typical 2–5 PR stacks the latency difference is dominated
-//! by the GitHub round-trip anyway, and the simpler code avoids
-//! a `tokio::sync::Notify` graph.
+//! PR upserts run sequentially. Async here is incidental — it comes
+//! from reqwest's async-only client, not from a need for concurrency:
+//! for the typical 2–5 PR stacks the latency is dominated by the
+//! GitHub round-trip, and sequential code avoids a
+//! `tokio::sync::Notify` dependency graph.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -482,10 +480,9 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         }
     }
 
-    // Sequential per-PR upsert so each Depends-On has access to
-    // the predecessor's freshly-known PR number. Python uses
-    // asyncio fan-out + Event coordination; sequential is fine
-    // for typical stack sizes.
+    // Sequential per-PR upsert so each Depends-On has access to the
+    // predecessor's freshly-known PR number — and fine for typical
+    // stack sizes (see the module doc on why this isn't parallelised).
     let mut last_pull_number: Option<u64> = None;
     for (i, entry) in planned.locals.iter_mut().enumerate() {
         let action = entry.change.action;
