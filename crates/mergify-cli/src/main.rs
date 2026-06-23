@@ -2733,9 +2733,9 @@ enum StackSubcommand {
     Reword(StackRewordCli),
     /// Reorder the stack's commits.
     ///
-    /// Rebase the stack into the commit order you list. Commits you don't
-    /// mention keep their relative order. Each accepts a SHA prefix or a
-    /// Change-Id prefix. Use `--dry-run` to preview.
+    /// Rebase the stack into the order you list. List every commit in the
+    /// stack — all of them must appear, in the new order. Each accepts a
+    /// SHA prefix or a Change-Id prefix. Use `--dry-run` to preview.
     Reorder(StackReorderCli),
     /// Move a commit within the stack.
     ///
@@ -2990,7 +2990,8 @@ impl From<StackRewordCli> for StackRewordOpts {
 
 #[derive(clap::Args)]
 struct StackReorderCli {
-    /// Commits in the order you want them rebased into.
+    /// Every commit in the stack, in the order you want them rebased
+    /// into. All stack commits must be listed.
     #[arg(required = true)]
     commits: Vec<String>,
 
@@ -3740,9 +3741,11 @@ struct ScopesSendCliArgs {
     #[arg(long, short = 'r')]
     repository: Option<String>,
 
-    /// Pull request number. Falls back to ``GITHUB_EVENT_PATH``
-    /// (reads ``.pull_request.number``). When neither is available
-    /// the command prints a skip message and exits 0.
+    /// Pull request number. When omitted, it's detected from the CI
+    /// environment: under GitHub Actions from the event payload
+    /// (``.pull_request.number`` in ``GITHUB_EVENT_PATH``), under
+    /// Buildkite from ``BUILDKITE_PULL_REQUEST``. When none can be
+    /// detected the command prints a skip message and exits 0.
     #[arg(long = "pull-request", short = 'p')]
     pull_request: Option<u64>,
 
