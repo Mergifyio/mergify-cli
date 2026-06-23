@@ -219,8 +219,14 @@ the **root table**, not the crate — that's the single source of truth.
 
 Doc updates ship in the **same** commit/PR as the change, never a follow-up.
 
-1. **README.md** — keep Commands/Usage current with every top-level command
-   (including `self-update` and `completions`).
+1. **README.md** — it documents the CLI contract at group altitude: the
+   top-level command groups, global options, the token/repository/api-url
+   resolution order, environment variables, and exit codes. Per-subcommand
+   detail deliberately lives in `--help` and docs.mergify.com, not here — don't
+   re-add an exhaustive subcommand list. When you change that surface —
+   add/rename/remove a command group, add or alter a global flag or an env
+   fallback, add an exit code — update the matching section in the same PR. The
+   `cli_schema_golden` test guards the schema snapshot, **not** the README prose.
 2. **Skills** (`skills/`) — update the *matching* skill (don't create a
    duplicate). Directory names aren't 1:1 with command groups:
 
