@@ -1,6 +1,11 @@
 #!/bin/sh
 # Install the `mergify` CLI from a GitHub Release.
 #
+# After installing, prints the commands to enable shell completions
+# for the detected shell. It does not write them itself — matching
+# rustup/starship, the installer drops a single binary and leaves the
+# user's shell dirs untouched.
+#
 # Default usage:
 #
 #   curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
@@ -71,6 +76,35 @@ sha256_check() {
     else
         die "neither sha256sum nor shasum found — install one and retry"
     fi
+}
+
+# Print the commands to enable tab completion for the detected shell.
+# We print rather than write: matching rustup/starship, the installer
+# stays a single binary drop and never touches the user's shell dirs.
+# Auto-writing is also unreliable — ~/.zfunc is off zsh's $fpath by
+# default — so the user runs `mergify completions <shell>` themselves.
+print_completion_hint() {
+    shell_name=$(basename "${SHELL:-}")
+    case "${shell_name}" in
+        bash)
+            printf '\nTo enable shell completions for bash:\n'
+            printf '  mkdir -p ~/.local/share/bash-completion/completions\n'
+            printf '  mergify completions bash > ~/.local/share/bash-completion/completions/mergify\n'
+            ;;
+        zsh)
+            printf '\nTo enable shell completions for zsh:\n'
+            printf '  mkdir -p ~/.zfunc && mergify completions zsh > ~/.zfunc/_mergify\n'
+            printf '  # then add to ~/.zshrc:  fpath+=~/.zfunc; autoload -Uz compinit; compinit\n'
+            ;;
+        fish)
+            printf '\nTo enable shell completions for fish:\n'
+            printf '  mergify completions fish > ~/.config/fish/completions/mergify.fish\n'
+            ;;
+        *)
+            printf '\nTo enable shell completions:\n'
+            printf '  mergify completions <bash|zsh|fish|elvish|powershell>\n'
+            ;;
+    esac
 }
 
 main() {
@@ -189,6 +223,8 @@ main() {
            # shellcheck disable=SC2016
            printf 'Add it to your shell config:  export PATH="%s:$PATH"\n' "${INSTALL_DIR}" ;;
     esac
+
+    print_completion_hint
 }
 
 main "$@"
