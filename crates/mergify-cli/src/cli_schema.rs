@@ -184,7 +184,11 @@ fn command_node(
 
     let commands = cmd
         .get_subcommands()
-        .filter(|sub| !sub.is_hide_set())
+        // Skip `hide`-d commands and clap's synthetic `help`
+        // subcommand — the latter is universal plumbing, not part of
+        // the user-facing reference (same reasoning as the `--help`
+        // arg filter above).
+        .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
         .map(|sub| {
             let mut child = path.clone();
             child.push(sub.get_name().to_string());
