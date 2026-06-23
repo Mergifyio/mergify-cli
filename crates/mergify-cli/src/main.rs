@@ -636,6 +636,9 @@ fn detect_dispatch(argv: &[String]) -> Dispatch {
         Ok(parsed) => parsed,
         Err(err) => err.exit(),
     };
+    // Resolve the color preference once, before any command builds a
+    // theme via `Theme::detect`.
+    mergify_tui::set_color_choice(parsed.color.into());
     dispatch_from_parsed(parsed)
 }
 
@@ -2540,8 +2543,33 @@ struct CliRoot {
     #[arg(long, global = true)]
     debug: bool,
 
+    /// When to use color in terminal output.
+    #[arg(long, global = true, value_enum, default_value_t = ColorArg::Auto)]
+    color: ColorArg,
+
     #[command(subcommand)]
     command: Subcommands,
+}
+
+/// `--color` choice. Mirrors [`mergify_tui::ColorChoice`]; kept
+/// separate so the clap derive lives in the binary and `mergify-tui`
+/// stays clap-free.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum ColorArg {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl From<ColorArg> for mergify_tui::ColorChoice {
+    fn from(c: ColorArg) -> Self {
+        match c {
+            ColorArg::Auto => Self::Auto,
+            ColorArg::Always => Self::Always,
+            ColorArg::Never => Self::Never,
+        }
+    }
 }
 
 #[derive(Subcommand)]

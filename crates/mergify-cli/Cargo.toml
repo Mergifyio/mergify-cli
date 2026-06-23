@@ -22,6 +22,9 @@ mergify-core = { path = "../mergify-core" }
 mergify-freeze = { path = "../mergify-freeze" }
 mergify-queue = { path = "../mergify-queue" }
 mergify-stack = { path = "../mergify-stack" }
+# Shared TTY/color palette — the binary resolves `--color` once at
+# startup and records it via `mergify_tui::set_color_choice`.
+mergify-tui = { path = "../mergify-tui" }
 # `mergify self-update`: hits the GitHub Releases API for the
 # latest tag, downloads the asset matching the current target,
 # verifies it against `SHA256SUMS` (same format the curl|sh

@@ -37,5 +37,5 @@ pub mod time;
 pub mod tree;
 
 pub use glyph::StyledGlyph;
-pub use theme::Theme;
+pub use theme::{ColorChoice, Theme, set_color_choice};
 pub use time::relative_time;

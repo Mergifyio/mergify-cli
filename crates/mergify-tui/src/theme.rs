@@ -10,9 +10,29 @@
 //! is the empty string. Code reads the same in both modes.
 
 use std::io::IsTerminal;
+use std::sync::OnceLock;
 
 use anstyle::AnsiColor;
 use anstyle::Style;
+
+/// The user's `--color` preference. `Auto` defers to env vars and TTY
+/// detection; `Always`/`Never` override both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+static COLOR_CHOICE: OnceLock<ColorChoice> = OnceLock::new();
+
+/// Record the process-wide color preference (from `--color`), once,
+/// at startup before any [`Theme::detect`]. Subsequent calls are
+/// ignored, so a stray second call can't flip colors mid-run.
+pub fn set_color_choice(choice: ColorChoice) {
+    let _ = COLOR_CHOICE.set(choice);
+}
 
 /// Pre-built styles + reset escape, matched to the renderers in
 /// the ported commands. Each field is either a real `Style` (when
@@ -52,17 +72,13 @@ impl Theme {
     /// 1. `cfg!(test)` ⇒ disabled. `cargo test` may inherit a TTY
     ///    parent stdout, but tests assert on in-memory buffers and
     ///    shouldn't take a dependency on the developer's terminal.
-    /// 2. `stdout` is not a terminal ⇒ disabled (piped output stays
-    ///    pristine for downstream tools).
-    /// 3. `NO_COLOR` env var is set (any value) ⇒ disabled. The
-    ///    de-facto standard, <https://no-color.org>.
-    /// 4. Otherwise enabled.
+    /// 2. `--color always`/`never` (via [`set_color_choice`]) wins.
+    /// 3. Otherwise (`auto`): `NO_COLOR` forces off; `FORCE_COLOR` /
+    ///    `CLICOLOR_FORCE` force on (e.g. through a pager or CI
+    ///    viewer); else `stdout` must be a terminal.
     #[must_use]
     pub fn detect() -> Self {
-        let enabled = !cfg!(test)
-            && std::io::stdout().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none();
-        Self::new(enabled)
+        Self::new(colors_enabled())
     }
 
     /// Construct with explicit `enabled`. Tests use this to
@@ -98,9 +114,59 @@ impl Theme {
     }
 }
 
+/// Pure color decision, factored out of [`colors_enabled`] so the
+/// precedence is unit-testable without touching global state, env, or
+/// the real TTY.
+fn resolve_enabled(choice: ColorChoice, no_color: bool, force_color: bool, is_tty: bool) -> bool {
+    match choice {
+        ColorChoice::Always => true,
+        ColorChoice::Never => false,
+        ColorChoice::Auto => {
+            if no_color {
+                false
+            } else if force_color {
+                true
+            } else {
+                is_tty
+            }
+        }
+    }
+}
+
+fn colors_enabled() -> bool {
+    // Tests assert on in-memory buffers; never depend on the dev's TTY.
+    if cfg!(test) {
+        return false;
+    }
+    let choice = COLOR_CHOICE.get().copied().unwrap_or_default();
+    let no_color = std::env::var_os("NO_COLOR").is_some();
+    let force_color =
+        std::env::var_os("FORCE_COLOR").is_some() || std::env::var_os("CLICOLOR_FORCE").is_some();
+    resolve_enabled(
+        choice,
+        no_color,
+        force_color,
+        std::io::stdout().is_terminal(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_precedence() {
+        // Explicit choice overrides everything.
+        assert!(resolve_enabled(ColorChoice::Always, true, false, false));
+        assert!(!resolve_enabled(ColorChoice::Never, false, true, true));
+        // Auto: NO_COLOR wins over FORCE_COLOR and TTY.
+        assert!(!resolve_enabled(ColorChoice::Auto, true, true, true));
+        // Auto: FORCE_COLOR turns it on without a TTY.
+        assert!(resolve_enabled(ColorChoice::Auto, false, true, false));
+        // Auto: otherwise follow the TTY.
+        assert!(resolve_enabled(ColorChoice::Auto, false, false, true));
+        assert!(!resolve_enabled(ColorChoice::Auto, false, false, false));
+    }
 
     #[test]
     fn disabled_theme_emits_no_escape_sequences() {
