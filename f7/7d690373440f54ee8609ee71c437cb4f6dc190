@@ -1,0 +1,1 @@
+trim README command list to top-level groups; per-subcommand detail belongs in --help/docs, not the README
