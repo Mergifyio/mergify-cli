@@ -67,6 +67,13 @@ pub enum DeleteOutcome {
     NotFound,
 }
 
+/// Caller hook to remap a terminal non-2xx HTTP status to a domain
+/// error before the default flavor mapping. Receives the status as a
+/// `u16` (command crates never import `reqwest`) and the rendered
+/// error message; returning `Some` overrides the error. `config
+/// simulate` uses it to map the simulator's 422 to a config error.
+type ErrorClassifier<'a> = &'a (dyn Fn(u16, &str) -> Option<CliError> + Send + Sync);
+
 /// Retry policy for transient failures. Only 5xx responses and
 /// connect/timeout errors are retried; 4xx responses are never
 /// retried — those are caller errors and retrying would hide bugs.
@@ -197,6 +204,29 @@ impl Client {
         self.decode_json(resp).await
     }
 
+    /// POST `body` as JSON to `path` and deserialize the JSON response
+    /// as `T`, like [`Self::post`], but consult `classify` on a
+    /// terminal non-2xx response before the default flavor mapping:
+    /// returning `Some(err)` overrides the error. `config simulate`
+    /// uses this to surface the simulator's 422 — an unprocessable
+    /// local config — as a [`CliError::Configuration`] (exit 8)
+    /// rather than a Mergify API failure (exit 6). The classifier
+    /// receives the HTTP status as a `u16` (command crates never
+    /// import `reqwest`) and the rendered error message.
+    pub async fn post_classifying<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        classify: impl Fn(u16, &str) -> Option<CliError> + Send + Sync,
+    ) -> Result<T, CliError> {
+        let url = self.join(path)?;
+        let resp = self
+            .execute_with_retry(self.inner.post(url).json(body), false, Some(&classify))
+            .await?
+            .expect("execute_with_retry returned None despite tolerate_not_found=false");
+        self.decode_json(resp).await
+    }
+
     /// POST `body` as JSON to `path` and discard the response body.
     /// Use when the endpoint returns an empty body (or any body the
     /// caller does not care about) on success — `post::<Value>` would
@@ -289,6 +319,7 @@ impl Client {
         &self,
         builder: reqwest::RequestBuilder,
         tolerate_not_found: bool,
+        classify_error: Option<ErrorClassifier<'_>>,
     ) -> Result<Option<reqwest::Response>, CliError> {
         let mut backoff = self.retry.initial_backoff;
         let mut last_message = String::from("HTTP request failed without response");
@@ -352,6 +383,14 @@ impl Client {
                         backoff *= 2;
                         continue;
                     }
+                    // Terminal non-2xx: let the caller remap specific
+                    // statuses (e.g. simulate's 422 → config error)
+                    // before the default flavor mapping.
+                    if let Some(classify) = classify_error
+                        && let Some(mapped) = classify(status.as_u16(), &last_message)
+                    {
+                        return Err(mapped);
+                    }
                     return Err(self.api_error(last_message));
                 }
                 Err(e) if is_transient(&e) && attempt + 1 < self.retry.max_attempts => {
@@ -382,7 +421,7 @@ impl Client {
         // `tolerate_not_found = false` means the driver never
         // returns `None`; `Option::expect` documents that invariant.
         Ok(self
-            .execute_with_retry(builder, false)
+            .execute_with_retry(builder, false, None)
             .await?
             .expect("execute_with_retry returned None despite tolerate_not_found=false"))
     }
@@ -393,7 +432,7 @@ impl Client {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<Option<reqwest::Response>, CliError> {
-        self.execute_with_retry(builder, true).await
+        self.execute_with_retry(builder, true, None).await
     }
 
     /// Send a request that cares only about the HTTP status.
@@ -403,7 +442,7 @@ impl Client {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<DeleteOutcome, CliError> {
-        match self.execute_with_retry(builder, true).await? {
+        match self.execute_with_retry(builder, true, None).await? {
             Some(_) => Ok(DeleteOutcome::Deleted),
             None => Ok(DeleteOutcome::NotFound),
         }
@@ -684,6 +723,54 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, CliError::MergifyApi(_)));
         assert!(err.to_string().contains("404"));
+    }
+
+    #[tokio::test]
+    async fn post_classifying_remaps_matched_status() {
+        // The classifier turns the simulator's 422 into a config
+        // error (exit 8) instead of the default Mergify API error.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/simulate"))
+            .respond_with(
+                ResponseTemplate::new(422)
+                    .set_body_json(serde_json::json!({"detail": "bad config"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let err = client
+            .post_classifying::<_, Foo>("/simulate", &Foo { bar: 1 }, |status, msg| {
+                (status == 422).then(|| CliError::Configuration(msg.to_string()))
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::Configuration(_)), "got {err:?}");
+        assert!(err.to_string().contains("bad config"), "got {err}");
+    }
+
+    #[tokio::test]
+    async fn post_classifying_falls_back_when_status_unmatched() {
+        // A status the classifier ignores keeps the default flavor
+        // mapping (Mergify API error here).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/simulate"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("nope"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let err = client
+            .post_classifying::<_, Foo>("/simulate", &Foo { bar: 1 }, |status, msg| {
+                (status == 422).then(|| CliError::Configuration(msg.to_string()))
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::MergifyApi(_)), "got {err:?}");
     }
 
     #[tokio::test]
