@@ -2066,7 +2066,12 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 
                 match outcome {
                     mergify_stack::commands::checkout::Outcome::NoStackedPrs => {
+                        // An empty result is a not-found state, not a
+                        // success — exit 3 so scripts can tell "checked
+                        // out" from "nothing to check out" (matches
+                        // `stack open`'s empty-stack handling).
                         println!("No stacked pull requests found");
+                        Ok(mergify_core::ExitCode::StackNotFound)
                     }
                     mergify_stack::commands::checkout::Outcome::CheckedOut {
                         chain,
@@ -2089,9 +2094,9 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                                 "Checked out '{local_branch}' tracking {upstream}",
                             );
                         }
+                        Ok(mergify_core::ExitCode::Success)
                     }
                 }
-                Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackSync(opts) => {
                 let token = mergify_core::auth::resolve_token(opts.token.as_deref())?;
