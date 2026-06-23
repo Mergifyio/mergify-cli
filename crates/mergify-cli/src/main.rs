@@ -9,6 +9,7 @@
 //! distance.
 
 use std::env;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -639,7 +640,36 @@ fn detect_dispatch(argv: &[String]) -> Dispatch {
     // Resolve the color preference once, before any command builds a
     // theme via `Theme::detect`.
     mergify_tui::set_color_choice(parsed.color.into());
+    init_tracing(parsed.verbose, parsed.debug);
     dispatch_from_parsed(parsed)
+}
+
+/// Install the tracing subscriber, writing structured logs to stderr
+/// so stdout stays pipeable. The level comes from `-v` (info / debug /
+/// trace), with `--debug` flooring at debug; an explicit `RUST_LOG`
+/// overrides both. Only our own crates are raised — third-party deps
+/// stay at `warn` so `-vv` doesn't drown in hyper/reqwest noise.
+fn init_tracing(verbose: u8, debug: bool) {
+    use tracing_subscriber::EnvFilter;
+
+    let level = match verbose {
+        0 if debug => "debug",
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let directives = format!(
+        "warn,mergify_cli={level},mergify_core={level},mergify_stack={level},\
+         mergify_ci={level},mergify_queue={level},mergify_freeze={level},\
+         mergify_config={level},mergify_tui={level}"
+    );
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(directives));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .try_init();
 }
 
 /// Build the run options for `quarantines add`.
@@ -716,7 +746,12 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             }
             StackSubcommand::Sync(cli) => Dispatch::Native(NativeCommand::StackSync(cli.into())),
             StackSubcommand::Push(cli) => Dispatch::Native(NativeCommand::StackPush(cli.into())),
-            StackSubcommand::List(cli) => Dispatch::Native(NativeCommand::StackList(cli.into())),
+            StackSubcommand::List(cli) => {
+                Dispatch::Native(NativeCommand::StackList(StackListOpts {
+                    verbose: parsed.verbose > 0,
+                    ..cli.into()
+                }))
+            }
             StackSubcommand::Open(cli) => Dispatch::Native(NativeCommand::StackOpen(cli.into())),
             StackSubcommand::Hooks(cli) => Dispatch::Native(NativeCommand::StackHooks(cli.into())),
             StackSubcommand::Setup(cli) => Dispatch::Native(NativeCommand::StackSetup(cli.into())),
@@ -967,18 +1002,13 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             repository,
             token,
             api_url,
-            command:
-                QueueSubcommand::Show(ShowCliArgs {
-                    pr_number,
-                    verbose,
-                    json,
-                }),
+            command: QueueSubcommand::Show(ShowCliArgs { pr_number, json }),
         }) => Dispatch::Native(NativeCommand::QueueShow(QueueShowOpts {
             repository,
             token,
             api_url,
             pr_number,
-            verbose,
+            verbose: parsed.verbose > 0,
             output_json: json,
         })),
         Subcommands::Freeze(FreezeArgs {
@@ -2534,12 +2564,13 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 #[derive(Parser)]
 #[command(name = "mergify", disable_help_subcommand = true, version = VERSION)]
 struct CliRoot {
-    /// Enable verbose debug logging.
-    ///
-    /// Print extra internal diagnostics, useful when reporting a bug
-    /// or investigating unexpected behavior. Accepted on every
-    /// command.
-    // No command path consults it yet.
+    /// Increase log verbosity: -v info, -vv debug, -vvv trace. Logs
+    /// go to stderr so stdout stays clean for piping. `RUST_LOG`
+    /// overrides this.
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// Shorthand for at least debug-level logging (like -vv).
     #[arg(long, global = true)]
     debug: bool,
 
@@ -3241,10 +3272,6 @@ struct StackListCli {
     /// Emit machine-readable JSON.
     #[arg(long, action = clap::ArgAction::SetTrue)]
     json: bool,
-
-    /// Show per-check / per-reviewer detail.
-    #[arg(short = 'v', long, action = clap::ArgAction::SetTrue)]
-    verbose: bool,
 }
 
 impl From<StackListCli> for StackListOpts {
@@ -3256,7 +3283,8 @@ impl From<StackListCli> for StackListOpts {
             trunk: cli.trunk,
             token: cli.token,
             json: cli.json,
-            verbose: cli.verbose,
+            // Driven by the global `-v`/`--verbose` flag, applied in dispatch.
+            verbose: false,
         }
     }
 }
@@ -4085,11 +4113,6 @@ struct ShowCliArgs {
     /// Pull request number to inspect.
     #[arg(value_name = "PR_NUMBER")]
     pr_number: u64,
-
-    /// Show the full checks table and the conditions tree instead
-    /// of compact summaries.
-    #[arg(long, short = 'v', default_value_t = false)]
-    verbose: bool,
 
     /// Emit the raw API response as a single JSON document.
     #[arg(long, default_value_t = false)]

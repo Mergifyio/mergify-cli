@@ -304,6 +304,12 @@ impl Client {
                 None => cloned,
             };
 
+            tracing::debug!(
+                service = self.service_name(),
+                attempt = attempt + 1,
+                max_attempts = self.retry.max_attempts,
+                "sending HTTP request"
+            );
             match req.send().await {
                 Ok(resp) => {
                     let status = resp.status();
@@ -336,6 +342,12 @@ impl Client {
                             Some(wait) => wait,
                             None => backoff,
                         };
+                        tracing::warn!(
+                            service = self.service_name(),
+                            %status,
+                            ?delay,
+                            "retrying after error response"
+                        );
                         tokio::time::sleep(delay).await;
                         backoff *= 2;
                         continue;
@@ -343,6 +355,12 @@ impl Client {
                     return Err(self.api_error(last_message));
                 }
                 Err(e) if is_transient(&e) && attempt + 1 < self.retry.max_attempts => {
+                    tracing::debug!(
+                        service = self.service_name(),
+                        error = %e,
+                        ?backoff,
+                        "retrying after transient network error"
+                    );
                     last_message = format!("network error: {e}");
                     tokio::time::sleep(backoff).await;
                     backoff *= 2;
