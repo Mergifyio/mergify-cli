@@ -1,6 +1,11 @@
 #!/bin/sh
 # Install the `mergify` CLI from a GitHub Release.
 #
+# Also drops shell completions and a man page — generated from the
+# installed binary itself — into the detected shell's completion dir
+# and `$XDG_DATA_HOME/man`. Best-effort: a failure there never fails
+# the install.
+#
 # Default usage:
 #
 #   curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
@@ -70,6 +75,72 @@ sha256_check() {
         shasum -a 256 -c "$1"
     else
         die "neither sha256sum nor shasum found — install one and retry"
+    fi
+}
+
+# Generate shell completions and the man page from the freshly
+# installed binary and drop them where the shell and `man` look for
+# them. The binary is its own generator (`mergify completions <shell>`
+# / `mergify _internal man`), so this needs no extra release assets.
+# Best-effort: every step is guarded and silent on failure, because
+# the binary itself is already installed by the time we get here. The
+# caller skips this on Windows, where these conventions don't apply.
+install_extras() {
+    bin_path="$1"
+    data_home="${XDG_DATA_HOME:-${HOME}/.local/share}"
+    config_home="${XDG_CONFIG_HOME:-${HOME}/.config}"
+    note=""
+
+    # Completions go in the directory the detected shell scans by
+    # default. zsh has no such user dir out of the box, so we use
+    # ~/.zfunc and tell the user to put it on $fpath.
+    shell_name=$(basename "${SHELL:-}")
+    case "${shell_name}" in
+        bash)
+            comp_shell="bash"
+            comp_dir="${data_home}/bash-completion/completions"
+            comp_file="mergify"
+            ;;
+        zsh)
+            comp_shell="zsh"
+            comp_dir="${HOME}/.zfunc"
+            comp_file="_mergify"
+            # The backticks are literal text for the user to type, not
+            # a command substitution — keep them unexpanded.
+            # shellcheck disable=SC2016
+            note='add `fpath+=~/.zfunc` to ~/.zshrc if completions do not load in new shells'
+            ;;
+        fish)
+            comp_shell="fish"
+            comp_dir="${config_home}/fish/completions"
+            comp_file="mergify.fish"
+            ;;
+        *)
+            comp_shell=""
+            ;;
+    esac
+
+    printf '\n'
+    if [ -n "${comp_shell}" ]; then
+        if mkdir -p "${comp_dir}" 2> /dev/null \
+            && "${bin_path}" completions "${comp_shell}" > "${tmp}/completion" 2> /dev/null \
+            && install -m 0644 "${tmp}/completion" "${comp_dir}/${comp_file}" 2> /dev/null; then
+            printf 'Installed %s completions -> %s/%s\n' "${comp_shell}" "${comp_dir}" "${comp_file}"
+        fi
+    elif [ -n "${shell_name}" ]; then
+        # Unknown shell (elvish, powershell, …): point at the command.
+        printf 'For %s completions, run:  mergify completions %s\n' "${shell_name}" "${shell_name}"
+    fi
+
+    man_dir="${data_home}/man/man1"
+    if mkdir -p "${man_dir}" 2> /dev/null \
+        && "${bin_path}" _internal man > "${tmp}/mergify.1" 2> /dev/null \
+        && install -m 0644 "${tmp}/mergify.1" "${man_dir}/mergify.1" 2> /dev/null; then
+        printf 'Installed man page -> %s/mergify.1\n' "${man_dir}"
+    fi
+
+    if [ -n "${note}" ]; then
+        printf '\nNote: %s.\n' "${note}"
     fi
 }
 
@@ -180,6 +251,14 @@ main() {
 
     printf '\nmergify installed to %s/%s\n' "${INSTALL_DIR}" "${bin}"
     "${INSTALL_DIR}/${bin}" --version
+
+    # Shell completions and a man page, generated from the binary we
+    # just installed. Windows ships neither convention, so skip the
+    # `.zip` (Windows) targets.
+    case "${ext}" in
+        zip) ;;
+        *)   install_extras "${INSTALL_DIR}/${bin}" ;;
+    esac
 
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*) ;;
