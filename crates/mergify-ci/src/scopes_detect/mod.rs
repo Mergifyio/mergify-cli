@@ -262,8 +262,11 @@ fn write_detected_scopes(
     };
     let json = serde_json::to_string(&payload)
         .map_err(|e| CliError::Generic(format!("failed to serialize scopes JSON: {e}")))?;
+    // A failed write is a runtime I/O failure (exit 1), not a
+    // configuration problem (exit 8): the config parsed fine, the
+    // output path is just unwritable. Keep the OS error as the cause.
     std::fs::write(path, json)
-        .map_err(|e| CliError::Configuration(format!("cannot write {}: {e}", path.display())))?;
+        .map_err(|e| CliError::wrap(format!("cannot write {}", path.display()), e))?;
     Ok(())
 }
 
@@ -336,6 +339,25 @@ mod tests {
         let raw = std::fs::read_to_string(&out).unwrap();
         // BTreeSet iteration is sorted; the JSON reflects it.
         assert_eq!(raw, r#"{"scopes":["alpha","zebra"]}"#);
+    }
+
+    #[test]
+    fn write_detected_scopes_io_failure_is_a_runtime_error() {
+        // Writing under a non-existent directory fails with a plain
+        // I/O error. That's a runtime failure (exit 1), not a config
+        // problem (exit 8) — the config itself was fine.
+        let tmp = tempfile::tempdir().unwrap();
+        let unwritable = tmp
+            .path()
+            .join("no")
+            .join("such")
+            .join("dir")
+            .join("scopes.json");
+        let mut set = std::collections::BTreeSet::new();
+        set.insert("backend".to_string());
+        let err = write_detected_scopes(&unwritable, &set).unwrap_err();
+        assert_eq!(err.exit_code(), mergify_core::ExitCode::GenericError);
+        assert!(err.to_string().contains("cannot write"), "got: {err}");
     }
 
     #[test]
