@@ -727,7 +727,7 @@ fn quarantine_get_opts(args: TestsQuarantineGetCliArgs) -> TestsQuarantineGetOpt
 
 #[allow(clippy::too_many_lines)] // mostly mechanical match arms
 fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
-    let _ = parsed.debug; // global flag — consulted by command impls, not here
+    let _ = parsed.debug; // already consumed by init_tracing(); ignored during dispatch
     match parsed.command {
         Subcommands::Stack(StackArgs { command }) => match command {
             StackSubcommand::New(cli) => Dispatch::Native(NativeCommand::StackNew(cli.into())),
@@ -744,10 +744,9 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             StackSubcommand::Move(cli) => Dispatch::Native(NativeCommand::StackMove(cli.into())),
             StackSubcommand::Squash(cli) => match StackSquashOpts::try_from(cli) {
                 Ok(opts) => Dispatch::Native(NativeCommand::StackSquash(opts)),
-                Err(msg) => {
-                    eprintln!("error: {msg}");
-                    std::process::exit(2);
-                }
+                Err(msg) => CliRoot::command()
+                    .error(clap::error::ErrorKind::ValueValidation, msg)
+                    .exit(),
             },
             StackSubcommand::Checkout(cli) => {
                 Dispatch::Native(NativeCommand::StackCheckout(cli.into()))
