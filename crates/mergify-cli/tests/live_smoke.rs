@@ -397,9 +397,9 @@ fn queue_show_not_in_queue() {
     //
     // Calls with a PR number that is almost certainly not in the
     // queue (the test repo has far fewer than this many PRs).
-    // Both Python and Rust special-case 404 with the same
-    // user-facing message and `MERGIFY_API_ERROR` exit code (6)
-    // — that contract is what this test pins.
+    // A not-queued PR is a normal queryable state, so the command
+    // reports it on stdout and exits 0 — that contract is what this
+    // test pins.
     //
     // Testing the 404 path (instead of a real queued PR) makes
     // the test independent of whether PR #1 happens to be queued
@@ -421,17 +421,17 @@ fn queue_show_not_in_queue() {
     ]);
     assert_eq!(
         result.returncode,
-        6,
-        "expected MERGIFY_API_ERROR (6), got {}{}",
+        0,
+        "expected a not-queued PR to exit 0, got {}{}",
         result.returncode,
         result.context()
     );
     assert!(
         result
-            .combined()
+            .stdout
             .to_lowercase()
             .contains("not in the merge queue"),
-        "expected 'not in the merge queue' message{}",
+        "expected 'not in the merge queue' message on stdout{}",
         result.context()
     );
 }
