@@ -65,12 +65,18 @@ pub async fn run(opts: SimulateOptions<'_>, output: &mut dyn Output) -> Result<(
         "/v1/repos/{}/pulls/{}/simulator",
         opts.pull_request.repository, opts.pull_request.pull_number,
     );
+    // The simulator answers a schema-invalid config with HTTP 422.
+    // That's a problem with the *local* config, not a Mergify API
+    // failure, so surface it as a configuration error (exit 8) —
+    // matching what `config validate` returns for the same fixture —
+    // rather than the generic Mergify API code (exit 6).
     let response: SimulatorResponse = client
-        .post(
+        .post_classifying(
             &path,
             &SimulatorRequest {
                 mergify_yml: &mergify_yml,
             },
+            |status, message| (status == 422).then(|| CliError::Configuration(message.to_string())),
         )
         .await?;
 
@@ -154,6 +160,54 @@ mod tests {
         assert!(
             stdout_str.contains("All conditions pass."),
             "expected summary in output: {stdout_str:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn run_maps_simulator_422_to_configuration_error() {
+        // A schema-invalid config makes the simulator answer 422.
+        // That's a local-config problem, so it must surface as a
+        // configuration error (exit 8), not a Mergify API error.
+        let server = MockServer::start().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join(".mergify.yml");
+        fs::write(&config_path, "pull_request_rules: not-a-list\n").unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/v1/repos/owner/repo/pulls/42/simulator"))
+            .respond_with(
+                ResponseTemplate::new(422)
+                    .set_body_json(serde_json::json!({"detail": "invalid configuration"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let pull_request = PullRequestRef {
+            host: "github.com".into(),
+            repository: "owner/repo".into(),
+            pull_number: 42,
+        };
+        let api_url = server.uri();
+
+        let mut cap = Captured::human();
+        let err = run(
+            SimulateOptions {
+                pull_request: &pull_request,
+                config_file: Some(&config_path),
+                token: Some("test-token"),
+                api_url: Some(&api_url),
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, CliError::Configuration(_)), "got {err:?}");
+        assert_eq!(err.exit_code(), mergify_core::ExitCode::ConfigurationError,);
+        assert!(
+            err.to_string().contains("invalid configuration"),
+            "got {err}",
         );
     }
 }
