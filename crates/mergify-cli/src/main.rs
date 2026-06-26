@@ -2577,10 +2577,11 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
 /// Most commands talk to the Mergify API and need a token. Set
 /// `MERGIFY_TOKEN` (or `GITHUB_TOKEN`) to apply it to every command,
 /// or pass `--token` to an individual command — there is no global
-/// `--token` on `mergify` itself. Run `mergify <command> --help` for
-/// detailed help and options on any command.
+/// `--token` on `mergify` itself. Run `mergify <command> --help` (or
+/// the git-style `mergify help <command>`) for detailed help and
+/// options on any command.
 #[derive(Parser)]
-#[command(name = "mergify", disable_help_subcommand = true, version = VERSION)]
+#[command(name = "mergify", version = VERSION)]
 struct CliRoot {
     /// Increase log verbosity: -v info, -vv debug, -vvv trace. Logs
     /// go to stderr so stdout stays clean for piping. `RUST_LOG`
@@ -4629,5 +4630,27 @@ mod tests {
                 )),
             "the replacement subgroup must parse (help-display Err counts as parsed)",
         );
+    }
+
+    #[test]
+    fn git_style_help_subcommand_is_supported() {
+        // `mergify help` and `mergify help <cmd>` must be recognized
+        // (clap surfaces help as a DisplayHelp "error"), not rejected
+        // as an unknown subcommand the way they were while
+        // `disable_help_subcommand` was set.
+        for argv in [
+            &["mergify", "help"][..],
+            &["mergify", "help", "queue"],
+            &["mergify", "help", "stack", "push"],
+        ] {
+            // `CliRoot` isn't `Debug`, so drop the Ok value with
+            // `.err()` before inspecting the error kind.
+            let kind = CliRoot::try_parse_from(argv).err().map(|e| e.kind());
+            assert_eq!(
+                kind,
+                Some(clap::error::ErrorKind::DisplayHelp),
+                "{argv:?} should display help, got {kind:?}",
+            );
+        }
     }
 }

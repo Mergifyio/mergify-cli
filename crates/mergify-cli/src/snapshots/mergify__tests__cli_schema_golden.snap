@@ -3760,7 +3760,7 @@ expression: schema
         "usage": "mergify completions [OPTIONS] <SHELL>"
       }
     ],
-    "longAbout": "Mergify command-line interface.\n\nDrive Mergify from your terminal. Validate and simulate your configuration, manage and inspect the merge queue, schedule merge freezes, look at the tests tracked by CI Insights, and create and maintain stacked pull requests.\n\nMost commands talk to the Mergify API and need a token. Set `MERGIFY_TOKEN` (or `GITHUB_TOKEN`) to apply it to every command, or pass `--token` to an individual command — there is no global `--token` on `mergify` itself. Run `mergify <command> --help` for detailed help and options on any command.",
+    "longAbout": "Mergify command-line interface.\n\nDrive Mergify from your terminal. Validate and simulate your configuration, manage and inspect the merge queue, schedule merge freezes, look at the tests tracked by CI Insights, and create and maintain stacked pull requests.\n\nMost commands talk to the Mergify API and need a token. Set `MERGIFY_TOKEN` (or `GITHUB_TOKEN`) to apply it to every command, or pass `--token` to an individual command — there is no global `--token` on `mergify` itself. Run `mergify <command> --help` (or the git-style `mergify help <command>`) for detailed help and options on any command.",
     "name": "mergify",
     "path": [
       "mergify"
