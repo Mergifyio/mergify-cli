@@ -221,6 +221,8 @@ impl Client {
     ) -> Result<T, CliError> {
         let url = self.join(path)?;
         let resp = self
+            // `tolerate_not_found = false` means the driver never
+            // returns `None`; `Option::expect` documents that invariant.
             .execute_with_retry(self.inner.post(url).json(body), false, Some(&classify))
             .await?
             .expect("execute_with_retry returned None despite tolerate_not_found=false");
