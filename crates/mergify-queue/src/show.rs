@@ -21,8 +21,8 @@
 //! the not-queued state is a `{"number": N, "queued": false}`
 //! document so pipeline consumers always get parseable output; in
 //! human mode it is the line `PR #N is not in the merge queue`. Live
-//! smoke tests assert against that substring, which is stable across
-//! the Python and Rust implementations.
+//! smoke tests assert against that substring, which is a stable
+//! contract.
 
 use std::io::Write;
 
