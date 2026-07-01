@@ -19,15 +19,13 @@ queue_rules:
     merge_method: fast-forward
     batch_size: 7
     batch_max_wait_time: 5min
-    commit_message_template:
   - name: default
     queue_conditions:
       - base=main
       - label!=manual merge
-    commit_message_template: |
-      {{ title }} (#{{ number }})
-
-      {{ body }}
+    commit_message_format:
+      title: pr-title
+      body: pr-body
     merge_method: squash
 
 pull_request_rules:
