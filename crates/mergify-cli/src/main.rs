@@ -2324,6 +2324,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         branch_prefix: &ctx.branch_prefix,
                         trunk: (&ctx.trunk.0, &ctx.trunk.1),
                         commit: opts.commit.as_deref(),
+                        selector: None,
                     },
                 )
                 .await?;
@@ -2342,6 +2343,12 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         // can detect the empty stack via `$?`.
                         println!("No commits in stack");
                         Ok(mergify_core::ExitCode::StackNotFound)
+                    }
+                    mergify_stack::commands::open::Outcome::Cancelled => {
+                        // Esc/Ctrl-C in the picker: the user chose
+                        // nothing — success, not failure (Python
+                        // parity; scripts rely on `$?`).
+                        Ok(mergify_core::ExitCode::Success)
                     }
                 }
             }
