@@ -133,7 +133,7 @@ fn resolve_enabled(choice: ColorChoice, no_color: bool, force_color: bool, is_tt
     }
 }
 
-fn colors_enabled() -> bool {
+pub(crate) fn colors_enabled() -> bool {
     // Tests assert on in-memory buffers; never depend on the dev's TTY.
     if cfg!(test) {
         return false;

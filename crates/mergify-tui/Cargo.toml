@@ -12,6 +12,13 @@ publish = false
 [dependencies]
 anstyle = { workspace = true }
 chrono = { workspace = true }
+# `select::fuzzy_select` — fzf-style picker for `stack open`. Kept
+# behind this crate's wrapper so command crates never depend on
+# dialoguer directly. fuzzy-select only: the editor/password
+# default features are dead weight here.
+dialoguer = { workspace = true }
+# Cap the picker's visible rows to the terminal height.
+terminal_size = { workspace = true }
 
 [lints]
 workspace = true
