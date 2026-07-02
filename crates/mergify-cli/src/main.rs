@@ -2314,6 +2314,15 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     opts.branch_prefix.clone(),
                 )
                 .await?;
+                // Picker only when a human is on both ends: stdin
+                // feeds the keystrokes, stdout draws the list.
+                // Non-TTY callers keep the silent open-the-leaf
+                // default the Rust port shipped with.
+                let interactive =
+                    std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+                let picker: mergify_stack::commands::open::Selector<'_> = &|labels, default| {
+                    mergify_tui::fuzzy_select("Select a PR to open", labels, default)
+                };
                 let outcome = mergify_stack::commands::open::run(
                     &mergify_stack::commands::open::Options {
                         repo_dir: None,
@@ -2324,7 +2333,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         branch_prefix: &ctx.branch_prefix,
                         trunk: (&ctx.trunk.0, &ctx.trunk.1),
                         commit: opts.commit.as_deref(),
-                        selector: None,
+                        selector: interactive.then_some(picker),
                     },
                 )
                 .await?;
@@ -3325,7 +3334,9 @@ impl From<StackListCli> for StackListOpts {
 #[derive(clap::Args)]
 struct StackOpenCli {
     /// Commit whose pull request to open. Accepts a SHA prefix or a
-    /// Change-Id prefix; defaults to HEAD.
+    /// Change-Id prefix. When omitted: on a terminal, pick
+    /// interactively from the stack (type to fuzzy-filter, HEAD
+    /// preselected); otherwise defaults to HEAD.
     commit: Option<String>,
 
     /// Author of the stack. Defaults to the token's user.
