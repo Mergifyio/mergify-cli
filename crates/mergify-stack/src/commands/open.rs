@@ -1,11 +1,15 @@
 //! `mergify stack open [<commit>]` — open the PR for a stack
 //! commit in the user's default browser.
 //!
-//! Port of `mergify_cli/stack/open.py::stack_open`. Walks the
-//! current stack (via the same machinery `stack list` uses with
-//! `include_status=false`), resolves the target commit, then
-//! hands the PR URL to the OS's URL-launcher (`open` on macOS,
-//! `xdg-open` on Linux, `cmd /C start` on Windows).
+//! Walks the current stack (via the same machinery `stack list`
+//! uses with `include_status=false`), resolves the target commit,
+//! then hands the PR URL to the OS's URL-launcher (`open` on
+//! macOS, `xdg-open` on Linux, `cmd /C start` on Windows).
+//!
+//! With no `<commit>` argument the binary injects an interactive
+//! fuzzy picker (see [`Selector`]) when stdin, stdout, and stderr
+//! are all TTYs; otherwise the leaf (HEAD) is opened, which non-TTY
+//! callers and scripts rely on.
 
 use std::path::Path;
 use std::process::Command;
@@ -14,7 +18,13 @@ use mergify_core::CliError;
 use mergify_core::HttpClient;
 
 use crate::commands::list::{self, StackListEntry};
-use crate::trunk;
+
+/// Interactive selection hook: given picker labels and the index
+/// to preselect, yield the chosen index (`None` = user cancelled).
+/// Injected by the binary — which wires `mergify_tui::fuzzy_select`
+/// — so this crate stays testable without a TTY, the same
+/// testability-by-parameter pattern as `queue pause`'s `confirm`.
+pub type Selector<'a> = &'a dyn Fn(&[String], usize) -> std::io::Result<Option<usize>>;
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
@@ -26,6 +36,12 @@ pub enum Outcome {
     },
     /// Stack has no commits — nothing to open.
     EmptyStack,
+    /// Interactive picker dismissed with Escape — not an error: the
+    /// binary prints nothing and exits 0. A normal Ctrl-C never
+    /// reaches this variant (the picker's SIGINT handler exits 130,
+    /// the fzf convention); only the defensive fallback for an
+    /// ignored SIGINT maps an interrupted read here.
+    Cancelled,
 }
 
 pub struct Options<'a> {
@@ -40,6 +56,9 @@ pub struct Options<'a> {
     /// Accepts a full SHA, a SHA prefix, or any git ref the
     /// repo understands (`HEAD~1` etc.).
     pub commit: Option<&'a str>,
+    /// Interactive picker used when `commit` is `None`. `None` here
+    /// (non-TTY callers, tests) falls back to opening the leaf.
+    pub selector: Option<Selector<'a>>,
 }
 
 pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
@@ -62,11 +81,20 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     }
 
     let entry = match opts.commit {
-        // Default to the leaf — Python's interactive picker
-        // defaulted to it too, and the explicit-commit path is
-        // what test/automation users hit. The interactive picker
-        // itself is left out of the port for now.
-        None => stack.entries.last().cloned().expect("non-empty"),
+        None => match opts.selector {
+            Some(selector) => match pick_interactive(&stack.entries, selector)? {
+                Some(entry) => entry,
+                None => return Ok(Outcome::Cancelled),
+            },
+            // Leaf default: pre-picker port behavior, kept for
+            // non-TTY callers and scripts. The empty-stack guard
+            // above makes `last()` infallible today; the fallback
+            // keeps this arm panic-free if that guard ever moves.
+            None => match stack.entries.last().cloned() {
+                Some(entry) => entry,
+                None => return Ok(Outcome::EmptyStack),
+            },
+        },
         Some(commit) => resolve_entry(opts.repo_dir, &stack.entries, commit)?,
     };
 
@@ -88,6 +116,46 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         title: entry.title,
         pull_url,
     })
+}
+
+/// Picker labels, one per stack entry: `#<PR> <title> (<sha7>)`,
+/// or `(no PR) <title> (<sha7>)` for commits not pushed yet. The
+/// no-PR entries stay listed so the picker shows the whole stack
+/// shape; selecting one fails downstream with the same "push
+/// first" error as the explicit-commit path.
+fn build_labels(entries: &[StackListEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            let short = &entry.commit_sha[..entry.commit_sha.len().min(7)];
+            match entry.pull_number {
+                Some(number) => format!("#{number} {title} ({short})", title = entry.title),
+                None => format!("(no PR) {title} ({short})", title = entry.title),
+            }
+        })
+        .collect()
+}
+
+/// Run the injected picker over the stack, leaf preselected.
+/// `Ok(None)` means the user cancelled. Callers guarantee
+/// `entries` is non-empty.
+fn pick_interactive(
+    entries: &[StackListEntry],
+    selector: Selector<'_>,
+) -> Result<Option<StackListEntry>, CliError> {
+    let labels = build_labels(entries);
+    let picked = selector(&labels, labels.len().saturating_sub(1))
+        .map_err(|e| CliError::Generic(format!("interactive selection failed: {e}")))?;
+    let Some(index) = picked else {
+        return Ok(None);
+    };
+    let entry = entries.get(index).ok_or_else(|| {
+        CliError::Generic(format!(
+            "interactive selection returned out-of-range index {index} for {len} entries",
+            len = entries.len(),
+        ))
+    })?;
+    Ok(Some(entry.clone()))
 }
 
 fn resolve_entry(
@@ -163,7 +231,89 @@ fn spawn_opener(url: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-// Currently unused; kept for tests that may want to exercise the
-// stack-walk path without mocking the URL opener.
-#[allow(dead_code)]
-fn touch(_: &trunk::Trunk) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(title: &str, sha: &str, pull: Option<(u64, &str)>) -> StackListEntry {
+        StackListEntry {
+            commit_sha: sha.to_string(),
+            title: title.to_string(),
+            change_id: String::new(),
+            status: pull.map_or("no_pr", |_| "open").to_string(),
+            pull_number: pull.map(|(number, _)| number),
+            pull_url: pull.map(|(_, url)| url.to_string()),
+            ci_status: String::new(),
+            ci_checks: Vec::new(),
+            review_status: String::new(),
+            reviews: Vec::new(),
+            mergeable: None,
+        }
+    }
+
+    fn two_entries() -> Vec<StackListEntry> {
+        vec![
+            entry(
+                "feat: add API endpoint",
+                "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+                Some((101, "https://github.com/o/r/pull/101")),
+            ),
+            entry(
+                "wip: not pushed yet",
+                "0123456789abcdef0123456789abcdef01234567",
+                None,
+            ),
+        ]
+    }
+
+    #[test]
+    fn labels_show_pr_number_or_no_pr_marker() {
+        assert_eq!(
+            build_labels(&two_entries()),
+            vec![
+                "#101 feat: add API endpoint (a1b2c3d)".to_string(),
+                "(no PR) wip: not pushed yet (0123456)".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn picker_preselects_the_leaf_and_returns_the_picked_entry() {
+        let entries = two_entries();
+        let seen_default = std::cell::Cell::new(usize::MAX);
+        let selector = |labels: &[String], default: usize| {
+            assert_eq!(labels.len(), 2);
+            seen_default.set(default);
+            Ok(Some(0))
+        };
+        let picked = pick_interactive(&entries, &selector).unwrap().unwrap();
+        // Leaf (last entry) is the preselected default…
+        assert_eq!(seen_default.get(), 1);
+        // …but the selector's answer wins.
+        assert_eq!(picked.commit_sha, entries[0].commit_sha);
+    }
+
+    #[test]
+    fn cancel_yields_none() {
+        let selector = |_: &[String], _: usize| Ok(None);
+        assert!(
+            pick_interactive(&two_entries(), &selector)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn selector_io_error_becomes_cli_error() {
+        let selector = |_: &[String], _: usize| Err(std::io::Error::other("terminal exploded"));
+        let err = pick_interactive(&two_entries(), &selector).unwrap_err();
+        assert!(matches!(err, CliError::Generic(_)));
+    }
+
+    #[test]
+    fn out_of_range_selector_index_becomes_cli_error() {
+        let selector = |_: &[String], _: usize| Ok(Some(99));
+        let err = pick_interactive(&two_entries(), &selector).unwrap_err();
+        assert!(matches!(err, CliError::Generic(_)));
+    }
+}

@@ -30,12 +30,17 @@
 //!   [`CONTINUATION`](tree::CONTINUATION),
 //!   [`LAST_CONTINUATION`](tree::LAST_CONTINUATION)) and the
 //!   [`branch_chars`](tree::branch_chars) helper.
+//! - [`select`]: [`fuzzy_select`](select::fuzzy_select) — fzf-style
+//!   fuzzy picker over a list of labels, wrapping
+//!   `dialoguer::FuzzySelect` behind this crate's boundary.
 
 pub mod glyph;
+pub mod select;
 pub mod theme;
 pub mod time;
 pub mod tree;
 
 pub use glyph::StyledGlyph;
+pub use select::fuzzy_select;
 pub use theme::{ColorChoice, Theme, set_color_choice};
 pub use time::relative_time;
