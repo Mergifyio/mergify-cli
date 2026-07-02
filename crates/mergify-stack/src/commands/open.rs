@@ -7,9 +7,9 @@
 //! macOS, `xdg-open` on Linux, `cmd /C start` on Windows).
 //!
 //! With no `<commit>` argument the binary injects an interactive
-//! fuzzy picker (see [`Selector`]) when stdin and stdout are TTYs;
-//! otherwise the leaf (HEAD) is opened, which non-TTY callers and
-//! scripts rely on.
+//! fuzzy picker (see [`Selector`]) when stdin, stdout, and stderr
+//! are all TTYs; otherwise the leaf (HEAD) is opened, which non-TTY
+//! callers and scripts rely on.
 
 use std::path::Path;
 use std::process::Command;
@@ -36,8 +36,11 @@ pub enum Outcome {
     },
     /// Stack has no commits — nothing to open.
     EmptyStack,
-    /// Interactive picker dismissed (Escape / Ctrl-C). Not an error:
-    /// the binary prints nothing and exits 0, matching Python.
+    /// Interactive picker dismissed with Escape — not an error: the
+    /// binary prints nothing and exits 0. A normal Ctrl-C never
+    /// reaches this variant (the picker's SIGINT handler exits 130,
+    /// the fzf convention); only the defensive fallback for an
+    /// ignored SIGINT maps an interrupted read here.
     Cancelled,
 }
 

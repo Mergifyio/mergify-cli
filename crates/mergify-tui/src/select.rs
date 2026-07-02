@@ -60,8 +60,9 @@ fn install_sigint_handler() {
 /// for when that handler is inert — SIGINT ignored, or installation
 /// lost a race with another handler owner (e.g. under `nohup`).
 ///
-/// Callers must only invoke this when stdin and stdout are TTYs;
-/// there is no non-interactive fallback at this layer.
+/// Callers must only invoke this when stdin, stdout, and stderr are
+/// all TTYs — dialoguer renders the list on stderr; there is no
+/// non-interactive fallback at this layer.
 pub fn fuzzy_select(prompt: &str, items: &[String], default: usize) -> io::Result<Option<usize>> {
     install_sigint_handler();
     let colorful = ColorfulTheme::default();
@@ -80,14 +81,17 @@ pub fn fuzzy_select(prompt: &str, items: &[String], default: usize) -> io::Resul
         // dialoguer's post-selection echo so nothing shows twice.
         .report(false)
         .interact_opt();
-    PICKER_ACTIVE.store(false, Ordering::SeqCst);
     if result.is_err() {
-        // dialoguer only restores the cursor on its Enter/Esc return
-        // paths; an error from the raw-mode key reader (e.g. the
-        // Ctrl-C race against the SIGINT handler above) skips that,
-        // so restore it ourselves before mapping the error.
+        // dialoguer restores the cursor on its Enter/Esc paths but
+        // not when the key read errors. Restore BEFORE clearing
+        // PICKER_ACTIVE: a SIGINT handler that observes `false` is
+        // then guaranteed the restore already happened, and one
+        // that observes `true` restores it itself — a double
+        // restore is harmless, a missed one leaves the shell
+        // cursorless.
         let _ = Term::stderr().show_cursor();
     }
+    PICKER_ACTIVE.store(false, Ordering::SeqCst);
     map_interact_result(result)
 }
 

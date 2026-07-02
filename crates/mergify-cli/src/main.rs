@@ -2356,9 +2356,10 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         Ok(mergify_core::ExitCode::StackNotFound)
                     }
                     mergify_stack::commands::open::Outcome::Cancelled => {
-                        // Esc/Ctrl-C in the picker: the user chose
-                        // nothing — success, not failure (Python
-                        // parity; scripts rely on `$?`).
+                        // Esc in the picker: the user chose nothing —
+                        // success, not failure (scripts rely on `$?`).
+                        // Ctrl-C exits 130 in the picker's SIGINT
+                        // handler and normally never reaches here.
                         Ok(mergify_core::ExitCode::Success)
                     }
                 }
