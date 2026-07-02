@@ -36,7 +36,7 @@ iana-time-zone = "0.1"
 jsonschema = { version = "0.46", default-features = false }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
 prost = "0.14"
-quick-xml = "0.40"
+quick-xml = "0.41"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 self-replace = "1"
