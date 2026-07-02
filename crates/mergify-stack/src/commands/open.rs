@@ -87,8 +87,13 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
                 None => return Ok(Outcome::Cancelled),
             },
             // Leaf default: pre-picker port behavior, kept for
-            // non-TTY callers and scripts.
-            None => stack.entries.last().cloned().expect("non-empty"),
+            // non-TTY callers and scripts. The empty-stack guard
+            // above makes `last()` infallible today; the fallback
+            // keeps this arm panic-free if that guard ever moves.
+            None => match stack.entries.last().cloned() {
+                Some(entry) => entry,
+                None => return Ok(Outcome::EmptyStack),
+            },
         },
         Some(commit) => resolve_entry(opts.repo_dir, &stack.entries, commit)?,
     };
@@ -141,7 +146,16 @@ fn pick_interactive(
     let labels = build_labels(entries);
     let picked = selector(&labels, labels.len().saturating_sub(1))
         .map_err(|e| CliError::Generic(format!("interactive selection failed: {e}")))?;
-    Ok(picked.map(|index| entries[index].clone()))
+    let Some(index) = picked else {
+        return Ok(None);
+    };
+    let entry = entries.get(index).ok_or_else(|| {
+        CliError::Generic(format!(
+            "interactive selection returned out-of-range index {index} for {len} entries",
+            len = entries.len(),
+        ))
+    })?;
+    Ok(Some(entry.clone()))
 }
 
 fn resolve_entry(
@@ -292,6 +306,13 @@ mod tests {
     #[test]
     fn selector_io_error_becomes_cli_error() {
         let selector = |_: &[String], _: usize| Err(std::io::Error::other("terminal exploded"));
+        let err = pick_interactive(&two_entries(), &selector).unwrap_err();
+        assert!(matches!(err, CliError::Generic(_)));
+    }
+
+    #[test]
+    fn out_of_range_selector_index_becomes_cli_error() {
+        let selector = |_: &[String], _: usize| Ok(Some(99));
         let err = pick_interactive(&two_entries(), &selector).unwrap_err();
         assert!(matches!(err, CliError::Generic(_)));
     }
