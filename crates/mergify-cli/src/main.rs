@@ -2315,11 +2315,13 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 )
                 .await?;
                 // Picker only when a human is on both ends: stdin
-                // feeds the keystrokes, stdout draws the list.
-                // Non-TTY callers keep the silent open-the-leaf
-                // default the Rust port shipped with.
-                let interactive =
-                    std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+                // feeds the keystrokes, stderr is where dialoguer
+                // draws the list. stdout stays checked too so piped
+                // output (e.g. `| cat`) keeps the silent
+                // open-the-leaf default the Rust port shipped with.
+                let interactive = std::io::stdin().is_terminal()
+                    && std::io::stdout().is_terminal()
+                    && std::io::stderr().is_terminal();
                 let picker: mergify_stack::commands::open::Selector<'_> = &|labels, default| {
                     mergify_tui::fuzzy_select("Select a PR to open", labels, default)
                 };

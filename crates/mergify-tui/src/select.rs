@@ -8,48 +8,87 @@
 //! and cancellation policy.
 
 use std::io;
+use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use console::Term;
 use dialoguer::FuzzySelect;
 use dialoguer::theme::{ColorfulTheme, SimpleTheme, Theme};
 
 use crate::theme::colors_enabled;
 
+/// Set while a picker's `interact_opt()` call is on the stack, so the
+/// SIGINT handler knows whether the terminal is currently in the
+/// state dialoguer left it in (cursor hidden, raw mode) and needs
+/// restoring.
+static PICKER_ACTIVE: AtomicBool = AtomicBool::new(false);
+static INSTALL_SIGINT: Once = Once::new();
+
+/// Ctrl-C inside the picker must restore the terminal before the
+/// process dies: console's key reader re-raises SIGINT after
+/// restoring termios, but nothing un-hides the cursor dialoguer
+/// hid. The handler exits 130 (128+SIGINT), the shell convention
+/// fzf itself follows.
+fn install_sigint_handler() {
+    INSTALL_SIGINT.call_once(|| {
+        // If installation fails (e.g. some embedder already owns
+        // the handler), we keep console's raise semantics: death
+        // by SIGINT, possibly with a hidden cursor — no worse
+        // than before this handler existed.
+        let _ = ctrlc::set_handler(|| {
+            if PICKER_ACTIVE.load(Ordering::SeqCst) {
+                let _ = Term::stderr().show_cursor();
+            }
+            std::process::exit(130);
+        });
+    });
+}
+
 /// Run an fzf-style fuzzy picker over `items` on the controlling
 /// terminal: type to filter, arrows to move, Enter to accept.
 /// `default` is the index preselected before any filtering.
 ///
-/// Returns `Ok(None)` when the user cancels — Escape natively, or
-/// Ctrl-C, which the raw-mode key reader surfaces as an
-/// [`io::ErrorKind::Interrupted`] read error.
+/// Labels should be unique — dialoguer maps the selected label back
+/// to an index by string equality, so duplicate labels resolve to
+/// the first occurrence.
+///
+/// Ctrl-C normally exits the process directly with status 130 (the
+/// fzf convention) via a process-global SIGINT handler installed on
+/// first use, which also restores the cursor dialoguer hides during
+/// interaction. `Ok(None)` cancellation from an
+/// [`io::ErrorKind::Interrupted`] read error is defensive fallback
+/// for when that handler is inert — SIGINT ignored, or installation
+/// lost a race with another handler owner (e.g. under `nohup`).
 ///
 /// Callers must only invoke this when stdin and stdout are TTYs;
 /// there is no non-interactive fallback at this layer.
 pub fn fuzzy_select(prompt: &str, items: &[String], default: usize) -> io::Result<Option<usize>> {
+    install_sigint_handler();
     let colorful = ColorfulTheme::default();
     let simple = SimpleTheme;
     // Same color policy as every other renderer (`--color` override
     // > `NO_COLOR` > `FORCE_COLOR`/`CLICOLOR_FORCE` > TTY), reused
     // from `theme.rs` rather than re-derived.
     let theme: &dyn Theme = if colors_enabled() { &colorful } else { &simple };
+    PICKER_ACTIVE.store(true, Ordering::SeqCst);
     let result = FuzzySelect::with_theme(theme)
         .with_prompt(prompt)
         .items(items)
         .default(default)
         .highlight_matches(true)
-        .max_length(picker_rows())
         // The caller prints its own confirmation line; suppress
         // dialoguer's post-selection echo so nothing shows twice.
         .report(false)
         .interact_opt();
+    PICKER_ACTIVE.store(false, Ordering::SeqCst);
+    if result.is_err() {
+        // dialoguer only restores the cursor on its Enter/Esc return
+        // paths; an error from the raw-mode key reader (e.g. the
+        // Ctrl-C race against the SIGINT handler above) skips that,
+        // so restore it ourselves before mapping the error.
+        let _ = Term::stderr().show_cursor();
+    }
     map_interact_result(result)
-}
-
-/// Visible rows for the list: terminal height minus the prompt
-/// line, floored so a tiny terminal still shows a usable window.
-fn picker_rows() -> usize {
-    let height =
-        terminal_size::terminal_size().map_or(24, |(_, terminal_size::Height(h))| usize::from(h));
-    height.saturating_sub(2).max(3)
 }
 
 /// Map dialoguer's interact result onto the wrapper's contract:
@@ -80,7 +119,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_interrupted_read_is_cancel() {
+    fn interrupted_read_is_cancel_fallback() {
+        // Normally Ctrl-C exits the process directly via the SIGINT
+        // handler (see `install_sigint_handler`) and this mapping
+        // never runs; it only fires when that handler is inert.
         let interrupted = dialoguer::Error::IO(io::Error::new(
             io::ErrorKind::Interrupted,
             "read interrupted",
