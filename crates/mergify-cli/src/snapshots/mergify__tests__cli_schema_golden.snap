@@ -333,6 +333,22 @@ expression: schema
                 "valueNames": [
                   "SCOPES_FILE"
                 ]
+              },
+              {
+                "default": "false",
+                "env": null,
+                "global": false,
+                "help": "Declare that the pull request impacts every scope. The merge queue then treats it as a barrier: it is never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag",
+                "id": "all",
+                "kind": "flag",
+                "long": "all",
+                "longHelp": "Declare that the pull request impacts every scope. The merge queue then treats it as a barrier: it is never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag",
+                "numArgs": "0",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": []
               }
             ],
             "commands": [],
