@@ -499,6 +499,7 @@ struct CiScopesSendOpts {
     scopes_json: Option<PathBuf>,
     scopes_file: Option<PathBuf>,
     file_deprecated: Option<PathBuf>,
+    all_scopes: bool,
 }
 
 struct CiJunitProcessOpts {
@@ -912,6 +913,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                     scopes_json,
                     scopes_file,
                     file_deprecated,
+                    all,
                 }),
         }) => Dispatch::Native(NativeCommand::CiScopesSend(CiScopesSendOpts {
             repository,
@@ -922,6 +924,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             scopes_json,
             scopes_file,
             file_deprecated,
+            all_scopes: all,
         })),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::GitRefs(GitRefsCliArgs { format }),
@@ -1481,6 +1484,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     scopes_json: opts.scopes_json.as_deref(),
                     scopes_file: opts.scopes_file.as_deref(),
                     deprecated_file: opts.file_deprecated.as_deref(),
+                    all_scopes: opts.all_scopes,
                 },
                 &mut output,
             )
@@ -3796,6 +3800,13 @@ struct ScopesSendCliArgs {
     /// Deprecated alias for ``--scopes-json``.
     #[arg(long = "file", short = 'f', hide = true)]
     file_deprecated: Option<PathBuf>,
+
+    /// Declare that the pull request impacts every scope. The merge
+    /// queue then treats it as a barrier: it is never batched or run
+    /// in parallel with other pull requests. The concrete scopes are
+    /// still sent alongside the flag.
+    #[arg(long = "all")]
+    all: bool,
 }
 
 #[derive(clap::Args)]

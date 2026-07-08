@@ -138,6 +138,10 @@ mergify ci scopes-send --scopes-json scopes.json -p 123
 
 # Send scopes from a plain-text file (one scope per line)
 mergify ci scopes-send --scopes-file scopes.txt -p 123
+
+# Declare the PR impacts every scope (merge-queue barrier),
+# e.g. a build-system or CI-workflow change
+mergify ci scopes-send -s build-system --all -p 123
 ```
 
 **Key options:**
@@ -147,6 +151,7 @@ mergify ci scopes-send --scopes-file scopes.txt -p 123
 - `--scope` / `-s` -- Scope name (repeatable)
 - `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
 - `--scopes-file` -- Plain-text file with one scope per line
+- `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
 
 ## Tests Show (`tests show`)
 

@@ -11,6 +11,12 @@
 //! ``--file`` is the deprecated alias for ``--scopes-json`` and
 //! emits a warning to stderr; it is hidden from the public help.
 //!
+//! ``--all`` marks the pull request as impacting every scope: the
+//! request body carries ``all_scopes: true`` alongside the concrete
+//! ``scopes`` list, and the merge queue treats the pull request as
+//! a barrier. The flag is also honored when the ``--scopes-json``
+//! file carries ``"all_scopes": true``.
+//!
 //! Pull-request number and repository are explicit flags that fall
 //! back to environment (``GITHUB_REPOSITORY``, ``GITHUB_EVENT_PATH``
 //! with ``.pull_request.number``). When neither source yields a
@@ -45,6 +51,7 @@ pub struct ScopesSendOptions<'a> {
     pub scopes_json: Option<&'a Path>,
     pub scopes_file: Option<&'a Path>,
     pub deprecated_file: Option<&'a Path>,
+    pub all_scopes: bool,
 }
 
 /// Run the `ci scopes-send` command.
@@ -69,15 +76,24 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
     let scopes_json_path = opts.scopes_json.or(opts.deprecated_file);
 
     let mut scopes: Vec<String> = opts.scopes.to_vec();
+    let mut all_scopes = opts.all_scopes;
     if let Some(path) = scopes_json_path {
         let dump = load_scopes_json(path)?;
         scopes.extend(dump.scopes);
+        all_scopes = all_scopes || dump.all_scopes;
     }
     if let Some(path) = opts.scopes_file {
         scopes.extend(read_scopes_text_file(path)?);
     }
 
-    output.status(&format!("Sending {} scope(s) to {api_url}…", scopes.len()))?;
+    if all_scopes {
+        output.status(&format!(
+            "Sending {} scope(s) (impacting all scopes) to {api_url}…",
+            scopes.len(),
+        ))?;
+    } else {
+        output.status(&format!("Sending {} scope(s) to {api_url}…", scopes.len()))?;
+    }
 
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
     let path = format!("/v1/repos/{repository}/pulls/{pull_request}/scopes");
@@ -85,7 +101,13 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
     // would surface that as "parse response JSON: error decoding
     // response body". We only need to know the request was 2xx.
     client
-        .post_no_response(&path, &SendScopesRequest { scopes: &scopes })
+        .post_no_response(
+            &path,
+            &SendScopesRequest {
+                scopes: &scopes,
+                all_scopes,
+            },
+        )
         .await?;
 
     Ok(())
@@ -101,6 +123,11 @@ fn resolve_pull_request(explicit: Option<u64>) -> Result<Option<u64>, CliError> 
 #[derive(Deserialize)]
 struct DetectedScopesFile {
     scopes: Vec<String>,
+    // Optional so today's `ci scopes --write` output (which doesn't
+    // emit it yet) keeps parsing; the config-driven detection that
+    // will produce it is tracked separately (MRGFY-7892).
+    #[serde(default)]
+    all_scopes: bool,
 }
 
 fn load_scopes_json(path: &Path) -> Result<DetectedScopesFile, CliError> {
@@ -128,6 +155,7 @@ fn read_scopes_text_file(path: &Path) -> Result<Vec<String>, CliError> {
 #[derive(Serialize)]
 struct SendScopesRequest<'a> {
     scopes: &'a [String],
+    all_scopes: bool,
 }
 
 #[cfg(test)]
@@ -166,6 +194,18 @@ mod tests {
         fs::write(&path, r#"{"scopes": ["backend", "frontend"]}"#).unwrap();
         let got = load_scopes_json(&path).unwrap();
         assert_eq!(got.scopes, vec!["backend", "frontend"]);
+        // A dump without the field means "not an all-scopes PR" —
+        // today's `ci scopes --write` output doesn't emit it.
+        assert!(!got.all_scopes);
+    }
+
+    #[test]
+    fn load_scopes_json_parses_all_scopes_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("scopes.json");
+        fs::write(&path, r#"{"scopes": ["backend"], "all_scopes": true}"#).unwrap();
+        let got = load_scopes_json(&path).unwrap();
+        assert!(got.all_scopes);
     }
 
     #[test]
@@ -191,6 +231,7 @@ mod tests {
                     scopes_json: None,
                     scopes_file: None,
                     deprecated_file: None,
+                    all_scopes: false,
                 },
                 &mut cap.output,
             )
@@ -210,7 +251,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/repos/owner/repo/pulls/99/scopes"))
-            .and(body_json(serde_json::json!({"scopes": ["a"]})))
+            .and(body_json(
+                serde_json::json!({"scopes": ["a"], "all_scopes": false}),
+            ))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
@@ -237,6 +280,7 @@ mod tests {
                         scopes_json: None,
                         scopes_file: None,
                         deprecated_file: None,
+                        all_scopes: false,
                     },
                     &mut cap.output,
                 )
@@ -261,8 +305,9 @@ mod tests {
             .and(header("Authorization", "Bearer test-token"))
             .and(body_json(serde_json::json!({
                 "scopes": ["direct", "fromjson", "fromtext"],
+                "all_scopes": false,
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
             .await;
@@ -281,6 +326,88 @@ mod tests {
                 scopes_json: Some(&json_path),
                 scopes_file: Some(&txt_path),
                 deprecated_file: None,
+                all_scopes: false,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_sends_all_scopes_true_when_flag_set() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/repos/owner/repo/pulls/5/scopes"))
+            .and(body_json(serde_json::json!({
+                "scopes": ["backend"],
+                "all_scopes": true,
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut cap = Captured::human();
+        let api_url = server.uri();
+        let direct = vec!["backend".to_string()];
+
+        run(
+            ScopesSendOptions {
+                repository: Some("owner/repo"),
+                pull_request: Some(5),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                scopes: &direct,
+                scopes_json: None,
+                scopes_file: None,
+                deprecated_file: None,
+                all_scopes: true,
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+
+        let err = cap.stderr();
+        assert!(err.contains("impacting all scopes"), "got: {err:?}");
+    }
+
+    #[tokio::test]
+    async fn run_honors_all_scopes_from_scopes_json_file() {
+        // Forward-compat: when `ci scopes --write` starts emitting
+        // `all_scopes` (config-driven detection, MRGFY-7892), the
+        // flag must flow through without requiring `--all`.
+        let server = MockServer::start().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("scopes.json");
+        fs::write(&json_path, r#"{"scopes": ["a"], "all_scopes": true}"#).unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/v1/repos/owner/repo/pulls/6/scopes"))
+            .and(body_json(serde_json::json!({
+                "scopes": ["a"],
+                "all_scopes": true,
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut cap = Captured::human();
+        let api_url = server.uri();
+
+        run(
+            ScopesSendOptions {
+                repository: Some("owner/repo"),
+                pull_request: Some(6),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                scopes: &[],
+                scopes_json: Some(&json_path),
+                scopes_file: None,
+                deprecated_file: None,
+                all_scopes: false,
             },
             &mut cap.output,
         )
@@ -315,6 +442,7 @@ mod tests {
                 scopes_json: None,
                 scopes_file: None,
                 deprecated_file: None,
+                all_scopes: false,
             },
             &mut cap.output,
         )
@@ -331,7 +459,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/repos/owner/repo/pulls/1/scopes"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
 
@@ -348,6 +476,7 @@ mod tests {
                 scopes_json: None,
                 scopes_file: None,
                 deprecated_file: Some(&json_path),
+                all_scopes: false,
             },
             &mut cap.output,
         )
@@ -373,8 +502,10 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/repos/owner/repo/pulls/1/scopes"))
-            .and(body_json(serde_json::json!({"scopes": ["a"]})))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .and(body_json(
+                serde_json::json!({"scopes": ["a"], "all_scopes": false}),
+            ))
+            .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
             .await;
@@ -392,6 +523,7 @@ mod tests {
                 scopes_json: Some(&json_path),
                 scopes_file: None,
                 deprecated_file: Some(&deprecated_path),
+                all_scopes: false,
             },
             &mut cap.output,
         )
