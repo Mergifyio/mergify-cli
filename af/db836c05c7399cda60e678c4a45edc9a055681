@@ -1,0 +1,1 @@
+review: stub the empty-body scopes endpoint with ResponseTemplate::new(200) instead of set_body_json({}) in tests
