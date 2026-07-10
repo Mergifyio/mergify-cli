@@ -92,9 +92,9 @@ Use `mergify stack list` to see which commits have been pushed, which PRs they m
 
 `mergify stack note` records *why* a commit was amended. The note travels with the stack:
 
-- Stored locally under `refs/notes/mergify/stack` against the commit SHA.
-- Pushed automatically by `mergify stack push` (alongside the commit refspecs, with `--force-with-lease`).
-- Surfaced in the PR's **Revision history** comment as the `Reason` column of the markdown table, and embedded in the `<!-- mergify-revision-data: {...} -->` JSON marker (key `reason`) so it can be parsed programmatically.
+- The reason is stored locally under `refs/notes/mergify/stack` against the commit SHA.
+- On `mergify stack push`, the reason is consumed into the change's revision history; the note on the pushed head commit is replaced by the **full revision history** (human digest + the `<!-- mergify-revision-data: {...} -->` JSON marker). Git notes — not the PR comment — are the machine-readable source of truth; the PR's "Revision history" comment is rendered from them.
+- At merge time, Mergify copies the head commit's history note onto the merge/squash commit, so `git log --notes=mergify/stack` on the base branch shows why each change was revised.
 
 **When to attach a note** — any time you amend or rewrite a commit that already has a PR open (i.e. it has been pushed at least once). The note answers "why is this revision different?" so the reviewer doesn't have to diff old vs new SHAs to find out.
 

@@ -102,9 +102,11 @@ fn merge_remote_notes(repo_dir: Option<&Path>, remote: &str) -> Result<(), CliEr
         &["fetch", remote, "--no-write-fetch-head", &refspec],
     )?;
     // `notes merge --strategy=union` keeps both sides verbatim
-    // when they diverge — for the stack-notes ref the values are
-    // amend reasons keyed by SHA, so a union is exactly the
-    // right merge.
+    // when they diverge. Stack notes are either plain amend
+    // reasons or full history notes keyed by SHA; a union may
+    // concatenate two divergent history notes, which
+    // `revision_note::parse` tolerates (it keeps the longest
+    // marker payload) and the next push rewrites cleanly.
     let notes_ref_arg = format!("--ref={STACK_NOTES_REF}");
     let result = run_git_silent(
         repo_dir,
