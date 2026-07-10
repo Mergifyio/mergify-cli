@@ -11,8 +11,14 @@
 //! 3. A single-line `<!-- mergify-revision-data: {…} -->`
 //!    marker that carries the *machine-readable* version of the
 //!    same data, including the SHAs the table-cell rendering
-//!    only shows in truncated form. `parse()` reads the marker
-//!    back so subsequent pushes can append instead of rewriting.
+//!    only shows in truncated form. This same marker line is
+//!    also written into the git note on the pushed head commit
+//!    (see [`crate::revision_note`]), which is now the machine
+//!    source subsequent pushes read to build the next revision.
+//!    `parse()` still reads the marker back off the comment
+//!    body — it remains the one-time migration seed for stacks
+//!    last pushed before notes carried history, and keeps
+//!    legacy comments round-tripping.
 //!
 //! Ported from `mergify_cli/stack/push.py::RevisionHistoryComment`.
 //! Wire shape — table format, marker JSON, ISO-8601 timestamps
@@ -52,7 +58,7 @@ const MARKER_SUFFIX: &str = " -->";
 /// keep the same number so re-renders of historic rows match.
 const MAX_REASON_LEN: usize = 200;
 
-const TIMESTAMP_HUMAN_FMT: &str = "%Y-%m-%d %H:%M UTC";
+pub(crate) const TIMESTAMP_HUMAN_FMT: &str = "%Y-%m-%d %H:%M UTC";
 const TIMESTAMP_ISO_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
 
 /// Escape `reason` for a single markdown table cell.
@@ -295,6 +301,34 @@ impl RevisionHistoryComment {
         format!("{MARKER_PREFIX}{json}{MARKER_SUFFIX}")
     }
 
+    /// The `<!-- mergify-revision-data: {…} -->` line alone — the
+    /// machine-readable history. Written both at the bottom of the
+    /// PR comment and into the git note on the pushed head commit
+    /// (see [`crate::revision_note`]), so there is exactly one
+    /// schema for revision data.
+    #[must_use]
+    pub fn marker_line(&self, pull_number: u64) -> String {
+        self.json_marker(pull_number)
+    }
+
+    /// Rebuild a history from bare entries (the note-based read
+    /// path). No `raw_rows`: rows render fresh from entry data.
+    #[must_use]
+    pub fn from_entries(
+        github_server: &str,
+        user: &str,
+        repo: &str,
+        entries: Vec<RevisionEntry>,
+    ) -> Self {
+        Self {
+            github_server: github_server.to_string(),
+            user: user.to_string(),
+            repo: repo.to_string(),
+            entries,
+            raw_rows: Vec::new(),
+        }
+    }
+
     /// Render the full comment body for `pull_number`.
     ///
     /// Rows preserved from [`Self::parse`] are emitted verbatim
@@ -494,9 +528,86 @@ fn parse_human_timestamp(s: &str) -> Option<DateTime<Utc>> {
     Some(Utc.from_utc_datetime(&naive))
 }
 
-fn parse_marker_line(line: &str) -> Option<serde_json::Value> {
+/// Parse one `<!-- mergify-revision-data: {…} -->` line into its
+/// JSON payload. Public because the git-notes history (see
+/// [`crate::revision_note`]) carries the exact same marker line.
+#[must_use]
+pub fn parse_marker_line(line: &str) -> Option<serde_json::Value> {
     let caps = MARKER_RE.captures(line)?;
     serde_json::from_str(caps.name("payload")?.as_str()).ok()
+}
+
+/// True when any line of `text` is a revision-data marker — used
+/// to tell a machine history note apart from a plain amend
+/// reason written by `mergify stack note`.
+#[must_use]
+pub fn contains_marker(text: &str) -> bool {
+    text.lines().any(|l| l.starts_with(MARKER_PREFIX))
+}
+
+/// Decode a marker payload into full [`RevisionEntry`] values.
+///
+/// Unlike [`RevisionHistoryComment::parse`] — which overlays the
+/// marker onto entries seeded from the rendered table rows — this
+/// builds entries from the marker alone (the note has no table).
+/// Returns `None` for a wrong `schema_version`, an empty entry
+/// list, or any entry missing its required fields: a truncated
+/// history must not silently pass for the real one.
+#[must_use]
+pub fn entries_from_marker(payload: &serde_json::Value) -> Option<Vec<RevisionEntry>> {
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return None;
+    }
+    let arr = payload.get("entries")?.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+    let mut entries = Vec::with_capacity(arr.len());
+    for item in arr {
+        let obj = item.as_object()?;
+        let number = u32::try_from(obj.get("number").and_then(serde_json::Value::as_u64)?).ok()?;
+        let change_type =
+            ChangeType::from_str_lossy(obj.get("change_type").and_then(serde_json::Value::as_str)?);
+        let old_sha = match obj.get("old_sha") {
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        // Present-but-empty is as invalid as absent: an entry
+        // with no head SHA can't anchor a revision.
+        let new_sha = obj
+            .get("new_sha")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())?
+            .to_string();
+        let timestamp = obj
+            .get("timestamp_iso")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| NaiveDateTime::parse_from_str(s, TIMESTAMP_ISO_FMT).ok())
+            .map(|naive| Utc.from_utc_datetime(&naive));
+        let reason = obj
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let replay_sha = match obj.get("replay_sha") {
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        entries.push(RevisionEntry {
+            number,
+            change_type,
+            old_sha,
+            new_sha,
+            timestamp,
+            reason,
+            replay_sha,
+        });
+    }
+    Some(entries)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -785,5 +896,88 @@ mod tests {
         // No marker so SHAs stay empty on the parsed entries —
         // the raw rows still render verbatim when re-emitted.
         assert!(parsed.entries[0].new_sha.is_empty());
+    }
+
+    #[test]
+    fn marker_line_round_trips_through_entries_from_marker() {
+        // The note and the comment share one marker schema. A comment's
+        // marker line must decode back into the same entries so the
+        // note-based read path reproduces history exactly.
+        let mut comment = RevisionHistoryComment::create_initial(
+            "https://api.github.com",
+            "o",
+            "r",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ChangeType::Content,
+            t(),
+            "first reason",
+            None,
+        );
+        comment.append(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccccccccccccccccccccccc",
+            ChangeType::Rebase,
+            t(),
+            "",
+            Some("dddddddddddddddddddddddddddddddddddddddd"),
+        );
+
+        let line = comment.marker_line(42);
+        let payload = parse_marker_line(&line).expect("marker line parses");
+        let entries = entries_from_marker(&payload).expect("entries decode");
+        assert_eq!(entries, comment.entries);
+    }
+
+    #[test]
+    fn entries_from_marker_rejects_bad_schema_and_empty() {
+        // Wrong schema_version → None.
+        let wrong = serde_json::json!({"schema_version": 2, "pull_number": 1, "entries": []});
+        assert!(entries_from_marker(&wrong).is_none());
+        // Valid version but empty entries → None (nothing to build on).
+        let empty = serde_json::json!({"schema_version": 1, "pull_number": 1, "entries": []});
+        assert!(entries_from_marker(&empty).is_none());
+        // Entry missing new_sha → None (bail, don't fabricate).
+        let broken = serde_json::json!({
+            "schema_version": 1, "pull_number": 1,
+            "entries": [{"number": 1, "change_type": "initial", "old_sha": null,
+                         "timestamp_iso": null, "reason": "", "replay_sha": null}],
+        });
+        assert!(entries_from_marker(&broken).is_none());
+        // Entry with an empty new_sha → None (present-but-empty is
+        // as invalid as absent).
+        let empty_sha = serde_json::json!({
+            "schema_version": 1, "pull_number": 1,
+            "entries": [{"number": 1, "change_type": "initial", "old_sha": null,
+                         "new_sha": "", "timestamp_iso": null, "reason": "",
+                         "replay_sha": null}],
+        });
+        assert!(entries_from_marker(&empty_sha).is_none());
+    }
+
+    #[test]
+    fn from_entries_builds_comment_that_renders() {
+        let entries = vec![RevisionEntry {
+            number: 1,
+            change_type: ChangeType::Initial,
+            old_sha: None,
+            new_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            timestamp: Some(t()),
+            reason: String::new(),
+            replay_sha: None,
+        }];
+        let comment =
+            RevisionHistoryComment::from_entries("https://api.github.com", "o", "r", entries);
+        let body = comment.body(7);
+        assert!(body.starts_with("### Revision history\n"));
+        assert!(body.contains("| 1 | initial |"));
+    }
+
+    #[test]
+    fn contains_marker_detects_marker_lines_only() {
+        assert!(contains_marker(
+            "digest text\n\n<!-- mergify-revision-data: {\"schema_version\":1} -->\n"
+        ));
+        assert!(!contains_marker("just a plain amend reason"));
     }
 }
