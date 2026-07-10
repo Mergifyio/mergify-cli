@@ -138,16 +138,16 @@ fn git_remote_origin_url() -> Option<String> {
 fn parse_slug(url: &str) -> Option<String> {
     let url = url.trim();
 
-    // SSH form: `git@host:owner/repo[.git]` — no scheme, the
-    // delimiter between user@host and path is `:`. We detect this
-    // by checking for `@…:` before the first `/`.
+    // A scheme (`://`) means an HTTPS-style URL: the slug is the
+    // path after the host. Anything without a scheme is treated
+    // as the SSH form `git@host:owner/repo[.git]`: the slug is
+    // whatever follows the first `:`.
     let path = if let Some(scheme_end) = url.find("://") {
         let after_scheme = &url[scheme_end + 3..];
         after_scheme.split_once('/')?.1.to_string()
-    } else if let Some(colon) = url.find(':') {
-        url[colon + 1..].to_string()
     } else {
-        return None;
+        let colon = url.find(':')?;
+        url[colon + 1..].to_string()
     };
 
     let path = path.trim_end_matches('/').trim_start_matches('/');
