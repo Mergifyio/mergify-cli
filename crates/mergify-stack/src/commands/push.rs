@@ -11,13 +11,16 @@
 //! 5. Rebase via [`crate::commands::sync`] (or skip).
 //! 6. Optionally compute change types + replay SHAs for the
 //!    revision-history comment.
-//! 7. `git push --atomic` via [`crate::notes_push`].
-//! 8. Upsert each PR sequentially via [`crate::pr_upsert`] so
+//! 7. Prepare each Update's revision history and write it as a
+//!    git note on the new head commit (`crate::revision_note`),
+//!    so step 8's atomic push carries it.
+//! 8. `git push --atomic` via [`crate::notes_push`].
+//! 9. Upsert each PR sequentially via [`crate::pr_upsert`] so
 //!    each `Depends-On: #<n>` header sees the predecessor's
 //!    freshly-created PR number.
-//! 9. Upsert stack comments + revision-history comments per PR
-//!    via [`crate::comment_upsert`].
-//! 10. Tear down orphan branches.
+//! 10. Upsert stack comments, and render + upsert each prepared
+//!     revision-history comment, per PR via [`crate::comment_upsert`].
+//! 11. Tear down orphan branches.
 //!
 //! PR upserts run sequentially. Async here is incidental — it comes
 //! from reqwest's async-only client, not from a need for concurrency:
@@ -39,7 +42,7 @@ use crate::approvals::{self, RebaseDecision};
 use crate::change_type::{self, ChangeType};
 use crate::changes::Action;
 use crate::commands::sync as sync_cmd;
-use crate::comment_upsert::{self, RevisionInput};
+use crate::comment_upsert;
 use crate::local_commits;
 use crate::notes_push::{self, PushEntry};
 use crate::plan::{self, PlannedChange, PlannedChanges, PlannerOpts};
@@ -48,6 +51,8 @@ use crate::progress::{Mark, Progress};
 use crate::rebase_log;
 use crate::remote_changes;
 use crate::replay;
+use crate::revision_history::RevisionHistoryComment;
+use crate::revision_note;
 use crate::stack_comment::StackEntry;
 use crate::stack_context;
 use crate::trunk;
@@ -323,6 +328,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     let mut change_types: std::collections::HashMap<String, ChangeType> =
         std::collections::HashMap::new();
     let mut deferred_notes: Vec<String> = Vec::new();
+    let mut revision_histories: std::collections::HashMap<String, (u64, RevisionHistoryComment)> =
+        std::collections::HashMap::new();
     if opts.revision_history {
         let updated_pr_numbers: Vec<u64> = planned
             .locals
@@ -360,6 +367,148 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             let ct =
                 change_type::detect_change_type(Some(&repo_dir), old_sha, &entry.change.commit_sha);
             change_types.insert(entry.change.change_id.clone(), ct);
+        }
+
+        // Build each Update's full revision history BEFORE the push:
+        // the history is written as a git note on the new head commit
+        // so the atomic push below carries it with the branches. The
+        // Mergify engine copies that note onto the merge commit at
+        // merge time, so it must be on the remote before the PR can
+        // merge — writing it after the push would leave a window.
+        let now = Utc::now();
+        for p in &planned.locals {
+            if !matches!(p.change.action, Action::Update) {
+                continue;
+            }
+            let Some(pull) = p.change.pull.as_ref() else {
+                continue;
+            };
+            let Some(number) = pull.get("number").and_then(Value::as_u64) else {
+                continue;
+            };
+            let Some(old_sha) = pull.pointer("/head/sha").and_then(Value::as_str) else {
+                continue;
+            };
+
+            // A marker-carrying note on the local commit is a history
+            // note left by a previous push attempt that failed before
+            // the branch landed. If it records exactly this old→new
+            // transition, reuse it verbatim — rebuilding from the old
+            // head's note would lose the reason the user attached
+            // before the failed attempt — and skip the replay/change-
+            // type work below entirely: the recovered entry already
+            // carries its own replay_sha, and replay uploads objects
+            // to GitHub, so it must not run pointlessly.
+            if crate::revision_history::contains_marker(&p.change.note)
+                && let Some(history) = revision_note::recover_pending(
+                    &p.change.note,
+                    opts.github_server,
+                    opts.user,
+                    opts.repo,
+                    old_sha,
+                    &p.change.commit_sha,
+                )
+            {
+                revision_note::write_note(
+                    Some(&repo_dir),
+                    &p.change.commit_sha,
+                    &revision_note::render(&history, number),
+                )?;
+                revision_histories.insert(p.change.change_id.clone(), (number, history));
+                continue;
+            }
+
+            let ct = change_types
+                .get(&p.change.change_id)
+                .copied()
+                .unwrap_or(ChangeType::Unknown);
+
+            // Replay only when the change is content (not rebase or
+            // unknown) — for rebase/unknown the revision-history
+            // table renders without a compare URL anyway.
+            let replay_sha = if matches!(ct, ChangeType::Content) {
+                replay::replay_for_revision(
+                    opts.client,
+                    Some(&repo_dir),
+                    opts.user,
+                    opts.repo,
+                    old_sha,
+                    &p.change.commit_sha,
+                )
+                .await
+            } else {
+                None
+            };
+
+            // A marker-carrying note on the local commit that didn't
+            // match the recovery check above is stale machine history
+            // (another machine pushed meanwhile, or a different
+            // amend followed the failed attempt) — not a user reason.
+            let reason = if crate::revision_history::contains_marker(&p.change.note) {
+                ""
+            } else {
+                p.change.note.as_str()
+            };
+
+            let history = match revision_note::load_or_seed(
+                opts.client,
+                Some(&repo_dir),
+                opts.github_server,
+                opts.user,
+                opts.repo,
+                number,
+                old_sha,
+            )
+            .await
+            {
+                Ok(Some(mut h)) => {
+                    h.append(
+                        old_sha,
+                        &p.change.commit_sha,
+                        ct,
+                        now,
+                        reason,
+                        replay_sha.as_deref(),
+                    );
+                    h
+                }
+                Ok(None) => RevisionHistoryComment::create_initial(
+                    opts.github_server,
+                    opts.user,
+                    opts.repo,
+                    old_sha,
+                    &p.change.commit_sha,
+                    ct,
+                    now,
+                    reason,
+                    replay_sha.as_deref(),
+                ),
+                Err(e) => {
+                    // A transient failure (e.g. rate limit) fetching
+                    // the migration-seed PR comment must not fall
+                    // back to `create_initial`: that would write a
+                    // fresh 2-entry history and, worse, PATCH over
+                    // the PR comment that was the only remaining
+                    // seed — permanently destroying history a retry
+                    // could otherwise have recovered. Leave this PR's
+                    // history untouched this push (no note write, no
+                    // comment update): it converges on the next push
+                    // once the GET succeeds, since neither the old
+                    // head's note nor the comment changed meanwhile.
+                    deferred_notes.push(format!(
+                        "Could not load previous revision history for #{number}; \
+                         leaving it untouched this push, will retry next push: {e}",
+                    ));
+                    continue;
+                }
+            };
+
+            revision_note::write_note(
+                Some(&repo_dir),
+                &p.change.commit_sha,
+                &revision_note::render(&history, number),
+            )?;
+            revision_histories.insert(p.change.change_id.clone(), (number, history));
         }
     }
 
@@ -578,77 +727,28 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         prog.resolve(cidx, Mark::Done, Some("stack comments updated"));
     }
 
-    // Revision-history comments — only for Updates, and only
-    // when revision_history is enabled.
-    if opts.revision_history {
-        let has_updates = planned
-            .locals
-            .iter()
-            .any(|p| matches!(p.change.action, Action::Update) && p.change.pull.is_some());
-        if has_updates {
-            let ridx = prog.add("queued");
-            prog.run(ridx, "updating revision history", async {
-                let now = Utc::now();
-                for p in &planned.locals {
-                    if !matches!(p.change.action, Action::Update) {
-                        continue;
-                    }
-                    let Some(pull) = p.change.pull.as_ref() else {
-                        continue;
-                    };
-                    let Some(number) = pull.get("number").and_then(Value::as_u64) else {
-                        continue;
-                    };
-                    let Some(old_sha) = pull.pointer("/head/sha").and_then(Value::as_str) else {
-                        continue;
-                    };
-
-                    let ct = change_types
-                        .get(&p.change.change_id)
-                        .copied()
-                        .unwrap_or(ChangeType::Unknown);
-
-                    // Replay only when the change is content (not
-                    // rebase or unknown) — for rebase/unknown the
-                    // revision-history table renders without a
-                    // compare URL anyway.
-                    let replay_sha = if matches!(ct, ChangeType::Content) {
-                        replay::replay_for_revision(
-                            opts.client,
-                            Some(&repo_dir),
-                            opts.user,
-                            opts.repo,
-                            old_sha,
-                            &p.change.commit_sha,
-                        )
-                        .await
-                    } else {
-                        None
-                    };
-
-                    let input = RevisionInput {
-                        pull_number: number,
-                        old_sha,
-                        new_sha: &p.change.commit_sha,
-                        change_type: ct,
-                        reason: &p.change.note,
-                        replay_sha: replay_sha.as_deref(),
-                        timestamp: now,
-                    };
-                    comment_upsert::update_revision_history_for_pull(
-                        opts.client,
-                        opts.user,
-                        opts.repo,
-                        opts.github_server,
-                        &input,
-                    )
-                    .await?;
-                }
-                Ok::<(), CliError>(())
-            })
-            .await?;
-            prog.resolve(ridx, Mark::Done, Some("revision history updated"));
-        }
+    // Revision-history comments — rendered from the histories
+    // prepared (and written as git notes) before the push.
+    if !revision_histories.is_empty() {
+        let ridx = prog.add("queued");
+        prog.run(ridx, "updating revision history", async {
+            for p in &planned.locals {
+                let Some((number, history)) = revision_histories.get(&p.change.change_id) else {
+                    continue;
+                };
+                comment_upsert::upsert_revision_history_comment(
+                    opts.client,
+                    opts.user,
+                    opts.repo,
+                    *number,
+                    &history.body(*number),
+                )
+                .await?;
+            }
+            Ok::<(), CliError>(())
+        })
+        .await?;
+        prog.resolve(ridx, Mark::Done, Some("revision history updated"));
     }
 
     // Orphan-branch teardown — last so we don't yank the rug out

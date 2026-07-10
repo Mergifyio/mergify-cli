@@ -5,21 +5,18 @@
 //!   of a stack" table (see [`crate::stack_comment`]). Skipped
 //!   when the stack has only one PR — a single-row table would
 //!   be noise.
-//! - [`update_revision_history_for_pull`] — the "Revision
-//!   history" table (see [`crate::revision_history`]). On
-//!   every push, parses the existing comment's JSON marker,
-//!   **appends** the new revision row, and `PATCH`es — so
-//!   historic links are preserved verbatim while the new row
-//!   gets fresh rendering.
+//! - [`upsert_revision_history_comment`] — the "Revision
+//!   history" table (see [`crate::revision_history`]). The
+//!   revision-history body is pre-rendered by the push
+//!   orchestrator from the git-notes history (see
+//!   [`crate::revision_note`]); this module only diffs the
+//!   rendered body against the existing comment and writes it.
 //!
 //! Both walk the issue comments once, match on the header
 //! (`StackComment::is_stack_comment` / `RevisionHistoryComment::
 //! is_revision_comment`), then choose between PATCH (existing
 //! found, body changed), no-op (existing found, body unchanged),
-//! and POST (no existing). The revision upserter has a third
-//! branch: header matched but the marker JSON couldn't be parsed
-//! — overwrite with a fresh initial comment so a corrupted
-//! historic comment doesn't permanently block updates.
+//! and POST (no existing).
 //!
 //! Ported from
 //! `mergify_cli/stack/push.py::{_update_comment_for_pull,
@@ -28,13 +25,11 @@
 //! lives in the eventual `stack_push` orchestrator port — these
 //! are pure single-PR helpers.
 
-use chrono::{DateTime, Utc};
 use mergify_core::{CliError, HttpClient};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
-use crate::change_type::ChangeType;
 use crate::revision_history::RevisionHistoryComment;
 use crate::stack_comment::{self, StackEntry};
 
@@ -114,124 +109,50 @@ pub async fn update_stack_comment_for_pull(
     Ok(())
 }
 
-/// Inputs to [`update_revision_history_for_pull`] — the per-row
-/// fields the orchestrator resolves before calling. Decoupled
-/// from [`crate::changes::LocalChange`] because `pull_head_sha`,
-/// `reason`, `change_type`, and `replay_sha` are all computed
-/// during the push (not at classifier time).
-#[derive(Debug, Clone)]
-pub struct RevisionInput<'a> {
-    pub pull_number: u64,
-    pub old_sha: &'a str,
-    pub new_sha: &'a str,
-    pub change_type: ChangeType,
-    pub reason: &'a str,
-    pub replay_sha: Option<&'a str>,
-    pub timestamp: DateTime<Utc>,
-}
-
-/// Upsert the revision-history comment for one PR.
+/// Upsert the revision-history comment with a pre-rendered body.
 ///
-/// Three branches:
-///
-/// - **Existing parseable comment** → parse, [`append`] the new
-///   row, render, PATCH if changed. Historic rows render
-///   verbatim so old links stay intact.
-/// - **Existing comment, header matches but marker corrupted** →
-///   PATCH with a fresh 2-row `create_initial` comment.
-///   Recovers from a hand-edited / out-of-schema marker
-///   without leaving a stuck PR.
-/// - **No existing comment** → POST a fresh `create_initial`.
-///
-/// [`append`]: crate::revision_history::RevisionHistoryComment::append
-pub async fn update_revision_history_for_pull(
+/// The body is rendered by the caller from the git-notes history
+/// (the machine source of truth — see [`crate::revision_note`]);
+/// this function never parses comment content. Find our comment
+/// by header → PATCH if the body differs (no-op if identical);
+/// none found → POST.
+pub async fn upsert_revision_history_comment(
     client: &HttpClient,
     user: &str,
     repo: &str,
-    github_server: &str,
-    input: &RevisionInput<'_>,
+    pull_number: u64,
+    new_body: &str,
 ) -> Result<(), CliError> {
-    let path = format!(
-        "/repos/{user}/{repo}/issues/{pull_number}/comments",
-        pull_number = input.pull_number,
-    );
+    let path = format!("/repos/{user}/{repo}/issues/{pull_number}/comments");
     let comments: Vec<Comment> = client.get(&path).await?;
-
-    // Cheap to construct unconditionally — both the
-    // corrupted-marker and no-comment branches need it, and the
-    // common parseable-comment branch ignores it.
-    let fresh = RevisionHistoryComment::create_initial(
-        github_server,
-        user,
-        repo,
-        input.old_sha,
-        input.new_sha,
-        input.change_type,
-        input.timestamp,
-        input.reason,
-        input.replay_sha,
-    );
 
     for comment in &comments {
         if !RevisionHistoryComment::is_revision_comment(&comment.body) {
             continue;
         }
-        match RevisionHistoryComment::parse(&comment.body, github_server, user, repo) {
-            Some(mut parsed) => {
-                parsed.append(
-                    input.old_sha,
-                    input.new_sha,
-                    input.change_type,
-                    input.timestamp,
-                    input.reason,
-                    input.replay_sha,
-                );
-                let new_body = parsed.body(input.pull_number);
-                if comment.body != new_body {
-                    let _: Value = client
-                        .patch(&comment_path(&comment.url)?, &BodyOnly { body: &new_body })
-                        .await?;
-                }
-            }
-            None => {
-                // Header matched but marker corrupted — recover
-                // by overwriting with a fresh initial comment.
-                // Better than leaving the PR with a stuck
-                // unparseable comment.
-                let _: Value = client
-                    .patch(
-                        &comment_path(&comment.url)?,
-                        &BodyOnly {
-                            body: &fresh.body(input.pull_number),
-                        },
-                    )
-                    .await?;
-            }
+        if comment.body != new_body {
+            let _: Value = client
+                .patch(&comment_path(&comment.url)?, &BodyOnly { body: new_body })
+                .await?;
         }
         return Ok(());
     }
 
-    // No existing revision-history comment — POST a fresh one.
-    let _: Value = client
-        .post(
-            &path,
-            &BodyOnly {
-                body: &fresh.body(input.pull_number),
-            },
-        )
-        .await?;
+    let _: Value = client.post(&path, &BodyOnly { body: new_body }).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{DateTime, TimeZone, Utc};
     use mergify_core::ApiFlavor;
     use serde_json::json;
     use url::Url;
     use wiremock::matchers::{method, path as wm_path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    use crate::change_type::ChangeType;
 
     fn client(server: &MockServer) -> HttpClient {
         HttpClient::new(
@@ -359,56 +280,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revision_history_creates_when_missing() {
+    async fn revision_comment_posts_when_missing() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(wm_path("/repos/o/r/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(wm_path("/repos/o/r/issues/42/comments"))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+            .expect(1)
             .mount(&server)
             .await;
 
-        let input = RevisionInput {
-            pull_number: 42,
-            old_sha: "aaaaaaaaaaaa",
-            new_sha: "bbbbbbbbbbbb",
-            change_type: ChangeType::Content,
-            reason: "review feedback",
-            replay_sha: None,
-            timestamp: ts(),
-        };
-        update_revision_history_for_pull(
-            &client(&server),
-            "o",
-            "r",
-            "https://api.github.com",
-            &input,
-        )
-        .await
-        .unwrap();
-
-        let reqs = server.received_requests().await.unwrap();
-        let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
-        let body = request_body(post);
-        let body_str = body["body"].as_str().unwrap();
-        assert!(body_str.starts_with("### Revision history\n"));
-        // First push → initial 2-row comment: synthetic "initial"
-        // row + the actual revision.
-        assert!(body_str.contains("| 1 | initial |"));
-        assert!(body_str.contains("| 2 | content |"));
-    }
-
-    #[tokio::test]
-    async fn revision_history_appends_to_existing_parseable_comment() {
-        // Seed the API with a real 2-row comment produced by
-        // `create_initial`. The upserter must parse it, append
-        // the new row, and PATCH — historic row 1 + 2 stay
-        // verbatim, fresh row 3 gets added.
-        let seed = RevisionHistoryComment::create_initial(
+        let body = RevisionHistoryComment::create_initial(
             "https://api.github.com",
             "o",
             "r",
@@ -416,106 +303,77 @@ mod tests {
             "bbbbbbbbbbbb",
             ChangeType::Content,
             ts(),
-            "first push",
+            "review feedback",
             None,
-        );
-        let seed_body = seed.body(42);
+        )
+        .body(42);
+        upsert_revision_history_comment(&client(&server), "o", "r", 42, &body)
+            .await
+            .unwrap();
 
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+        let sent = request_body(post);
+        assert_eq!(sent["body"].as_str().unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn revision_comment_patches_when_body_differs() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(wm_path("/repos/o/r/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {
                     "url": format!("{}/repos/o/r/issues/comments/200", server.uri()),
-                    "body": seed_body,
+                    "body": "### Revision history\n\nSTALE",
                 },
             ])))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("PATCH"))
             .and(wm_path("/repos/o/r/issues/comments/200"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
             .mount(&server)
             .await;
 
-        let input = RevisionInput {
-            pull_number: 42,
-            old_sha: "bbbbbbbbbbbb",
-            new_sha: "cccccccccccc",
-            change_type: ChangeType::Rebase,
-            reason: "",
-            replay_sha: None,
-            timestamp: ts(),
-        };
-        update_revision_history_for_pull(
+        upsert_revision_history_comment(
             &client(&server),
             "o",
             "r",
-            "https://api.github.com",
-            &input,
+            42,
+            "### Revision history\n\nNEW",
         )
         .await
         .unwrap();
-
-        let reqs = server.received_requests().await.unwrap();
-        let patch = reqs.iter().find(|r| r.method.as_str() == "PATCH").unwrap();
-        let body = request_body(patch);
-        let body_str = body["body"].as_str().unwrap();
-        assert!(body_str.contains("| 1 | initial |"));
-        assert!(body_str.contains("| 2 | content |"));
-        // New rebase row appended.
-        assert!(body_str.contains("| 3 | rebase |"));
     }
 
     #[tokio::test]
-    async fn revision_history_overwrites_when_existing_marker_corrupted() {
-        // The header matches but the marker JSON is junk —
-        // parse() returns None. Recovery path: PATCH with a
-        // fresh initial 2-row comment so the next push has a
-        // clean slate.
+    async fn revision_comment_noops_when_body_identical() {
+        // Same body → neither PATCH nor POST. Only the GET runs; any
+        // write request would 404 against the mock server and fail.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(wm_path("/repos/o/r/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {
-                    "url": format!("{}/repos/o/r/issues/comments/300", server.uri()),
-                    "body": "### Revision history\n\n<!-- mergify-revision-data: not-json -->",
+                    "url": format!("{}/repos/o/r/issues/comments/200", server.uri()),
+                    "body": "### Revision history\n\nSAME",
                 },
             ])))
-            .mount(&server)
-            .await;
-        Mock::given(method("PATCH"))
-            .and(wm_path("/repos/o/r/issues/comments/300"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
             .mount(&server)
             .await;
 
-        let input = RevisionInput {
-            pull_number: 42,
-            old_sha: "aaaaaaaaaaaa",
-            new_sha: "bbbbbbbbbbbb",
-            change_type: ChangeType::Content,
-            reason: "recover",
-            replay_sha: None,
-            timestamp: ts(),
-        };
-        update_revision_history_for_pull(
+        upsert_revision_history_comment(
             &client(&server),
             "o",
             "r",
-            "https://api.github.com",
-            &input,
+            42,
+            "### Revision history\n\nSAME",
         )
         .await
         .unwrap();
-
-        let reqs = server.received_requests().await.unwrap();
-        let patch = reqs.iter().find(|r| r.method.as_str() == "PATCH").unwrap();
-        let body = request_body(patch);
-        let body_str = body["body"].as_str().unwrap();
-        // Fresh `create_initial` shape, not an append.
-        assert!(body_str.contains("| 1 | initial |"));
-        assert!(body_str.contains("| 2 | content |"));
-        assert!(!body_str.contains("| 3 |"));
     }
 }
