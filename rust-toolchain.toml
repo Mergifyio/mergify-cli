@@ -1,3 +1,7 @@
+# Pinned so a new stable release can't break every open PR with new
+# clippy lints on untouched code. Renovate's rust-toolchain manager
+# proposes bumps (after the 7-day minimumReleaseAge); a bump PR that
+# trips new lints fails CI and must fix them in the same PR.
 [toolchain]
-channel = "stable"
+channel = "1.97"
 components = ["rustfmt", "clippy"]

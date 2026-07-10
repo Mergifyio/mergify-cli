@@ -22,10 +22,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup component add rustfmt clippy --toolchain stable
+        # No version argument: installs the channel + components
+        # pinned in rust-toolchain.toml.
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
@@ -59,14 +58,17 @@ jobs:
           echo "Declared MSRV: ${msrv}"
           echo "version=${msrv}" >> "${GITHUB_OUTPUT}"
       - name: Install MSRV toolchain
-        run: |
-          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
-          rustup default "${{ steps.msrv.outputs.version }}"
+        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: msrv
       - name: cargo check --locked on MSRV
+        # RUSTUP_TOOLCHAIN outranks rust-toolchain.toml (which
+        # outranks `rustup default` — so without this env the job
+        # silently checks the pinned toolchain, not the MSRV).
         run: cargo check --workspace --all-targets --locked
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
 
   # Supply-chain gate: RUSTSEC advisories, license policy, banned /
   # duplicate crates, and source provenance. Policy lives in
@@ -124,9 +126,9 @@ jobs:
         with:
           python-version: 3.14
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        # No version argument: installs the channel pinned in
+        # rust-toolchain.toml.
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: smoke-${{ matrix.os }}
@@ -181,9 +183,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        # No version argument: installs the channel pinned in
+        # rust-toolchain.toml.
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: install-${{ matrix.os }}
@@ -341,9 +343,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        # No version argument: installs the channel pinned in
+        # rust-toolchain.toml.
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: self-update-${{ matrix.os }}
