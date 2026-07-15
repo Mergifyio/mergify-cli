@@ -72,6 +72,13 @@
 //!   per-PR upserts sequentially (typical 2–5 PR stacks make
 //!   the latency difference negligible vs. the GitHub round-
 //!   trip cost).
+//! - [`revision_note`] — the git-notes revision-history format
+//!   (human digest + the same `mergify-revision-data` marker the
+//!   PR comment carries), its `git notes` IO, and the
+//!   note-first/comment-seed read path. The machine source of
+//!   truth for a change's revision history, replacing the plain
+//!   amend-reason note `mergify stack note` wrote on the same
+//!   commit.
 
 pub mod approvals;
 pub mod change_id;
@@ -93,6 +100,7 @@ pub mod rebase_todo;
 pub mod remote_changes;
 pub mod replay;
 pub mod revision_history;
+pub mod revision_note;
 pub mod slug;
 pub mod stack_comment;
 pub mod stack_context;
