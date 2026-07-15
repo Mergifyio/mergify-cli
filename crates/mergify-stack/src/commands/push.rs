@@ -44,7 +44,7 @@ use crate::changes::Action;
 use crate::commands::sync as sync_cmd;
 use crate::comment_upsert;
 use crate::local_commits;
-use crate::notes_push::{self, PushEntry};
+use crate::notes_push::{self, NotesLease, PushEntry};
 use crate::plan::{self, PlannedChange, PlannedChanges, PlannerOpts};
 use crate::pr_upsert::{self, PrUpsertInput, StaleBase};
 use crate::progress::{Mark, Progress};
@@ -157,14 +157,14 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
 
     // The trunk + notes fetch is synchronous git; run it on a
     // blocking thread so the spinner keeps ticking smoothly across it.
-    let notes_ref_fetched = {
+    let notes_lease = {
         let repo = repo_dir.clone();
         let remote = remote.to_string();
         let base = base_branch.to_string();
         prog.run(
             pf,
             "fetching trunk",
-            spawn_git_blocking("git fetch", move || -> Result<bool, CliError> {
+            spawn_git_blocking("git fetch", move || -> Result<NotesLease, CliError> {
                 run_git_silent(Some(&repo), &["fetch", &remote, &base])?;
                 notes_push::fetch_notes_ref(Some(&repo), &remote)
             }),
@@ -573,17 +573,25 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         let repo = repo_dir.clone();
         let remote_owned = remote.to_string();
         let no_verify = opts.no_verify;
+        let push_notes_lease = notes_lease.clone();
         let push = spawn_git_blocking("git push", move || {
             notes_push::push_branches(
                 Some(&repo),
                 &remote_owned,
                 &push_entries,
                 no_verify,
-                notes_ref_fetched,
+                &push_notes_lease,
             )
         });
         prog.run_optional(publishing, format!("pushing {pushed} branch(es)"), push)
             .await?;
+    }
+    if pushed > 0 && matches!(notes_lease, NotesLease::Unknown) {
+        deferred_notes.push(
+            "Could not determine the remote notes state; stack notes were not \
+             pushed and will catch up on the next push."
+                .to_string(),
+        );
     }
     if let Some(idx) = publishing {
         prog.resolve(
