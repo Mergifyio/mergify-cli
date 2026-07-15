@@ -84,6 +84,31 @@ pub fn parse(
     best.map(|entries| RevisionHistoryComment::from_entries(github_server, user, repo, entries))
 }
 
+/// Recover the history a previous (failed) push attempt already
+/// wrote on the local head commit. Returns it only when its last
+/// entry records exactly the `old_sha` → `new_sha` transition the
+/// current push is about to append — anything else (another
+/// machine pushed meanwhile, a different amend) means the note is
+/// stale and the caller must rebuild from the old head's note.
+/// Keeping the recovered entry (reason, timestamp, and all) makes
+/// retries idempotent instead of appending a blank-reason
+/// duplicate.
+#[must_use]
+pub fn recover_pending(
+    note_text: &str,
+    github_server: &str,
+    user: &str,
+    repo: &str,
+    old_sha: &str,
+    new_sha: &str,
+) -> Option<RevisionHistoryComment> {
+    parse(note_text, github_server, user, repo).filter(|h| {
+        h.entries
+            .last()
+            .is_some_and(|e| e.old_sha.as_deref() == Some(old_sha) && e.new_sha == new_sha)
+    })
+}
+
 /// Read the raw note text on `sha` from the stack notes ref.
 /// `None` covers both "no note" and "git failed" — the caller
 /// treats both as "no previous history here".
@@ -257,6 +282,59 @@ mod tests {
         );
         let parsed = parse(&note, GH, "o", "r").expect("valid marker still found");
         assert_eq!(parsed.entries.len(), 3);
+    }
+
+    #[test]
+    fn recover_pending_matches_last_entry_transition() {
+        let history = sample_history();
+        let note = render(&history, 42);
+        let last = history.entries.last().unwrap();
+        let recovered = recover_pending(
+            &note,
+            GH,
+            "o",
+            "r",
+            last.old_sha.as_deref().unwrap(),
+            &last.new_sha,
+        )
+        .expect("recovers matching pending history");
+        assert_eq!(recovered.entries, history.entries);
+    }
+
+    #[test]
+    fn recover_pending_rejects_mismatched_last_entry() {
+        let history = sample_history();
+        let note = render(&history, 42);
+        let last = history.entries.last().unwrap();
+        // A different new_sha than what's recorded means another
+        // push (or amend) happened since this note was written —
+        // the note is stale and must not be reused.
+        assert!(
+            recover_pending(
+                &note,
+                GH,
+                "o",
+                "r",
+                last.old_sha.as_deref().unwrap(),
+                "ffffffffffffffffffffffffffffffffffffffff",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn recover_pending_rejects_plain_reason() {
+        assert!(
+            recover_pending(
+                "fixed a typo in the docs",
+                GH,
+                "o",
+                "r",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .is_none()
+        );
     }
 
     // --- git IO ---
