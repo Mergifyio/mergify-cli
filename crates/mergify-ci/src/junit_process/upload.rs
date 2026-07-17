@@ -61,6 +61,14 @@ impl std::error::Error for UploadError {}
 const ENDPOINT_PATH: &str = "/v1/repos/";
 const ENDPOINT_SUFFIX: &str = "/ci/traces";
 
+/// Hard cap on the size of a single gzipped OTLP upload, in bytes
+/// (10 MiB). The ingest endpoint refuses payloads larger than this,
+/// so [`crate::junit_process::split`] partitions an oversized trace
+/// into several uploads that each gzip under the cap. The cap is on
+/// the *compressed* body — the exact bytes we put on the wire — not
+/// the raw XML or the uncompressed protobuf.
+pub const MAX_GZIPPED_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+
 fn endpoint_url(api_url: &str, repository: &str) -> String {
     // The shape `<api_url>/v1/repos/<owner>/<repo>/ci/traces`
     // matches the Python implementation. The repository segment is
@@ -70,7 +78,7 @@ fn endpoint_url(api_url: &str, repository: &str) -> String {
     format!("{trimmed}{ENDPOINT_PATH}{repository}{ENDPOINT_SUFFIX}")
 }
 
-fn gzip(bytes: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+pub(crate) fn gzip(bytes: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes)?;
     encoder.finish()
@@ -96,13 +104,28 @@ pub async fn upload(
         return Ok(());
     }
 
-    let url = endpoint_url(api_url, repository);
-
     let encoded = request.encode_to_vec();
     let compressed = gzip(&encoded).map_err(|e| UploadError {
         status: None,
         message: format!("failed to gzip OTLP payload: {e}"),
     })?;
+
+    upload_compressed(client, api_url, token, repository, compressed).await
+}
+
+/// POST an already-gzipped OTLP payload. The splitting path
+/// ([`crate::junit_process::split`]) gzips each chunk once to size it
+/// against the cap and hands the compressed bytes straight here, so
+/// the payload is never gzipped twice. Callers guarantee `compressed`
+/// is a non-empty gzipped `ExportTraceServiceRequest`.
+pub async fn upload_compressed(
+    client: &reqwest::Client,
+    api_url: &str,
+    token: &str,
+    repository: &str,
+    compressed: Vec<u8>,
+) -> Result<(), UploadError> {
+    let url = endpoint_url(api_url, repository);
 
     let resp = client
         .post(&url)
