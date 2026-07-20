@@ -20,18 +20,19 @@ A branch is a stack. Keep stacks short and focused:
 
 - **Push**: Use `mergify stack push` (never `git push`)
 - **Fixes**: Use `git commit --amend` (never create new commits to fix issues)
-- **Amend notes**: When amending a commit that already has a PR (i.e. has been pushed), attach a `mergify stack note` BEFORE `mergify stack push` to record *why* the commit was amended. The note appears in the PR's "Revision history" comment and JSON marker, so reviewers can see the reason without diffing.
-- **Mid-stack fixes**: Stash any local changes first (`git stash -u`), then use `mergify stack edit <SHA-or-Change-Id-prefix>` to pause the rebase at the target commit. Amend it with `git commit --amend`, then `git rebase --continue`, then `mergify stack push`, then `git stash pop`. Non-interactive — never use `git rebase -i` for this. (Calling `mergify stack edit` with no argument falls back to a fully interactive `git rebase -i` and will hang in agent contexts — always pass a commit prefix.)
+- **Amend notes**: When amending a commit that already has a PR (i.e. has been pushed), attach a `mergify stack note` BEFORE `mergify stack push` to record *why* the commit was amended. The note appears in the PR's "Revision history" comment and JSON marker, so reviewers can see the reason without diffing. It rides along with the commit through amends and rebases, so attaching it once is enough. See [Amend Notes](#amend-notes).
+- **Target by Change-Id, not SHA**: Address a commit by its `Change-Id` trailer — that is what maps a commit to its PR, and it survives every rebase, while SHAs change on every rebasing push. Both forms are accepted, and the difference when a SHA has gone stale matters: `stack edit` (like `drop`/`squash`/`fixup`/`move`/`reword`/`reorder`) matches the prefix against the commits *in the stack*, so a stale SHA fails loudly with `no commit found matching SHA prefix`; `mergify stack note` resolves any git revision without checking stack membership, so a stale SHA silently attaches the note to a commit no push will ever read.
+- **Mid-stack fixes**: Stash any local changes first (`git stash -u`), then use `mergify stack edit <Change-Id>` to pause the rebase at the target commit. `stack edit` pauses *on* the commit with a clean tree and git tells you to amend — that is correct: `git commit --amend --no-edit`, then `git rebase --continue`, then `mergify stack push`, then `git stash pop`. `--no-edit` keeps the message verbatim, so the existing `Change-Id` trailer (which maps the commit to its PR) is retained — the `commit-msg` hook only *inserts* a `Change-Id` when one is missing, so it won't rewrite yours. Amend ONLY at this edit pause — a rebase *conflict* pause is the opposite trap (see [Conflict Resolution](#conflict-resolution)). Non-interactive — never use `git rebase -i` for this. (Calling `mergify stack edit` with no argument falls back to a fully interactive `git rebase -i` and will hang in agent contexts — always pass a `Change-Id`.)
 - **Reordering**: Stash any local changes first (`git stash -u`), then use `mergify stack reorder` (list all commits in desired order) or `mergify stack move` (move a single commit) instead of manual `git rebase -i` — non-interactive and avoids `GIT_SEQUENCE_EDITOR` quoting issues
 - **Fixup**: Stash any local changes first (`git stash -u`), then use `mergify stack fixup <SHA>...` to fold a commit into its parent (drops the listed commit's message). Non-interactive — never use `git rebase -i` for this.
 - **Squash**: Stash any local changes first (`git stash -u`), then use `mergify stack squash SRC... into TARGET [-m "msg"]` to combine multiple commits into one, with an optional custom message. Non-interactive — never use `git rebase -i` for this.
 - **Reword**: Stash any local changes first (`git stash -u`), then use `mergify stack reword <SHA> -m "new message"` to change a commit's message in place. Non-interactive when `-m` is given — never use `git rebase -i` for this.
 - **Drop**: Stash any local changes first (`git stash -u`), then use `mergify stack drop <SHA>...` to remove commits from the stack. Non-interactive — never use `git rebase -i` for this.
 - **Commit titles**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
-- **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.**
+- **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.** Unless `mergify-cli.stack-keep-pr-title-body` is set, every push re-syncs each PR's title and body from its commit message; and because a reword or amend at the *bottom* of a stack rebases everything above it, that push re-syncs *every* PR's body, not only the one you changed. This is why hand-edits via `gh pr edit --body` never stick (see the lifecycle rule below) — put the content in the commit message instead. If you truly must hand-edit a body, do it last, after the final push.
 - **Ticket references**: Include ticket/issue references (e.g., `MRGFY-1234`, `Fixes #123`) in the commit message body, not added separately to the PR.
 - **PR lifecycle is fully managed by `mergify stack`**: NEVER edit PR titles, bodies, or labels with `gh pr edit` or the GitHub MCP — they will be overwritten on the next push. NEVER close or merge PRs manually — `mergify stack` handles the entire PR lifecycle (creation, updates, and cleanup).
-- **Draft PRs**: NEVER mark a PR as ready-for-review — all PRs stay as drafts. The user will manually move them out of draft after reviewing.
+- **Draft PRs**: NEVER mark a PR as ready-for-review — all PRs stay as drafts; the user moves them out of draft after reviewing. Be aware this has a CI consequence: a stacked **draft** PR may get **no CI at all** (some CI setups gate their pipeline's entry job on the PR being non-draft), so the upper PRs can show a wall of `skipping` — that is "never ran", not "green". CI only starts once the PR is readied, which is the user's call — so don't read a skipped draft as passing. See [Reading CI status](#reading-ci-status).
 - **Each commit must pass CI independently**: Every commit in a stack becomes its own PR. Each PR runs CI separately, so every commit must be self-contained — it must compile, pass linters, and pass tests on its own without depending on later commits in the stack. When formatting or linting fixes are needed, they must be included in the commit that introduced the issue, not deferred to a later commit.
 
 ## Common Mistakes
@@ -46,18 +47,19 @@ A branch is a stack. Keep stacks short and focused:
 | `git rebase -i` to fixup a commit | `mergify stack fixup <SHA>` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `git rebase -i` to squash commits | `mergify stack squash A B into X [-m "..."]` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `git rebase -i` to change a commit message | `mergify stack reword <SHA> -m "..."` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
-| `git rebase -i` to amend a mid-stack commit | `mergify stack edit <SHA-or-Change-Id-prefix>` then `git commit --amend` then `git rebase --continue` | Non-interactive — pauses the rebase at the target commit without spawning an editor |
+| `git rebase -i` to amend a mid-stack commit | `mergify stack edit <Change-Id>` then `git commit --amend --no-edit` then `git rebase --continue` | Non-interactive — pauses the rebase at the target commit; `--no-edit` keeps the message (and its `Change-Id`) verbatim without spawning an editor |
 | `git rebase -i` to drop a commit | `mergify stack drop <SHA>...` | Non-interactive — works inside LLM/agent sessions; no editor spawned |
 | `GIT_SEQUENCE_EDITOR='sed -i ...' git rebase -i` (any variant) | One of `mergify stack {edit,fixup,squash,reorder,move}` | Hand-rolled sequence-editor scripts are brittle; there is already a non-interactive command for every common rewrite |
 | Deferring lint fixes to a later commit | Include the fix in the commit that caused it | Each commit runs CI independently; later commits won't save earlier ones |
 | Rebase/reorder/checkout/sync with dirty worktree | `git stash -u` first, then `git stash pop` after | Uncommitted changes are lost or cause conflicts during these operations |
 | Amending a pushed commit with no explanation | `mergify stack note -m "why"` before `mergify stack push` | The reason is recorded in the PR's Revision history table and JSON marker, so reviewers don't need to diff to understand the change |
+| `git commit --amend` at a rebase *conflict* pause | `git add <files> && git rebase --continue` | The conflicting pick hasn't produced a commit yet; amending rewrites the last-applied commit and re-maps your work to the wrong PR's `Change-Id` |
 
 ## Commands
 
 ```bash
 mergify stack new NAME       # Create a new stack/branch for new work
-mergify stack push           # Push and create/update PRs
+mergify stack push           # Push and create/update PRs (rebases onto latest trunk first, unless PRs are approved)
 mergify stack checkout NAME  # Checkout an existing stack from GitHub (e.g. someone else's)
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
 mergify stack list           # Show commit <-> PR mapping for current stack
@@ -107,11 +109,18 @@ mergify stack note -m "address review: rename foo() to bar()"
 mergify stack push
 
 # Or for a mid-stack commit (after the rebase that amended it):
-mergify stack note <SHA-or-Change-Id-prefix> -m "fix lint reported in CI"
+mergify stack note <Change-Id> -m "fix lint reported in CI"
 mergify stack push
 ```
 
-A note is per-commit, not per-revision. Each amend (or other history rewrite) creates a new commit SHA, so you must run `mergify stack note` again for the new SHA — the previous note stays attached to the old SHA and won't carry over. Use `--append` only when the current target commit already has a note and you want to add another reason; use `--remove` to clear it. Notes on commits that haven't changed since the last push are preserved but won't add a new revision row.
+A note is per-commit, not per-revision. It is stored against the commit SHA, but git carries it onto the rewritten commit through an amend or a rebase (`mergify stack setup` configures `notes.rewriteRef` for this), so the reason you attach survives the rebase `stack push` does and lands in the revision history. Use `--append` only when the current target commit already has a note and you want to add another reason; use `--remove` to clear it. Notes on commits that haven't changed since the last push are preserved but won't add a new revision row.
+
+## Reading CI status
+
+- Read a PR's status with **`gh pr checks <pr>`** and trust its exit code: `0` = all checks passed, `8` = a check is still pending. Any other non-zero code means "not green" but not necessarily a CI failure: `1` usually means a check failed, yet it is also `gh`'s generic error code (unknown PR, network error), and auth failures exit `4` — so read the output before calling any of them a failure. (`gh pr checks` considers *all* checks by default; add `--required` to consider only required ones.)
+- The `mergify stack list` CI column can go **stale** right after a rapid re-push — give CI a moment to register the new head, or confirm with `gh pr checks`.
+- `statusCheckRollup` (in `gh pr view --json` / the GitHub API) keeps `CANCELLED` entries from superseded runs: each re-push cancels the previous commit's in-flight CI, so those cancellations are **history, not failures**.
+- A stacked **draft** PR may show no checks at all — see the [Draft PRs](#core-conventions) convention for why a wall of `skipping` is "never ran", not "green".
 
 ## CRITICAL: Check Branch Before ANY Commit
 
@@ -184,3 +193,5 @@ When a rebase causes conflicts (during `git rebase -i` or `mergify stack push`):
 To abort instead: `git rebase --abort`
 
 After resolving, run `mergify stack push` to sync the updated stack.
+
+**NEVER `git commit --amend` at a conflict pause.** At a conflict the pick being replayed has **not** produced a commit yet, and HEAD still points at the last commit git already applied — the trunk tip if the *bottom* commit conflicted, otherwise a previously-replayed commit of your own stack. Either way it is **not** the commit you're resolving, so `git commit --amend` rewrites that already-applied commit — silently stamping your work with its title, author, and `Change-Id` and re-mapping it to the WRONG PR. Resolve a conflict with `git add <files> && git rebase --continue`, nothing more. Amend only ever belongs at a `mergify stack edit` pause (see **Mid-stack fixes**), where the tree is clean and git itself tells you to amend. If you already amended mid-conflict, compare HEAD's message against the commit you *meant* to resolve; if it doesn't match, the commit needs rebuilding from the correct tree. The `commit-msg` hook installed by `mergify stack setup` refuses this amend outright, so an up-to-date checkout stops you before the damage — but `--no-verify` walks straight past it.
