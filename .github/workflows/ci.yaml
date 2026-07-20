@@ -451,7 +451,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs succeeded
-        uses: Mergifyio/gha-mergify-ci@f1feee72acd3b001406ff1cc0ce23e6033e26fe7 # v22
+        uses: Mergifyio/gha-mergify-ci@8173bc3c1d337d3367454672d50cfdf6f0273396 # v23
         with:
           action: wait-jobs
           jobs: ${{ toJSON(needs) }}
