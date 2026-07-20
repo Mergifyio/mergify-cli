@@ -25,8 +25,8 @@ use mergify_core::CliError;
 use mergify_core::HttpClient;
 
 use crate::git::{
-    compute_base_commit_sha, resolve_repo_toplevel, run_git_silent, shell_quote, spawn_rebase,
-    spawn_rebase_captured,
+    compute_base_commit_sha, notes_rewrite_config, resolve_repo_toplevel, run_git_silent,
+    shell_quote, spawn_rebase, spawn_rebase_captured,
 };
 use crate::local_commits;
 use crate::remote_changes;
@@ -130,7 +130,10 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     if status.up_to_date() || status.all_merged() {
         // Either nothing to drop, or every commit got merged.
         // Both cases collapse to a plain pull --rebase.
-        run_git_silent(Some(&repo_dir), &["pull", "--rebase", remote, base_branch]).map_err(
+        let notes_config = notes_rewrite_config();
+        let mut args: Vec<&str> = notes_config.iter().map(String::as_str).collect();
+        args.extend(["pull", "--rebase", remote, base_branch]);
+        run_git_silent(Some(&repo_dir), &args).map_err(
             // A failed `pull --rebase` is almost always a conflict;
             // give the same recovery guidance and Conflict exit code as
             // `spawn_rebase` rather than a bare stderr. (`run_git_silent`

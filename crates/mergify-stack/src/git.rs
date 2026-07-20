@@ -14,6 +14,34 @@ use std::process::Command;
 
 use mergify_core::CliError;
 
+use crate::local_commits::STACK_NOTES_REF;
+
+/// `-c` overrides that make git carry the stack's notes from every
+/// rewritten commit onto its replacement.
+///
+/// A note is addressed by commit SHA, so without this a rebase
+/// strands the amend reason on the pre-rebase SHA and the push that
+/// follows records a blank `Reason` in the revision history.
+/// `mergify stack setup` persists only `notes.rewriteRef` into the
+/// repo config — the mode and the rebase toggle are git's defaults
+/// there. That config is what covers the rewrites git runs outside
+/// this process (`git commit --amend`, and the `git rebase
+/// --continue` that finishes a conflicted rebase); passing all three
+/// per-invocation keeps the CLI's own rebases correct in repos whose
+/// config predates that, and pins the defaults against a global
+/// `notes.rewriteMode=ignore` or `notes.rewrite.rebase=false`.
+#[must_use]
+pub(crate) fn notes_rewrite_config() -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        format!("notes.rewriteRef={STACK_NOTES_REF}"),
+        "-c".to_string(),
+        "notes.rewriteMode=concatenate".to_string(),
+        "-c".to_string(),
+        "notes.rewrite.rebase=true".to_string(),
+    ]
+}
+
 /// Base `git` `Command` with `-C <repo_dir>` (when supplied) and a
 /// forced C locale. Use for any git invocation whose stderr or
 /// stdout the caller might parse — translated locales would
@@ -129,6 +157,7 @@ fn spawn_rebase_inner(
     capture: bool,
 ) -> Result<(), CliError> {
     let mut cmd = git_cmd(Some(repo_dir));
+    cmd.args(notes_rewrite_config());
     cmd.arg("rebase").arg("-i");
     if reapply_cherry_picks {
         // Keep commits whose patch-id already matches the base in
@@ -389,6 +418,47 @@ mod tests {
             !todo_text.contains("feat (reapplied)"),
             "without --reapply-cherry-picks the cherry-picked commit \
              must be absent from the todo:\n{todo_text}"
+        );
+    }
+
+    #[test]
+    fn rebase_carries_the_stack_note_onto_the_rewritten_commit() {
+        // The reason a user attaches with `mergify stack note` lives
+        // on the commit SHA, and `stack push` rebases before it reads
+        // it back. Without the notes-rewrite config the note stays on
+        // the pre-rebase SHA and the revision history records a blank
+        // `Reason` — this is that regression.
+        let dir = init_repo();
+        let p = dir.path();
+
+        run(p, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(p.join("feat.txt"), "feature\n").unwrap();
+        run(p, &["add", "feat.txt"]);
+        run(p, &["commit", "-q", "-m", "feat"]);
+        let notes_ref = format!("--ref={STACK_NOTES_REF}");
+        run(p, &["notes", &notes_ref, "add", "-m", "why: review fix"]);
+        let before = capture(p, &["rev-parse", "HEAD"]);
+
+        // Move the trunk so the rebase has to rewrite `feat`.
+        run(p, &["checkout", "-q", "main"]);
+        std::fs::write(p.join("trunk.txt"), "trunk\n").unwrap();
+        run(p, &["add", "trunk.txt"]);
+        run(p, &["commit", "-q", "-m", "trunk moves"]);
+        run(p, &["checkout", "-q", "feature"]);
+
+        spawn_rebase_captured(p, "main", Some("true"), false).unwrap();
+
+        let after = capture(p, &["rev-parse", "HEAD"]);
+        assert_ne!(after, before, "the rebase must have rewritten the commit");
+        assert_eq!(
+            capture(p, &["notes", &notes_ref, "show", &after]),
+            "why: review fix"
+        );
+        // Copied, not moved: the pre-rebase SHA keeps its note, which
+        // is what `load_or_seed` reads back off the old PR head.
+        assert_eq!(
+            capture(p, &["notes", &notes_ref, "show", &before]),
+            "why: review fix"
         );
     }
 
