@@ -32,6 +32,52 @@ if test ! -f "$1" ; then
   exit 1
 fi
 
+# Refuse `git commit --amend` while a rebase is stopped at a conflict.
+#
+# At a conflict the pick being replayed has not produced a commit yet,
+# so HEAD is the last commit the rebase already applied — the trunk tip
+# when the bottom commit conflicted, otherwise an earlier commit of the
+# stack. Amending rewrites that commit instead, stamping the work with
+# its message and Change-Id and mapping it to the wrong pull request.
+#
+# A `stack edit` pause is the opposite case: git records the commit it
+# expects you to amend in `rebase-merge/amend`, and amending there is
+# the documented way to continue.
+#
+# Amend detection: git exports the amended commit's author date, so
+# GIT_AUTHOR_DATE matches HEAD's and is in the past. The commit that
+# *resolves* a conflict is a new one, authored now — the same
+# distinction (and the same 2-second floor against a coincidental
+# same-second match) the prepare-commit-msg hook draws.
+git_dir=$(git rev-parse --git-dir 2>/dev/null)
+for state_dir in "$git_dir/rebase-merge" "$git_dir/rebase-apply" ; do
+    test -d "$state_dir" || continue
+    test -f "$state_dir/amend" && continue
+
+    env_epoch=$(echo "$GIT_AUTHOR_DATE" | cut -d' ' -f1 | tr -d '@')
+    test -n "$env_epoch" || continue
+    head_epoch=$(git log -1 --format=%ad --date=raw HEAD 2>/dev/null | cut -d' ' -f1)
+    test "$env_epoch" = "$head_epoch" || continue
+    test "$(($(date +%s) - env_epoch))" -ge 2 || continue
+
+    echo "Refusing to amend: this rebase is stopped at a conflict." >&2
+    echo "" >&2
+    echo "The commit being replayed does not exist yet, so HEAD is the last" >&2
+    echo "commit the rebase applied — not the one you are resolving. Amending" >&2
+    echo "it rewrites that commit and gives your work its message and" >&2
+    echo "Change-Id, which maps it to the wrong pull request." >&2
+    echo "" >&2
+    echo "Resolve the conflict instead:" >&2
+    echo "    git add <files>" >&2
+    echo "    git rebase --continue" >&2
+    echo "" >&2
+    echo "To amend a commit in the stack, let this rebase finish (or run" >&2
+    echo "git rebase --abort), then: mergify stack edit <Change-Id>" >&2
+    echo "" >&2
+    echo "Pass --no-verify to override this check." >&2
+    exit 1
+done
+
 # $RANDOM will be undefined if not using bash, so don't use set -u
 # $RANDOM is undefined in POSIX sh (dash), so include HEAD's SHA for entropy
 # to prevent collisions when two commits have the same message in the same second
