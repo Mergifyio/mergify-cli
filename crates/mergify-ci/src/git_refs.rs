@@ -239,11 +239,20 @@ fn detect_from_pull_request_event(
     }
 
     if let Some(meta) = extract_from_event(event, output)? {
-        return Ok(Some(References {
-            base: Some(meta.checking_base_sha),
-            head,
-            source: ReferencesSource::MergeQueue,
-        }));
+        if let Some(base) = checking_base_sha(&meta) {
+            return Ok(Some(References {
+                base: Some(base),
+                head,
+                source: ReferencesSource::MergeQueue,
+            }));
+        }
+        // MQ metadata is present but carries no `checking_base_sha`
+        // (e.g. a future engine renamed it). We fall through to the PR
+        // base below, but that would be the *wrong* base for a batch
+        // build — warn so it isn't diagnosed silently.
+        output.status(
+            "WARNING: MQ pull request metadata without checking_base_sha, skipping metadata extraction",
+        )?;
     }
 
     if let Some(pr) = &event.pull_request
@@ -321,10 +330,16 @@ pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<String> {
     checking_base_sha(&crate::git::read_note(&notes_ref_short, head_sha)?)
 }
 
-/// Pull `checking_base_sha` out of a note payload. Accepts the YAML
-/// scalar as either a string or (defensively) a number — a SHA is
-/// always a string in practice, but reading it tolerantly avoids
-/// silently dropping a note over a formatting quirk.
+/// Pull `checking_base_sha` out of an engine merge-queue payload —
+/// either the git note ([`real_notes_reader`]) or the YAML block in
+/// the MQ draft PR body (`queue_metadata`), which carry the same dump.
+/// Both read it through here so neither is coupled to the payload's
+/// other keys, which the engine renames independently.
+///
+/// Accepts the YAML scalar as either a string or (defensively) a
+/// number — a SHA is always a string in practice, but reading it
+/// tolerantly avoids silently dropping a payload over a formatting
+/// quirk.
 fn checking_base_sha(note: &serde_json::Value) -> Option<String> {
     match note.get("checking_base_sha")? {
         serde_json::Value::String(s) => Some(s.clone()),
@@ -544,6 +559,77 @@ mod tests {
         assert_eq!(refs.base.as_deref(), Some("mq-base"));
         assert_eq!(refs.head, "mq-head");
         assert_eq!(refs.source, ReferencesSource::MergeQueue);
+    }
+
+    #[test]
+    fn mq_body_with_post_contract_batch_still_yields_base() {
+        // The ticket's exact failure mode (MRGFY-8104): a batch body
+        // carries a non-empty `previous_failed_batches`, and a
+        // post-contract engine emits `batch_pr_number` with no
+        // `draft_pr_number`. The old rigid struct required
+        // `draft_pr_number`, so the whole document failed to parse and
+        // `checking_base_sha` was silently lost, dropping git-refs to
+        // the wrong-base `GithubEventPullRequest` fallthrough. The
+        // generic parse must keep the base and the MergeQueue source.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_event(
+            &dir,
+            &serde_json::json!({
+                "pull_request": {
+                    "title": "merge queue: batch",
+                    "body": "```yaml\nchecking_base_sha: mq-base\nprevious_failed_batches:\n  - batch_pr_number: 42\n    checked_pull_requests:\n      - 7\n```",
+                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "base": {"sha": "wrong-base"},
+                },
+            }),
+        );
+        let mut cap = Captured::human();
+        let refs = temp_env::with_vars(
+            [
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
+                ("BUILDKITE", None),
+            ],
+            || detect(&mut cap.output, &no_notes).unwrap(),
+        );
+        assert_eq!(refs.base.as_deref(), Some("mq-base"));
+        assert_eq!(refs.source, ReferencesSource::MergeQueue);
+    }
+
+    #[test]
+    fn mq_body_metadata_without_base_warns_and_falls_through() {
+        // A valid metadata block that carries no checking_base_sha
+        // (the shape a future engine key rename would produce) must not
+        // silently pick the wrong base: git-refs falls through to the
+        // PR base and warns so the operator sees why.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_event(
+            &dir,
+            &serde_json::json!({
+                "pull_request": {
+                    "title": "merge queue: batch",
+                    "body": "```yaml\npull_requests:\n  - number: 7\n```",
+                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "base": {"sha": "pr-base"},
+                },
+            }),
+        );
+        let mut cap = Captured::human();
+        let refs = temp_env::with_vars(
+            [
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
+                ("BUILDKITE", None),
+            ],
+            || detect(&mut cap.output, &no_notes).unwrap(),
+        );
+        assert_eq!(refs.base.as_deref(), Some("pr-base"));
+        assert_eq!(refs.source, ReferencesSource::GithubEventPullRequest);
+        assert!(
+            cap.stderr().contains("without checking_base_sha"),
+            "got: {:?}",
+            cap.stderr()
+        );
     }
 
     #[test]
