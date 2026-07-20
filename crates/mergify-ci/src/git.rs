@@ -28,13 +28,17 @@ use std::process::Stdio;
 #[must_use]
 pub(crate) fn read_note(notes_ref: &str, rev: &str) -> Option<serde_json::Value> {
     let content = capture(&["notes", &format!("--ref={notes_ref}"), "show", rev])?;
-    parse_note(&content)
+    parse_yaml_mapping(&content)
 }
 
-/// Parse a note body (YAML) into a JSON value, keeping every field.
-/// Restricted to mappings: a bare scalar or sequence isn't a
-/// merge-queue note and would make the JSON output meaningless.
-fn parse_note(content: &str) -> Option<serde_json::Value> {
+/// Parse an engine merge-queue YAML payload into a JSON value, keeping
+/// every field. Shared by the git-note reader ([`read_note`]) and the
+/// MQ PR-body reader (`queue_metadata::parse_yaml_block`): the engine
+/// writes the *same* payload to both, so both must accept exactly the
+/// same shapes. Restricted to mappings — a bare scalar or sequence
+/// isn't merge-queue metadata and would make the JSON output
+/// meaningless.
+pub(crate) fn parse_yaml_mapping(content: &str) -> Option<serde_json::Value> {
     let value: serde_json::Value = serde_yaml_ng::from_str(content).ok()?;
     value.is_object().then_some(value)
 }
@@ -72,7 +76,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_note_keeps_whole_payload() {
+    fn parse_yaml_mapping_keeps_whole_payload() {
         // The note body is the engine's full TrainInfo dump. Every
         // field must survive into the value — including top-level and
         // per-PR `scopes`, which a fixed struct would have dropped.
@@ -89,7 +93,7 @@ previous_failed_batches:
       - 7
 checking_base_sha: cafef00d
 ";
-        let note = parse_note(body).expect("engine payload should parse");
+        let note = parse_yaml_mapping(body).expect("engine payload should parse");
         assert_eq!(note["checking_base_sha"], "cafef00d");
         assert_eq!(note["scopes"][0], "backend");
         assert_eq!(note["pull_requests"][0]["number"], 7);
@@ -98,9 +102,9 @@ checking_base_sha: cafef00d
     }
 
     #[test]
-    fn parse_note_rejects_non_mapping() {
-        // A bare scalar or sequence isn't a merge-queue note.
-        assert!(parse_note("just a scalar\n").is_none());
-        assert!(parse_note("- a\n- b\n").is_none());
+    fn parse_yaml_mapping_rejects_non_mapping() {
+        // A bare scalar or sequence isn't a merge-queue payload.
+        assert!(parse_yaml_mapping("just a scalar\n").is_none());
+        assert!(parse_yaml_mapping("- a\n- b\n").is_none());
     }
 }
