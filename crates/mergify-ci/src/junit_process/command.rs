@@ -32,6 +32,7 @@ use crate::detector;
 use crate::junit_process::junit::{self, ParseResult, TestCase};
 use crate::junit_process::quarantine::{self, QuarantineFailed, QuarantineResult};
 use crate::junit_process::spans::{self, UploadMetadata};
+use crate::junit_process::split;
 use crate::junit_process::upload;
 
 const SEPARATOR: &str = "══════════════════════════════════════════";
@@ -59,13 +60,25 @@ pub struct JunitProcessOptions<'a> {
 /// argument resolution failures (e.g. missing token) and
 /// unrecoverable input errors (no XML, parse failure on every
 /// file).
+pub async fn run(
+    opts: JunitProcessOptions<'_>,
+    output: &mut dyn Output,
+) -> Result<ExitCode, CliError> {
+    run_with_cap(opts, output, upload::MAX_GZIPPED_UPLOAD_BYTES).await
+}
+
+/// Body of [`run`], parameterized on the per-upload gzip cap so tests
+/// can force the split path with a small cap instead of a
+/// multi-megabyte fixture. Production always passes
+/// [`upload::MAX_GZIPPED_UPLOAD_BYTES`].
 #[allow(clippy::too_many_lines)] // Straight-line orchestration: parse →
 // quarantine → build spans → upload → render. Splitting this into
 // helpers spreads the report builder's ordering across the file
 // without buying anything you can't already see by scrolling.
-pub async fn run(
+async fn run_with_cap(
     opts: JunitProcessOptions<'_>,
     output: &mut dyn Output,
+    upload_cap: usize,
 ) -> Result<ExitCode, CliError> {
     // ── Resolve required inputs up front so we fail before
     // printing any of the banner — matches Python's click defaults
@@ -160,17 +173,60 @@ pub async fn run(
     };
     let built = spans::build_traces(&parsed, &metadata);
 
+    // Cap each gzipped upload at MAX_GZIPPED_UPLOAD_BYTES. A normal
+    // report is one chunk (byte-identical to before); only an
+    // oversized payload fans out into several uploads.
+    let (chunks, oversized_cases, mut upload_error) =
+        match split::split_request(&built.request, upload_cap) {
+            Ok(outcome) => (outcome.chunks, outcome.oversized_cases, None),
+            // gzip is an in-memory write and effectively never fails,
+            // but if it does we surface it as an upload error rather
+            // than dropping the run silently.
+            Err(e) => (
+                Vec::new(),
+                Vec::new(),
+                Some(upload::UploadError {
+                    status: None,
+                    message: format!("failed to gzip OTLP payload: {e}"),
+                }),
+            ),
+        };
+
     let client = upload::default_client();
-    let upload_error = upload::upload(
-        &client,
-        api_url.as_str(),
-        &token,
-        &repository,
-        &built.request,
-    )
-    .await
-    .err();
-    maybe_write_github_output(upload_status_label(upload_error.as_ref()));
+    // Nothing reached the backend when the split produced no chunks
+    // (every case individually oversized) or gzip failed. Captured
+    // before the loop consumes `chunks`. That must not be reported as
+    // a successful upload.
+    let nothing_uploaded = chunks.is_empty();
+
+    // Post each chunk. Stop early only on a permanent rejection (bad
+    // token / no ingest access) — it would fail every remaining chunk
+    // identically. A transient failure on one chunk doesn't abandon
+    // the rest: each chunk is an idempotent self-contained trace, so
+    // delivering as many as possible is strictly better than dropping
+    // the tail. The chunk is consumed so its (multi-MiB) gzipped body
+    // moves into the request instead of being cloned per attempt.
+    for chunk in chunks {
+        if let Some(err) = upload::upload_compressed(
+            &client,
+            api_url.as_str(),
+            &token,
+            &repository,
+            chunk.compressed,
+        )
+        .await
+        .err()
+        {
+            let permanent = err.is_rejection();
+            upload_error = Some(err);
+            if permanent {
+                break;
+            }
+        }
+    }
+
+    let upload_failed = upload_error.is_some() || nothing_uploaded;
+    maybe_write_github_output(upload_status_label(upload_error.as_ref(), nothing_uploaded));
 
     // ── Report sections — order matches Python verbatim.
     write_run_id(&mut report, &built.run_id);
@@ -182,12 +238,20 @@ pub async fn run(
         files.len(),
         total_cases,
         nb_failures,
-        upload_error.is_some(),
+        upload_failed,
     );
 
     if let Some(err) = &upload_error {
         write_upload_error_block(&mut report, &err.to_string(), err.is_rejection());
         if let Some(annotation) = gha_upload_annotation(err) {
+            report.push_str(&annotation);
+            report.push('\n');
+        }
+    }
+
+    if !oversized_cases.is_empty() {
+        write_oversized_cases(&mut report, &oversized_cases);
+        if let Some(annotation) = gha_oversized_annotation(&oversized_cases) {
             report.push_str(&annotation);
             report.push('\n');
         }
@@ -455,16 +519,24 @@ fn write_upload_summary(
 
 /// `$GITHUB_OUTPUT` key reporting the upload outcome:
 /// `success`, `rejected` (4xx except 408/429 — permanent, e.g.
-/// bad token), or `failed` (transient: 5xx, 408, 429, network).
-/// Lets workflows detect dead ingest programmatically without
-/// parsing the human report (issue #1571).
+/// bad token), or `failed` (transient: 5xx, 408, 429, network, or
+/// nothing reached ingest because every case was individually
+/// oversized). Lets workflows detect dead ingest programmatically
+/// without parsing the human report (issue #1571).
 const UPLOAD_STATUS_OUTPUT_NAME: &str = "test_results_upload";
 
-fn upload_status_label(error: Option<&upload::UploadError>) -> &'static str {
+fn upload_status_label(
+    error: Option<&upload::UploadError>,
+    nothing_uploaded: bool,
+) -> &'static str {
     match error {
-        None => "success",
         Some(e) if e.is_rejection() => "rejected",
         Some(_) => "failed",
+        // No HTTP error, but the split produced no chunks (every case
+        // individually oversized) or gzip failed: nothing reached the
+        // backend, so it is not a success.
+        None if nothing_uploaded => "failed",
+        None => "success",
     }
 }
 
@@ -521,6 +593,23 @@ fn gha_upload_annotation(error: &upload::UploadError) -> Option<String> {
     })
 }
 
+/// GitHub Actions `::warning::` annotation for test cases dropped
+/// because they were individually too large to upload, or `None`
+/// outside GitHub Actions. Makes the data loss visible in the run
+/// summary / checks UI — otherwise it only appears in the human
+/// report prose. Never an error: the CI outcome is unaffected.
+fn gha_oversized_annotation(names: &[String]) -> Option<String> {
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return None;
+    }
+    Some(format!(
+        "::warning title=Mergify Test Insights::{n} test result(s) exceeded the upload size \
+         limit and were skipped: {names}. The rest of the run was uploaded.",
+        n = names.len(),
+        names = gha_escape_data(&names.join(", ")),
+    ))
+}
+
 /// Escape the data section of a GHA workflow command. A multi-line
 /// value (e.g. an HTTP response body inside the error message)
 /// would otherwise terminate the command at the first newline.
@@ -542,6 +631,23 @@ fn write_upload_error_block(out: &mut String, error: &str, rejected: bool) {
     out.push_str("      ┌ Details\n");
     for line in error.lines() {
         out.push_str(&format!("      │  {line}\n"));
+    }
+    out.push_str("      └─\n");
+}
+
+/// Report test cases dropped from the upload because a single case
+/// gzips past [`upload::MAX_GZIPPED_UPLOAD_BYTES`] on its own — there
+/// is no upload it can fit into. The CI verdict is unaffected (it's
+/// computed from the parsed cases, not the upload), so this is a
+/// best-effort data-loss notice, not a failure.
+fn write_oversized_cases(out: &mut String, names: &[String]) {
+    out.push_str("\n  ⚠️ Some test results were too large to upload\n");
+    out.push_str("    A single test's output exceeded the upload size limit and was skipped.\n");
+    out.push_str("    Quarantine status and CI outcome are unaffected.\n");
+    out.push('\n');
+    out.push_str("      ┌ Skipped\n");
+    for name in names {
+        out.push_str(&format!("      │  {name}\n"));
     }
     out.push_str("      └─\n");
 }
@@ -871,6 +977,57 @@ mod tests {
         assert!(s.contains("│  line2"), "{s}");
     }
 
+    #[test]
+    fn write_oversized_cases_lists_skipped_tests() {
+        let mut s = String::new();
+        write_oversized_cases(&mut s, &["a.big".to_string(), "b.huge".to_string()]);
+        assert!(s.contains("too large to upload"), "{s}");
+        assert!(s.contains("a.big"), "{s}");
+        assert!(s.contains("b.huge"), "{s}");
+        // The verdict must stay unaffected — this is a data-loss
+        // notice, not a failure.
+        assert!(s.contains("CI outcome are unaffected"), "{s}");
+    }
+
+    #[test]
+    fn upload_status_label_maps_every_outcome() {
+        let err = |status: Option<u16>| upload::UploadError {
+            status,
+            message: String::new(),
+        };
+        // Clean success only when something uploaded and no error.
+        assert_eq!(upload_status_label(None, false), "success");
+        // Nothing reached ingest (every case oversized / gzip failed)
+        // must not read as success — issue #1571 keys on this.
+        assert_eq!(upload_status_label(None, true), "failed");
+        // A permanent rejection stays "rejected"; anything else that
+        // errored is "failed", regardless of the nothing_uploaded flag.
+        assert_eq!(
+            upload_status_label(Some(&err(Some(403))), false),
+            "rejected"
+        );
+        assert_eq!(upload_status_label(Some(&err(Some(503))), false), "failed");
+        assert_eq!(upload_status_label(Some(&err(None)), false), "failed");
+    }
+
+    #[test]
+    fn gha_oversized_annotation_lists_names_only_on_gha() {
+        // Outside GitHub Actions: no annotation.
+        let none = temp_env::with_var("GITHUB_ACTIONS", None::<&str>, || {
+            gha_oversized_annotation(&["a.big".to_string()])
+        });
+        assert!(none.is_none());
+        // On GitHub Actions: a warning naming the dropped tests, never
+        // an error (CI outcome is unaffected).
+        let ann = temp_env::with_var("GITHUB_ACTIONS", Some("true"), || {
+            gha_oversized_annotation(&["a.big".to_string(), "b.huge".to_string()])
+        })
+        .unwrap();
+        assert!(ann.starts_with("::warning"), "{ann}");
+        assert!(ann.contains("a.big, b.huge"), "{ann}");
+        assert!(ann.contains("exceeded the upload size limit"), "{ann}");
+    }
+
     // ── End-to-end orchestrator tests. Drive the full `run()`
     // entry point with on-disk fixtures and a wiremock-backed API
     // so the stdout banner + exit code are pinned for each verdict
@@ -980,6 +1137,219 @@ mod tests {
             let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
             assert!(stdout.contains("✅ OK — all tests passed"), "{stdout}");
             assert!(stdout.contains("Exit code: 0"), "{stdout}");
+        }
+
+        // A large report must fan out into several gzipped uploads,
+        // each under the cap, without changing the verdict. Driven
+        // through `run_with_cap` with a tiny cap and asserted at the
+        // wire with a per-request count.
+        #[tokio::test]
+        async fn large_report_fans_out_into_several_uploads() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+
+            // 30 failing cases, each carrying ~2 KiB of incompressible
+            // text in its <failure> body — high-entropy so gzip can't
+            // collapse it, which is what forces the split on the small
+            // cap. Failures (not passing cases) so the verdict is a
+            // deterministic GenericError we can assert on.
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(30, 2048));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            let cap_bytes = 4 * 1024;
+            let code = with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run_with_cap(opts, &mut cap.output, cap_bytes)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+            // Verdict is unchanged by splitting: 30 unquarantined
+            // failures still fail the run.
+            assert_eq!(code, ExitCode::GenericError);
+
+            // More than one POST reached the traces endpoint, and each
+            // body is a gzipped payload under the cap.
+            let uploads: Vec<_> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|r| r.url.path() == "/v1/repos/owner/repo/ci/traces")
+                .collect();
+            assert!(
+                uploads.len() > 1,
+                "expected a fan-out, got {} upload(s)",
+                uploads.len()
+            );
+            for req in &uploads {
+                assert!(
+                    req.body.len() <= cap_bytes,
+                    "an upload body ({} bytes) exceeded the cap",
+                    req.body.len()
+                );
+            }
+        }
+
+        // A JUnit report of `n` failing cases, each with a
+        // `body_len`-byte incompressible <failure> body — the shape
+        // that forces the split path under a small cap.
+        fn incompressible_failures_xml(n: usize, body_len: usize) -> String {
+            use crate::testing::incompressible;
+            let mut xml = String::from("<?xml version=\"1.0\"?>\n<testsuites>\n");
+            xml.push_str(&format!(
+                "  <testsuite name=\"pytest\" tests=\"{n}\" failures=\"{n}\">\n"
+            ));
+            for i in 0..n {
+                xml.push_str(&format!(
+                    "    <testcase classname=\"tests\" name=\"test_{i}\">\n\
+                     <failure message=\"boom\">{body}</failure>\n\
+                     </testcase>\n",
+                    body = incompressible(i as u64, body_len),
+                ));
+            }
+            xml.push_str("  </testsuite>\n</testsuites>");
+            xml
+        }
+
+        async fn traces_requests(server: &MockServer) -> usize {
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|r| r.url.path() == "/v1/repos/owner/repo/ci/traces")
+                .count()
+        }
+
+        // Every case individually gzips past the (absurdly small) cap:
+        // the split drops them all, nothing reaches the backend, and
+        // that must be reported as NOT uploaded / status=failed — never
+        // as a success. The CI verdict is still driven by the failures.
+        #[tokio::test]
+        async fn all_cases_oversized_reports_nothing_uploaded() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(3, 512));
+            let github_output = tmp.path().join("github_output");
+
+            let api_url = server.uri();
+            let output_path = github_output.to_string_lossy().into_owned();
+            let mut cap = captured();
+            // 64-byte cap: smaller than any single case's gzipped span.
+            let code = with_ci_env_async(
+                &[
+                    ("GITHUB_ACTIONS", Some("true")),
+                    ("GITHUB_OUTPUT", Some(&output_path)),
+                ],
+                async {
+                    let opts = JunitProcessOptions {
+                        api_url: Some(&api_url),
+                        token: Some("secret"),
+                        repository: Some("owner/repo"),
+                        test_framework: None,
+                        test_language: None,
+                        tests_target_branch: Some("main"),
+                        test_exit_code: None,
+                        files: &[file],
+                    };
+                    run_with_cap(opts, &mut cap.output, 64).await.unwrap()
+                },
+            )
+            .await;
+
+            assert_eq!(code, ExitCode::GenericError);
+            // Nothing was POSTed to the traces endpoint.
+            assert_eq!(traces_requests(&server).await, 0);
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            assert!(stdout.contains("not uploaded"), "{stdout}");
+            assert!(stdout.contains("too large to upload"), "{stdout}");
+            let outputs = std::fs::read_to_string(&github_output).unwrap();
+            assert!(outputs.contains("test_results_upload=failed"), "{outputs}");
+        }
+
+        // A transient failure on one chunk must not abandon the rest:
+        // with the traces endpoint always 503, every chunk is still
+        // attempted (continue-on-transient), not just the first.
+        #[tokio::test]
+        async fn transient_error_still_attempts_all_chunks() {
+            let server = MockServer::start().await;
+            mount_mocks_with_upload_status(&server, 503).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(20, 2048));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            let code = with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run_with_cap(opts, &mut cap.output, 4 * 1024).await.unwrap()
+            })
+            .await;
+
+            // Verdict unaffected by the upload trouble.
+            assert_eq!(code, ExitCode::GenericError);
+            // All chunks attempted despite the first 503, not just one.
+            assert!(
+                traces_requests(&server).await > 1,
+                "a transient error must not abandon the remaining chunks"
+            );
+        }
+
+        // A permanent rejection (bad token) fails every chunk
+        // identically, so the loop must stop after the first rather
+        // than re-POST the whole fan-out.
+        #[tokio::test]
+        async fn rejection_stops_after_first_chunk() {
+            let server = MockServer::start().await;
+            mount_mocks_with_upload_status(&server, 403).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(20, 2048));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            let code = with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run_with_cap(opts, &mut cap.output, 4 * 1024).await.unwrap()
+            })
+            .await;
+
+            assert_eq!(code, ExitCode::GenericError);
+            assert_eq!(
+                traces_requests(&server).await,
+                1,
+                "a permanent rejection must stop after the first chunk"
+            );
         }
 
         #[tokio::test]
