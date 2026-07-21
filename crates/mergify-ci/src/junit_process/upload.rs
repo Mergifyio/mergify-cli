@@ -61,13 +61,25 @@ impl std::error::Error for UploadError {}
 const ENDPOINT_PATH: &str = "/v1/repos/";
 const ENDPOINT_SUFFIX: &str = "/ci/traces";
 
-/// Hard cap on the size of a single gzipped OTLP upload, in bytes
-/// (10 MiB). The ingest endpoint refuses payloads larger than this,
-/// so [`crate::junit_process::split`] partitions an oversized trace
-/// into several uploads that each gzip under the cap. The cap is on
-/// the *compressed* body — the exact bytes we put on the wire — not
-/// the raw XML or the uncompressed protobuf.
-pub const MAX_GZIPPED_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+/// Soft cap on the size of a single gzipped OTLP upload, in bytes
+/// (20 MiB). This is the client-side split *target*, not the server's
+/// limit: the ingest endpoint hard-caps payloads at 25 MiB
+/// (MRGFY-8124), so sizing each chunk under 20 MiB leaves 5 MiB of
+/// headroom below the rejection threshold. [`crate::junit_process::split`]
+/// partitions an oversized trace into several uploads that each gzip
+/// under this cap. The cap is on the *compressed* body — the exact
+/// bytes we put on the wire — not the raw XML or the uncompressed
+/// protobuf.
+pub const MAX_GZIPPED_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+
+// The soft cap is only safe if it stays under the ingest server's hard
+// cap on the *gzipped* body (MRGFY-8124: 25 MiB, enforced by the
+// content-length middleware — the same compressed bytes `split_request`
+// sizes chunks against). That limit lives in another service, so mirror
+// it here and enforce the documented 5 MiB headroom at compile time: a
+// future bump that crossed the hard cap breaks the build instead of
+// silently 413-dropping every over-cap chunk in production.
+const _: () = assert!(MAX_GZIPPED_UPLOAD_BYTES + 5 * 1024 * 1024 <= 25 * 1024 * 1024);
 
 fn endpoint_url(api_url: &str, repository: &str) -> String {
     // The shape `<api_url>/v1/repos/<owner>/<repo>/ci/traces`
