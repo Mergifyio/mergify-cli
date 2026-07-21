@@ -514,6 +514,156 @@ mod tests {
         assert!(content.lines().any(|l| l == "refs/notes/mergify/*"));
     }
 
+    /// Run `git <args>` in `dir` through the installed hooks,
+    /// returning `(success, stderr)`.
+    fn try_git(dir: &Path, args: &[&str]) -> (bool, String) {
+        let out = crate::test_env::isolated_git()
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    fn git_stdout(dir: &Path, args: &[&str]) -> String {
+        let out = crate::test_env::isolated_git()
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A repo stopped mid-rebase on a conflict, with the hooks
+    /// installed. The trunk commit is back-dated: the amend guard
+    /// reads a commit whose author date is at least two seconds old
+    /// as an amend target, which is what a real trunk tip is.
+    fn repo_stopped_at_conflict() -> TempDir {
+        let dir = init_repo();
+        let p = dir.path();
+        install(&Options {
+            repo_dir: Some(p),
+            force: false,
+        })
+        .unwrap();
+
+        std::fs::write(p.join("f"), "base\n").unwrap();
+        assert!(try_git(p, &["add", "f"]).0);
+        assert!(try_git(p, &["commit", "-q", "-m", "root"]).0);
+        let trunk = git_stdout(p, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        assert!(try_git(p, &["checkout", "-q", "-b", "feature"]).0);
+        std::fs::write(p.join("f"), "feature\n").unwrap();
+        assert!(try_git(p, &["commit", "-q", "-a", "-m", "feat"]).0);
+        assert!(try_git(p, &["checkout", "-q", &trunk]).0);
+        std::fs::write(p.join("f"), "trunk\n").unwrap();
+        assert!(
+            try_git(
+                p,
+                &[
+                    "commit",
+                    "-q",
+                    "-a",
+                    "-m",
+                    "trunk moves",
+                    "--date=@1000000000 +0000",
+                ],
+            )
+            .0
+        );
+        assert!(try_git(p, &["checkout", "-q", "feature"]).0);
+
+        // Conflicts on `f`, leaving HEAD at the trunk tip.
+        assert!(!try_git(p, &["rebase", &trunk]).0, "rebase must conflict");
+        std::fs::write(p.join("f"), "resolved\n").unwrap();
+        assert!(try_git(p, &["add", "f"]).0);
+        dir
+    }
+
+    #[test]
+    fn amend_at_a_rebase_conflict_is_refused() {
+        // The trap the guard exists for: at a conflict HEAD is the
+        // last commit the rebase applied — here the trunk tip — so an
+        // amend rewrites *that* commit and re-maps the work to
+        // another pull request's Change-Id.
+        let dir = repo_stopped_at_conflict();
+        let p = dir.path();
+        let head_before = git_stdout(p, &["rev-parse", "HEAD"]);
+
+        let (ok, stderr) = try_git(p, &["commit", "--amend", "--no-edit"]);
+        assert!(!ok, "amend must be refused at a conflict pause");
+        assert!(stderr.contains("Refusing to amend"), "got: {stderr}");
+        assert_eq!(
+            git_stdout(p, &["rev-parse", "HEAD"]),
+            head_before,
+            "the already-applied commit must be left alone"
+        );
+
+        // The documented override still gets through.
+        assert!(
+            try_git(p, &["commit", "--amend", "--no-edit", "--no-verify"]).0,
+            "--no-verify overrides the guard"
+        );
+    }
+
+    #[test]
+    fn resolving_a_conflict_is_not_mistaken_for_an_amend() {
+        // `git commit` at the same pause creates the resolved commit
+        // rather than rewriting HEAD; the rebase then continues. The
+        // guard must stay out of the way of both.
+        let dir = repo_stopped_at_conflict();
+        let p = dir.path();
+
+        assert!(
+            try_git(p, &["commit", "-q", "-m", "resolved"]).0,
+            "resolving with a plain commit must be allowed"
+        );
+        assert!(try_git(p, &["rebase", "--continue"]).0);
+        assert!(!p.join(".git/rebase-merge").exists());
+    }
+
+    #[test]
+    fn amend_at_a_stack_edit_pause_is_allowed() {
+        // `stack edit` pauses *on* the target commit with a clean
+        // tree and records it in `rebase-merge/amend` — there the
+        // amend is the documented way to continue.
+        let dir = init_repo();
+        let p = dir.path();
+        install(&Options {
+            repo_dir: Some(p),
+            force: false,
+        })
+        .unwrap();
+        for name in ["one", "two", "three"] {
+            std::fs::write(p.join(name), format!("{name}\n")).unwrap();
+            assert!(try_git(p, &["add", name]).0);
+            assert!(try_git(p, &["commit", "-q", "-m", name, "--date=@1000000000 +0000"],).0);
+        }
+
+        let (ok, stderr) = try_git(
+            p,
+            &[
+                "-c",
+                "sequence.editor=sed -i.bak 1s/^pick/edit/",
+                "rebase",
+                "-i",
+                "HEAD~2",
+            ],
+        );
+        assert!(ok, "rebase must pause, not fail: {stderr}");
+        assert!(p.join(".git/rebase-merge/amend").exists());
+
+        std::fs::write(p.join("two"), "amended\n").unwrap();
+        assert!(try_git(p, &["add", "two"]).0);
+        let (ok, stderr) = try_git(p, &["commit", "--amend", "--no-edit"]);
+        assert!(ok, "amend at an edit pause must be allowed: {stderr}");
+        assert!(try_git(p, &["rebase", "--continue"]).0);
+    }
+
     #[test]
     fn install_adds_notes_rewrite_ref_once() {
         let dir = init_repo();
