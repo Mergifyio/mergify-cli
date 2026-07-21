@@ -24,6 +24,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::git::run_git_capture;
+use crate::local_commits::STACK_NOTES_REF;
 
 use mergify_core::CliError;
 
@@ -87,14 +88,15 @@ pub struct InstallLog {
     pub actions: Vec<HookAction>,
 }
 
-/// Outcome of an `install` run: the per-hook action log plus
-/// whether the local `notes.displayRef` config was added this run
-/// (so the caller can echo Python's `Added notes.displayRef = …`
-/// confirmation).
+/// Outcome of an `install` run: the per-hook action log plus, for
+/// each of the local `notes.displayRef` and `notes.rewriteRef`
+/// configs, whether it was added this run (so the caller can echo
+/// Python's `Added <key> = …` confirmation only for what changed).
 #[derive(Debug, Clone)]
 pub struct InstallOutcome {
     pub logs: Vec<InstallLog>,
     pub notes_display_ref_added: bool,
+    pub notes_rewrite_ref_added: bool,
 }
 
 pub struct Options<'a> {
@@ -153,9 +155,11 @@ pub fn install(opts: &Options<'_>) -> Result<InstallOutcome, CliError> {
     }
 
     let notes_display_ref_added = ensure_notes_display_ref(opts.repo_dir)?;
+    let notes_rewrite_ref_added = ensure_notes_rewrite_ref(opts.repo_dir)?;
     Ok(InstallOutcome {
         logs,
         notes_display_ref_added,
+        notes_rewrite_ref_added,
     })
 }
 
@@ -220,6 +224,40 @@ fn ensure_notes_display_ref(repo_dir: Option<&Path>) -> Result<bool, CliError> {
     run_git_capture(
         repo_dir,
         &["config", "--local", "--add", "notes.displayRef", desired],
+    )?;
+    Ok(true)
+}
+
+/// Ensure a rewritten commit keeps its stack note by adding the
+/// local `notes.rewriteRef = refs/notes/mergify/stack` config.
+/// Returns `true` when the config was added this run, `false` when
+/// it was already present.
+///
+/// A note is addressed by commit SHA, so an amend or a rebase would
+/// otherwise strand the reason on the pre-rewrite SHA and the push
+/// that follows would record a blank `Reason`. This is the setting
+/// that covers the rewrites git runs on its own — `git commit
+/// --amend`, and the `git rebase --continue` that finishes a
+/// conflicted rebase — which no flag on the CLI's own invocations
+/// can reach.
+fn ensure_notes_rewrite_ref(repo_dir: Option<&Path>) -> Result<bool, CliError> {
+    let current = run_git_capture(
+        repo_dir,
+        &["config", "--local", "--get-all", "notes.rewriteRef"],
+    )
+    .unwrap_or_default();
+    if current.lines().any(|l| l == STACK_NOTES_REF) {
+        return Ok(false);
+    }
+    run_git_capture(
+        repo_dir,
+        &[
+            "config",
+            "--local",
+            "--add",
+            "notes.rewriteRef",
+            STACK_NOTES_REF,
+        ],
     )?;
     Ok(true)
 }
@@ -474,5 +512,33 @@ mod tests {
             .unwrap();
         let content = String::from_utf8(out.stdout).unwrap();
         assert!(content.lines().any(|l| l == "refs/notes/mergify/*"));
+    }
+
+    #[test]
+    fn install_adds_notes_rewrite_ref_once() {
+        let dir = init_repo();
+        let opts = Options {
+            repo_dir: Some(dir.path()),
+            force: false,
+        };
+        assert!(install(&opts).unwrap().notes_rewrite_ref_added);
+        // Second run finds it already there: no duplicate value, and
+        // the outcome reports nothing added so the CLI stays quiet.
+        assert!(!install(&opts).unwrap().notes_rewrite_ref_added);
+
+        let out = StdCommand::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["config", "--local", "--get-all", "notes.rewriteRef"])
+            .output()
+            .unwrap();
+        let content = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(
+            content
+                .lines()
+                .filter(|l| *l == "refs/notes/mergify/stack")
+                .count(),
+            1
+        );
     }
 }

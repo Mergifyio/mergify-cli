@@ -1335,6 +1335,9 @@ fn run_stack_setup(force: bool) -> Result<(), mergify_core::CliError> {
     if outcome.notes_display_ref_added {
         println!("Added notes.displayRef = refs/notes/mergify/*");
     }
+    if outcome.notes_rewrite_ref_added {
+        println!("Added notes.rewriteRef = refs/notes/mergify/stack");
+    }
     if any_legacy_needs_force {
         println!("Some hooks are legacy. Run 'mergify stack hooks --setup --force' to migrate.");
     }
