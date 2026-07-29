@@ -203,7 +203,7 @@ fn detect_scopes(
                 return Ok((all.clone(), all, BTreeMap::new()));
             };
 
-            let changed = changed_files::git_changed_files(base, &refs.head)?;
+            let changed = changed_files::git_changed_files(None, base, &refs.head)?;
             output.status("Changed files detected:")?;
             for f in &changed {
                 output.status(&format!("- {f}"))?;
