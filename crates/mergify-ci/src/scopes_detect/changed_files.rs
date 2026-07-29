@@ -9,6 +9,7 @@
 //! stops growing (meaning we've reached the root and there's
 //! genuinely no common ancestor).
 
+use std::path::Path;
 use std::process::Command;
 
 use mergify_core::CliError;
@@ -55,8 +56,25 @@ fn fetch_arg(ref_: &str) -> Option<String> {
     }
 }
 
-fn run_git(args: &[&str]) -> Result<String, CliError> {
-    let out = Command::new("git")
+/// Base `git` command, rooted at `repo_dir` via `-C` when one is
+/// given. Production always passes `None` (the process cwd); the
+/// parameter is what lets the tests below drive a fixture
+/// repository without `std::env::set_current_dir`, which races
+/// with parallel cargo test workers. Same shape as
+/// `mergify_stack::git::git_cmd`, C locale included — `run_git`
+/// quotes git's stderr into its error, and a translated message
+/// would leave a French sentence inside an English CLI error.
+fn git_cmd(repo_dir: Option<&Path>) -> Command {
+    let mut cmd = Command::new("git");
+    if let Some(dir) = repo_dir {
+        cmd.arg("-C").arg(dir);
+    }
+    cmd.env("LC_ALL", "C").env("LANG", "C").env("LANGUAGE", "C");
+    cmd
+}
+
+fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
+    let out = git_cmd(repo_dir)
         .args(args)
         .output()
         .map_err(|e| CliError::Generic(format!("failed to spawn `git {args:?}`: {e}")))?;
@@ -72,20 +90,20 @@ fn run_git(args: &[&str]) -> Result<String, CliError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn has_merge_base(base: &str, head: &str) -> bool {
-    Command::new("git")
+fn has_merge_base(repo_dir: Option<&Path>, base: &str, head: &str) -> bool {
+    git_cmd(repo_dir)
         .args(["merge-base", "--", base, head])
         .output()
         .is_ok_and(|o| o.status.success())
 }
 
-fn commits_count() -> Result<u64, CliError> {
-    let out = run_git(&["rev-list", "--count", "--all"])?;
+fn commits_count(repo_dir: Option<&Path>) -> Result<u64, CliError> {
+    let out = run_git(repo_dir, &["rev-list", "--count", "--all"])?;
     out.parse::<u64>()
         .map_err(|e| CliError::Generic(format!("could not parse commit count {out:?}: {e}")))
 }
 
-fn fetch(depth_flag: &str, fetch_args: &[String]) -> Result<(), CliError> {
+fn fetch(repo_dir: Option<&Path>, depth_flag: &str, fetch_args: &[String]) -> Result<(), CliError> {
     let mut args: Vec<&str> = vec!["fetch", "--no-tags", depth_flag, "origin"];
     if !fetch_args.is_empty() {
         args.push("--");
@@ -93,7 +111,7 @@ fn fetch(depth_flag: &str, fetch_args: &[String]) -> Result<(), CliError> {
             args.push(fa);
         }
     }
-    run_git(&args).map(drop)
+    run_git(repo_dir, &args).map(drop)
 }
 
 /// Deepen the local clone until `base` and `head` share an
@@ -101,8 +119,12 @@ fn fetch(depth_flag: &str, fetch_args: &[String]) -> Result<(), CliError> {
 /// pair of local ref names (`refs/mergify-cli/fetched/<ref>` for
 /// remote names; `HEAD~N` / `HEAD^N` / SHA passed through
 /// untouched) that the subsequent `git diff` should target.
-pub fn ensure_history(base: &str, head: &str) -> Result<(String, String), CliError> {
-    if has_merge_base(base, head) {
+pub fn ensure_history(
+    repo_dir: Option<&Path>,
+    base: &str,
+    head: &str,
+) -> Result<(String, String), CliError> {
+    if has_merge_base(repo_dir, base, head) {
         return Ok((base.to_string(), head.to_string()));
     }
 
@@ -114,17 +136,17 @@ pub fn ensure_history(base: &str, head: &str) -> Result<(String, String), CliErr
     let local_head = local_ref(head);
     let mut depth = COMMITS_BATCH_SIZE;
 
-    fetch(&format!("--depth={depth}"), &fetch_args)?;
+    fetch(repo_dir, &format!("--depth={depth}"), &fetch_args)?;
 
-    let mut last_count = commits_count()?;
-    while !has_merge_base(&local_base, &local_head) {
+    let mut last_count = commits_count(repo_dir)?;
+    while !has_merge_base(repo_dir, &local_base, &local_head) {
         depth = depth.saturating_mul(2);
-        fetch(&format!("--deepen={depth}"), &fetch_args)?;
-        let count = commits_count()?;
+        fetch(repo_dir, &format!("--deepen={depth}"), &fetch_args)?;
+        let count = commits_count(repo_dir)?;
         if count == last_count {
             // No new commits this round — we've reached the root
             // and the refs genuinely have no common ancestor.
-            if !has_merge_base(&local_base, &local_head) {
+            if !has_merge_base(repo_dir, &local_base, &local_head) {
                 return Err(CliError::Generic(format!(
                     "cannot find a common ancestor between {base} and {head}",
                 )));
@@ -141,13 +163,52 @@ pub fn ensure_history(base: &str, head: &str) -> Result<(String, String), CliErr
 /// `base...head` (three-dot) diff to compare `head` against
 /// `merge-base(base, head)`, which is what CI scope detection
 /// wants: "files this branch touched on top of trunk."
-pub fn git_changed_files(base: &str, head: &str) -> Result<Vec<String>, CliError> {
-    let (local_base, local_head) = ensure_history(base, head)?;
+///
+/// A rename yields **both** of its paths, so a scope the file moved
+/// out of still counts as touched.
+pub fn git_changed_files(
+    repo_dir: Option<&Path>,
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>, CliError> {
+    let (local_base, local_head) = ensure_history(repo_dir, base, head)?;
     let range = format!("{local_base}...{local_head}");
-    // `--diff-filter=ACMRTD` matches Python: Added, Copied,
-    // Modified, Renamed, Type-changed, Deleted. Excludes
-    // Unmerged (U), Unknown (X), Broken (B).
-    let out = run_git(&["diff", "--name-only", "--diff-filter=ACMRTD", &range, "--"])?;
+    // `--no-renames` is what gives a rename both of its paths: git
+    // emits `D <source>` + `A <destination>` rather than pairing
+    // them into one `R` entry, whose `--name-only` line carries the
+    // destination alone. The engine treats a rename the same way,
+    // added-at-destination and removed-at-source (MRGFY-8248); the
+    // two must agree or CLI-uploaded and engine-derived scopes
+    // disagree for the same pull request.
+    //
+    // `--diff-filter=ACMRTD` matches Python: Added, Modified,
+    // Type-changed, Deleted, plus the Renamed and Copied letters
+    // that `--no-renames` has just made unreachable. They stay so
+    // that removing `--no-renames` degrades to the old
+    // destination-only behavior rather than to reporting nothing.
+    // Excludes Unmerged (U), Unknown (X), Broken (B).
+    //
+    // `diff.relative` is forced off: set in a repo's config, it
+    // reports paths relative to the process cwd, so running
+    // `mergify ci scopes` from a subdirectory would hand the
+    // globs `r.md` for `docs/r.md` and drop every path outside
+    // that subtree. Scope globs are anchored to the repo root, so
+    // nothing would match and every scope-gated job would be
+    // skipped. Overridden through `-c` rather than
+    // `--no-relative`, which only exists since git 2.28.
+    let out = run_git(
+        repo_dir,
+        &[
+            "-c",
+            "diff.relative=false",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=ACMRTD",
+            &range,
+            "--",
+        ],
+    )?;
     Ok(out
         .lines()
         .filter(|line| !line.is_empty())
@@ -158,6 +219,112 @@ pub fn git_changed_files(base: &str, head: &str) -> Result<Vec<String>, CliError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run `git` in `dir` with the developer's global/system
+    /// config out of the way, so a personal `diff.renames` or
+    /// `core.quotePath` setting can't change what these tests see.
+    ///
+    /// `GIT_DIR`/`GIT_WORK_TREE` are dropped too: they override
+    /// `-C`, and this helper is the one that runs `add`/`commit`.
+    /// Under `git bisect run cargo test` (or a hook, or `git
+    /// rebase -x`) those are set, and the fixture's `git add -A`
+    /// would otherwise stage into the developer's real repository.
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    fn write(dir: &Path, rel: &str, content: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("path has a parent")).expect("mkdir");
+        std::fs::write(path, content).expect("write");
+    }
+
+    /// A repo on `main` holding `critical/` and `docs/readme.md`,
+    /// checked out on `feature` so the caller can commit its change
+    /// there. `ignored/` is made in the working tree afterwards and
+    /// stays untracked — git has no empty directories, and the
+    /// `git mv` case needs its destination to exist.
+    ///
+    /// `diff.renames` is pinned on: it is git's default, and the
+    /// rename tests below are only meaningful when git actually
+    /// tries to pair a delete with an add.
+    fn fixture() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@e.com"],
+            &["config", "user.name", "T"],
+            &["config", "diff.renames", "true"],
+        ] {
+            git(dir, args);
+        }
+        write(dir, "critical/guard.txt", "guard\n");
+        write(dir, "docs/readme.md", "docs\n");
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "base"]);
+        git(dir, &["checkout", "-q", "-b", "feature"]);
+        std::fs::create_dir(dir.join("ignored")).expect("mkdir ignored");
+        tmp
+    }
+
+    /// Sorted, because `git_changed_files` promises a set of paths
+    /// and not an order — git's own ordering is steered by
+    /// `diff.orderFile`, which the production call inherits from
+    /// the developer's global config.
+    fn changed(dir: &Path) -> Vec<String> {
+        let mut paths = git_changed_files(Some(dir), "main", "HEAD").expect("git diff");
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn rename_yields_source_and_destination() {
+        // MRGFY-8286: with rename detection on, `--name-only`
+        // collapsed a `git mv` to the destination alone, so the
+        // scope the file moved *out of* was never reported and a
+        // scope-conditioned CI job for it got skipped — even
+        // though the resulting `critical/` tree is identical to
+        // the one a plain deletion produces.
+        let tmp = fixture();
+        let dir = tmp.path();
+        git(dir, &["mv", "critical/guard.txt", "ignored/guard.txt"]);
+        git(dir, &["commit", "-q", "-m", "move the guard out"]);
+
+        assert_eq!(changed(dir), ["critical/guard.txt", "ignored/guard.txt"]);
+    }
+
+    #[test]
+    fn add_modify_and_delete_are_unaffected() {
+        // Every ordinary status still reaches the caller. This
+        // does not pin `--no-renames` — the deleted and added
+        // files share no content, so git would never pair them
+        // even with rename detection on; `rename_yields_source_
+        // and_destination` is the test that holds the flag down.
+        let tmp = fixture();
+        let dir = tmp.path();
+        write(dir, "ignored/new.txt", "new\n");
+        write(dir, "docs/readme.md", "docs changed\n");
+        std::fs::remove_file(dir.join("critical/guard.txt")).expect("rm");
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "add, modify, delete"]);
+
+        assert_eq!(
+            changed(dir),
+            ["critical/guard.txt", "docs/readme.md", "ignored/new.txt",],
+        );
+    }
 
     #[test]
     fn is_sha_matches_only_full_40char_lowercase_hex() {
