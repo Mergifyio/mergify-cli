@@ -87,7 +87,10 @@ fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
             stderr.trim(),
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    // Untrimmed: `git_changed_files` reads NUL-delimited paths,
+    // and a leading or trailing space is a legal filename
+    // character. Callers that parse a scalar trim it themselves.
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn has_merge_base(repo_dir: Option<&Path>, base: &str, head: &str) -> bool {
@@ -99,8 +102,10 @@ fn has_merge_base(repo_dir: Option<&Path>, base: &str, head: &str) -> bool {
 
 fn commits_count(repo_dir: Option<&Path>) -> Result<u64, CliError> {
     let out = run_git(repo_dir, &["rev-list", "--count", "--all"])?;
-    out.parse::<u64>()
-        .map_err(|e| CliError::Generic(format!("could not parse commit count {out:?}: {e}")))
+    let count = out.trim();
+    count
+        .parse::<u64>()
+        .map_err(|e| CliError::Generic(format!("could not parse commit count {count:?}: {e}")))
 }
 
 fn fetch(repo_dir: Option<&Path>, depth_flag: &str, fetch_args: &[String]) -> Result<(), CliError> {
@@ -165,7 +170,11 @@ pub fn ensure_history(
 /// wants: "files this branch touched on top of trunk."
 ///
 /// A rename yields **both** of its paths, so a scope the file moved
-/// out of still counts as touched.
+/// out of still counts as touched. Paths are not
+/// `core.quotePath`-escaped, so the globs see the real name; bytes
+/// that aren't valid UTF-8 are still replaced (see `run_git`), and
+/// the result is unescaped, so callers that print a path must
+/// escape it first.
 pub fn git_changed_files(
     repo_dir: Option<&Path>,
     base: &str,
@@ -196,6 +205,16 @@ pub fn git_changed_files(
     // nothing would match and every scope-gated job would be
     // skipped. Overridden through `-c` rather than
     // `--no-relative`, which only exists since git 2.28.
+    //
+    // `-z` suppresses the `core.quotePath` escaping git otherwise
+    // applies to any path holding a non-ASCII byte, a quote, or a
+    // backslash — line-based output hands the scope globs
+    // `"critical/cach\303\251.txt"`, quotes included, and nothing
+    // matches it (MRGFY-8287). Setting `core.quotePath=false`
+    // would not do: git escapes `"` and `\` whatever that says.
+    // `-z` also removes the only reason a path could not contain
+    // a newline, which is why the printers in `super` escape
+    // before echoing one.
     let out = run_git(
         repo_dir,
         &[
@@ -203,6 +222,7 @@ pub fn git_changed_files(
             "diff.relative=false",
             "diff",
             "--name-only",
+            "-z",
             "--no-renames",
             "--diff-filter=ACMRTD",
             &range,
@@ -210,8 +230,8 @@ pub fn git_changed_files(
         ],
     )?;
     Ok(out
-        .lines()
-        .filter(|line| !line.is_empty())
+        .split('\0')
+        .filter(|path| !path.is_empty())
         .map(ToString::to_string)
         .collect())
 }
@@ -256,9 +276,11 @@ mod tests {
     /// stays untracked — git has no empty directories, and the
     /// `git mv` case needs its destination to exist.
     ///
-    /// `diff.renames` is pinned on: it is git's default, and the
-    /// rename tests below are only meaningful when git actually
-    /// tries to pair a delete with an add.
+    /// `diff.renames` and `core.quotePath` are pinned to git's
+    /// defaults in the repo-local config, which beats whatever the
+    /// developer or CI runner has globally: each test below guards
+    /// a behavior that only misfires when the corresponding
+    /// default is in force.
     fn fixture() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
@@ -267,10 +289,13 @@ mod tests {
             &["config", "user.email", "t@e.com"],
             &["config", "user.name", "T"],
             &["config", "diff.renames", "true"],
+            &["config", "core.quotePath", "true"],
         ] {
             git(dir, args);
         }
         write(dir, "critical/guard.txt", "guard\n");
+        write(dir, "critical/caché.txt", "accented\n");
+        write(dir, "critical/quote\"and\\slash.txt", "punctuation\n");
         write(dir, "docs/readme.md", "docs\n");
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-q", "-m", "base"]);
@@ -303,6 +328,43 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "move the guard out"]);
 
         assert_eq!(changed(dir), ["critical/guard.txt", "ignored/guard.txt"]);
+    }
+
+    #[test]
+    fn non_ascii_path_is_not_quote_escaped() {
+        // MRGFY-8287: `core.quotePath` is on by default, so
+        // line-based output rendered this path as
+        // `"critical/cach\303\251.txt"` — quotes and octal escapes
+        // included — which matches no scope glob, leaving repos
+        // with accented or CJK filenames detecting nothing.
+        let tmp = fixture();
+        let dir = tmp.path();
+        write(dir, "critical/caché.txt", "accented, changed\n");
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "touch the accented file"]);
+
+        assert_eq!(changed(dir), ["critical/caché.txt"]);
+    }
+
+    #[test]
+    fn quote_and_backslash_path_is_not_escaped() {
+        // The half of MRGFY-8287 that `core.quotePath=false` does
+        // *not* cover: git escapes `"` and `\` in a path whatever
+        // that setting says, so only `-z` gets these through. A
+        // fix that reached for the config instead would pass
+        // `non_ascii_path_is_not_quote_escaped` and still leave
+        // this repo silently unscoped.
+        let tmp = fixture();
+        let dir = tmp.path();
+        write(
+            dir,
+            "critical/quote\"and\\slash.txt",
+            "punctuation, changed\n",
+        );
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "touch the punctuated file"]);
+
+        assert_eq!(changed(dir), ["critical/quote\"and\\slash.txt"]);
     }
 
     #[test]

@@ -206,7 +206,7 @@ fn detect_scopes(
             let changed = changed_files::git_changed_files(None, base, &refs.head)?;
             output.status("Changed files detected:")?;
             for f in &changed {
-                output.status(&format!("- {f}"))?;
+                output.status(&format!("- {}", display_path(f)))?;
             }
             let matchers = matching::compile(&files.files)?;
             let matching::MatchResult { hit, by_scope } =
@@ -214,6 +214,22 @@ fn detect_scopes(
             Ok((all, hit, by_scope))
         }
     }
+}
+
+/// Render a repo path for a log line.
+///
+/// `git_changed_files` returns paths as git holds them, and a
+/// filename may legally contain a newline or an ANSI escape. Echoed
+/// raw into a GitHub Actions log, a name like
+/// `evil\n::error::pwned.txt` starts a line at column 0 that the
+/// runner parses as a workflow command and turns into a fabricated
+/// annotation — `::add-mask::` and `::stop-commands::` are reachable
+/// the same way. `escape_debug` keeps printable Unicode readable
+/// (`café.txt` stays `café.txt`) while neutralizing the control
+/// characters, which is exactly what git's own `core.quotePath`
+/// output did for us before this module started passing `-z`.
+fn display_path(path: &str) -> String {
+    path.escape_debug().to_string()
 }
 
 /// Print "Scopes touched:" + sorted scope names, with the
@@ -244,7 +260,7 @@ fn emit_scopes_listing(
                 let mut files: Vec<&String> = files.iter().collect();
                 files.sort();
                 for f in files {
-                    writeln!(w, "    {f}")?;
+                    writeln!(w, "    {}", display_path(f))?;
                 }
             }
         }
@@ -275,6 +291,24 @@ mod tests {
     use super::*;
     use crate::testing::with_ci_env;
     use mergify_test_support::Captured;
+
+    #[test]
+    fn display_path_neutralizes_workflow_command_injection() {
+        // Since `git_changed_files` passes `-z`, git no longer
+        // escapes control characters for us, and a filename may
+        // legally hold a newline. Echoed raw, the runner would read
+        // the second line as a workflow command and annotate a
+        // passing job with a fabricated error.
+        let evil = "critical/evil\n::error::pwned.txt";
+        let rendered = display_path(evil);
+        assert!(!rendered.contains('\n'), "got: {rendered}");
+        assert!(rendered.contains("\\n::error::"), "got: {rendered}");
+        // An ANSI escape can't repaint the operator's terminal.
+        assert_eq!(display_path("a\u{1b}[31mb"), "a\\u{1b}[31mb");
+        // Ordinary printable Unicode stays readable — the listing
+        // is for humans reading a CI log.
+        assert_eq!(display_path("critical/caché.txt"), "critical/caché.txt");
+    }
 
     #[test]
     fn resolve_config_path_errors_on_missing_explicit() {
