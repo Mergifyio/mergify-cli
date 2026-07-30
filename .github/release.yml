@@ -3,3 +3,4 @@ changelog:
     authors:
       - dependabot[bot]
       - mergify[bot]
+      - renovate[bot]
