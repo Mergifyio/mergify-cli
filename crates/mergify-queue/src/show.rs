@@ -77,6 +77,12 @@ struct PullView {
     priority_rule_name: Option<String>,
     #[serde(default)]
     queue_rule_name: Option<String>,
+    /// When the queue will give up on this PR's checks. `--json`
+    /// passed it through from the start, but the human render dropped
+    /// it — so a `CHECKS_TIMEOUT` could only be diagnosed after the
+    /// fact, never seen coming.
+    #[serde(default)]
+    checks_timeout_at: Option<String>,
     #[serde(default)]
     mergeability_check: Option<MergeabilityCheck>,
 }
@@ -315,6 +321,11 @@ fn print_metadata(
         w,
         "  ETA:         {}",
         relative_or_raw_or_dash(view.estimated_time_of_merge.as_deref(), now, true),
+    )?;
+    writeln!(
+        w,
+        "  CI timeout:  {}",
+        relative_or_raw_or_dash(view.checks_timeout_at.as_deref(), now, true),
     )
 }
 
@@ -623,6 +634,7 @@ mod tests {
             "position": 3,
             "priority_rule_name": "default",
             "queue_rule_name": "default",
+            "checks_timeout_at": "2026-05-09T12:00:00Z",
             "queue_rule": {"name": "default", "config": {}},
             "mergeability_check": {
                 "check_type": "in_place",
@@ -689,6 +701,9 @@ mod tests {
         let stdout = cap.stdout();
         assert!(stdout.contains("PR #123"), "got: {stdout:?}");
         assert!(stdout.contains("Position:"), "got: {stdout:?}");
+        // A pending checks timeout is visible before it fires, not
+        // only diagnosable as CHECKS_TIMEOUT afterwards.
+        assert!(stdout.contains("CI timeout:"), "got: {stdout:?}");
         assert!(stdout.contains("CI State:"), "got: {stdout:?}");
         // Compact summary: 1 passed (tests), 1 pending (linters), 1
         // failed (security). The failing check name is listed below
