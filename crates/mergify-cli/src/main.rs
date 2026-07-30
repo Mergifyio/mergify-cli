@@ -34,6 +34,7 @@ use mergify_freeze::create::CreateOptions as FreezeCreateOptions;
 use mergify_freeze::delete::DeleteOptions as FreezeDeleteOptions;
 use mergify_freeze::list::ListOptions as FreezeListOptions;
 use mergify_freeze::update::UpdateOptions as FreezeUpdateOptions;
+use mergify_queue::history::HistoryOptions;
 use mergify_queue::pause::PauseOptions;
 use mergify_queue::show::ShowOptions;
 use mergify_queue::status::StatusOptions;
@@ -115,6 +116,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("queue", "unpause"),
     ("queue", "status"),
     ("queue", "show"),
+    ("queue", "history"),
     ("freeze", "list"),
     ("freeze", "create"),
     ("freeze", "update"),
@@ -180,6 +182,7 @@ enum NativeCommand {
     QueueUnpause(QueueUnpauseOpts),
     QueueStatus(QueueStatusOpts),
     QueueShow(QueueShowOpts),
+    QueueHistory(QueueHistoryOpts),
     FreezeList(FreezeListOpts),
     FreezeCreate(FreezeCreateOpts),
     FreezeUpdate(FreezeUpdateOpts),
@@ -541,6 +544,14 @@ struct QueueShowOpts {
     api_url: Option<String>,
     pr_number: u64,
     verbose: bool,
+    output_json: bool,
+}
+
+struct QueueHistoryOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    pr_number: u64,
     output_json: bool,
 }
 
@@ -1023,6 +1034,18 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             api_url,
             pr_number,
             verbose: parsed.verbose > 0,
+            output_json: json,
+        })),
+        Subcommands::Queue(QueueArgs {
+            repository,
+            token,
+            api_url,
+            command: QueueSubcommand::History(HistoryCliArgs { pr_number, json }),
+        }) => Dispatch::Native(NativeCommand::QueueHistory(QueueHistoryOpts {
+            repository,
+            token,
+            api_url,
+            pr_number,
             output_json: json,
         })),
         Subcommands::Freeze(FreezeArgs {
@@ -1656,6 +1679,18 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     api_url: opts.api_url.as_deref(),
                     pr_number: opts.pr_number,
                     verbose: opts.verbose,
+                    output_json: opts.output_json,
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::QueueHistory(opts) => mergify_queue::history::run(
+                HistoryOptions {
+                    repository: opts.repository.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                    pr_number: opts.pr_number,
                     output_json: opts.output_json,
                 },
                 &mut output,
@@ -2672,8 +2707,8 @@ enum Subcommands {
     /// Inspect and control the Mergify merge queue.
     ///
     /// Check the status of queued pull requests, inspect a single
-    /// pull request's queue state, and pause or resume merging for a
-    /// repository.
+    /// pull request's queue state or its past queue history, and
+    /// pause or resume merging for a repository.
     Queue(QueueArgs),
     /// Schedule and manage merge freezes.
     ///
@@ -4153,6 +4188,14 @@ enum QueueSubcommand {
     /// is or isn't mergeable. Pass `--verbose` for the full checks
     /// table and conditions tree, or `--json` for the raw response.
     Show(ShowCliArgs),
+    /// Show the merge queue history of a pull request.
+    ///
+    /// Replay what the merge queue did with a pull request, including
+    /// after it left the queue: when it was queued, which draft ran
+    /// its checks, which pull requests were batched with it, which
+    /// checks failed, and why it was dequeued. Covers the last 90
+    /// days. Pass `--json` for machine-readable output.
+    History(HistoryCliArgs),
 }
 
 #[derive(clap::Args)]
@@ -4185,6 +4228,17 @@ struct ShowCliArgs {
     pr_number: u64,
 
     /// Emit the raw API response as a single JSON document.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
+struct HistoryCliArgs {
+    /// Pull request number to inspect.
+    #[arg(value_name = "PR_NUMBER")]
+    pr_number: u64,
+
+    /// Emit the event trail as a single JSON document.
     #[arg(long, default_value_t = false)]
     json: bool,
 }

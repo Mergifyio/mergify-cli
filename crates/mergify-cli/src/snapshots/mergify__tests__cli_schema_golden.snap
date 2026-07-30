@@ -1734,9 +1734,60 @@ expression: schema
             "source": "native",
             "subcommandRequired": false,
             "usage": "mergify queue show [OPTIONS] <PR_NUMBER>"
+          },
+          {
+            "about": "Show the merge queue history of a pull request",
+            "aliases": [],
+            "args": [
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Pull request number to inspect",
+                "id": "pr_number",
+                "kind": "positional",
+                "long": null,
+                "longHelp": "Pull request number to inspect",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": true,
+                "short": null,
+                "valueHint": null,
+                "valueNames": [
+                  "PR_NUMBER"
+                ]
+              },
+              {
+                "default": "false",
+                "env": null,
+                "global": false,
+                "help": "Emit the event trail as a single JSON document",
+                "id": "json",
+                "kind": "flag",
+                "long": "json",
+                "longHelp": "Emit the event trail as a single JSON document",
+                "numArgs": "0",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": []
+              }
+            ],
+            "commands": [],
+            "longAbout": "Show the merge queue history of a pull request.\n\nReplay what the merge queue did with a pull request, including after it left the queue: when it was queued, which draft ran its checks, which pull requests were batched with it, which checks failed, and why it was dequeued. Covers the last 90 days. Pass `--json` for machine-readable output.",
+            "name": "history",
+            "path": [
+              "mergify",
+              "queue",
+              "history"
+            ],
+            "source": "native",
+            "subcommandRequired": false,
+            "usage": "mergify queue history [OPTIONS] <PR_NUMBER>"
           }
         ],
-        "longAbout": "Inspect and control the Mergify merge queue.\n\nCheck the status of queued pull requests, inspect a single pull request's queue state, and pause or resume merging for a repository.",
+        "longAbout": "Inspect and control the Mergify merge queue.\n\nCheck the status of queued pull requests, inspect a single pull request's queue state or its past queue history, and pause or resume merging for a repository.",
         "name": "queue",
         "path": [
           "mergify",
