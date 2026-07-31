@@ -12,7 +12,7 @@
 //! - [`compute_merged_tree`] — `git merge-tree --write-tree` to
 //!   replay the new PR head onto `parent(old_sha)`, returning the
 //!   resulting tree SHA.
-//! - [`compute_tree_delta`] — `git diff-tree --raw --no-renames`
+//! - [`compute_tree_delta`] — `git diff-tree --raw -z --no-renames`
 //!   between two trees, parsed into entries shaped for the
 //!   GitHub `POST /repos/.../git/trees` API.
 //! - [`upload_replay_commit`] — chains
@@ -26,7 +26,7 @@
 
 use std::path::Path;
 
-use crate::git::run_git_capture;
+use crate::git::{run_git_capture, run_git_capture_raw};
 
 use mergify_core::{CliError, HttpClient};
 use serde::{Deserialize, Serialize};
@@ -115,16 +115,36 @@ pub fn mode_to_type(mode: &str) -> &'static str {
     }
 }
 
-/// Parse `git diff-tree -r --raw --no-renames base merged` into
+/// Parse `git diff-tree -r --raw -z --no-renames base merged` into
 /// GitHub `git/trees` entries.
 ///
-/// Each diff-tree line has the shape
-/// `":mode_old mode_new sha_old sha_new STATUS\tpath"`. We
-/// preserve only the `M` (modified), `A` (added), `T` (type-
+/// `-z` makes each entry two NUL-terminated fields,
+/// `":mode_old mode_new sha_old sha_new STATUS\0path\0"`. Without
+/// it git applies `core.quotePath` (on by default), which wraps
+/// any path holding a non-ASCII byte, a double quote, or a
+/// backslash in quotes and octal-escapes it — and that literal
+/// `"src/cach\303\251.txt"` is what we would upload, so the replay
+/// commit would create a file under the escaped name and leave the
+/// real one in place (MRGFY-8288). Setting `core.quotePath=false`
+/// would not do: git escapes `"` and `\` whatever that says. `-z`
+/// also removes the only reason a path could not contain a tab or
+/// a newline, which line-based parsing cannot survive either.
+/// Only `R`/`C` entries carry a second path, and `--no-renames`
+/// suppresses those, so every record here is exactly two fields.
+///
+/// We preserve only the `M` (modified), `A` (added), `T` (type-
 /// changed), and `D` (deleted) statuses. `--no-renames` suppresses
 /// `R`/`C` already; any future status we don't know is dropped on
-/// the floor (a deliberate Python behaviour: silent misclassif
-/// would be worse than dropping).
+/// the floor rather than coerced into one of these — a silent
+/// misclassification would upload the wrong thing, where a missing
+/// entry only leaves the compare URL incomplete.
+///
+/// A path that is not valid UTF-8 is a hard error: the trees API
+/// is JSON, so no encoding uploads it correctly, and picking one
+/// anyway (`from_utf8_lossy`) recreates the corruption above.
+/// [`replay_for_revision`] turns any error here into "no
+/// rebase-aware compare URL" and falls back to the plain `old…new`
+/// range, same as it does for a conflict.
 ///
 /// Returns an empty vec when the diff is empty (e.g. the merged
 /// tree equals `base_tree_sha`). Caller treats that as "nothing
@@ -134,12 +154,13 @@ pub fn compute_tree_delta(
     base_tree_sha: &str,
     merged_tree_sha: &str,
 ) -> Result<Vec<TreeEntry>, CliError> {
-    let output = run_git_capture(
+    let output = run_git_capture_raw(
         repo_dir,
         &[
             "diff-tree",
             "-r",
             "--raw",
+            "-z",
             "--no-renames",
             base_tree_sha,
             merged_tree_sha,
@@ -147,31 +168,44 @@ pub fn compute_tree_delta(
     )?;
 
     let mut entries = Vec::new();
-    for line in output.lines() {
-        let Some(rest) = line.strip_prefix(':') else {
+    let mut fields = output.split(|b| *b == 0);
+    while let Some(meta) = fields.next() {
+        // Every record opens with ':'; the only other field the
+        // split yields is the empty tail after the final NUL.
+        let Some(meta) = meta.strip_prefix(b":") else {
             continue;
         };
-        // Format: "mode_old mode_new sha_old sha_new STATUS\tpath".
-        let (meta, path) = match rest.split_once('\t') {
-            Some((meta, path)) if !path.is_empty() => (meta, path),
-            _ => continue,
+        let Some(path) = fields.next() else { break };
+        // Modes, SHAs and the status letter are ASCII by
+        // construction — a header that isn't is not a record we
+        // know how to read.
+        let Ok(meta) = std::str::from_utf8(meta) else {
+            continue;
         };
         let parts: Vec<&str> = meta.split_whitespace().collect();
-        if parts.len() < 5 {
+        let [mode_old, mode_new, _sha_old, sha_new, status] = parts[..] else {
             continue;
-        }
-        let (mode_old, mode_new, _sha_old, sha_new, status) =
-            (parts[0], parts[1], parts[2], parts[3], parts[4]);
+        };
+        let path = String::from_utf8(path.to_vec()).map_err(|e| {
+            CliError::wrap(
+                format!(
+                    "`git diff-tree` returned a path that is not valid UTF-8, \
+                     so the replay commit cannot be uploaded: {}",
+                    String::from_utf8_lossy(path).escape_debug()
+                ),
+                e,
+            )
+        })?;
 
         match status {
             "D" => entries.push(TreeEntry {
-                path: path.to_string(),
+                path,
                 mode: mode_old.to_string(),
                 type_: mode_to_type(mode_old).to_string(),
                 sha: None,
             }),
             "M" | "A" | "T" => entries.push(TreeEntry {
-                path: path.to_string(),
+                path,
                 mode: mode_new.to_string(),
                 type_: mode_to_type(mode_new).to_string(),
                 sha: Some(sha_new.to_string()),
@@ -300,8 +334,9 @@ fn short(sha: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     use tempfile::TempDir;
 
@@ -327,6 +362,25 @@ mod tests {
 
     fn rev_parse(path: &Path, refname: &str) -> String {
         run_git_capture(Some(path), &["rev-parse", refname]).unwrap()
+    }
+
+    /// `git <args>` fed `stdin`, returning its trimmed stdout.
+    /// Lets the tests below plant objects whose path bytes the
+    /// filesystem would refuse (`mktree`) without going through a
+    /// worktree.
+    fn run_with_stdin(path: &Path, args: &[&str], stdin: &[u8]) -> String {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "git {args:?} failed");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 
     #[test]
@@ -393,6 +447,71 @@ mod tests {
 
         let t = by_path["type-change.txt"];
         assert_eq!(t.mode, "100755", "type change exposes the new mode");
+    }
+
+    #[test]
+    fn compute_tree_delta_preserves_paths_git_would_quote() {
+        // MRGFY-8288: `core.quotePath` is on by default, so
+        // line-based output wrapped the accented path in quotes and
+        // octal-escaped it (`\303\251` for `é`), and that literal
+        // string went to the trees API, creating a file under the
+        // escaped name and leaving the real one untouched. The
+        // quote/backslash path is the half `core.quotePath=false`
+        // would not fix. The name ending in a space pins that only
+        // the meta field is whitespace-split: the path field is
+        // handed back byte for byte.
+        let dir = init_repo();
+        let path = dir.path();
+        std::fs::write(path.join("keep.txt"), "v1\n").unwrap();
+        run(path, &["add", "."]);
+        run(path, &["commit", "-q", "-m", "base"]);
+        let base_tree = rev_parse(path, "HEAD^{tree}");
+
+        let awkward = ["caché.txt", "quote\"and\\slash.txt", "ends in a space "];
+        for name in awkward {
+            std::fs::write(path.join(name), "new\n").unwrap();
+        }
+        run(path, &["add", "--all"]);
+        run(path, &["commit", "-q", "-m", "add awkward names"]);
+        let new_tree = rev_parse(path, "HEAD^{tree}");
+
+        let mut paths: Vec<String> = compute_tree_delta(Some(path), &base_tree, &new_tree)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        paths.sort_unstable();
+        let mut expected = awkward;
+        expected.sort_unstable();
+        assert_eq!(paths, expected);
+    }
+
+    #[test]
+    fn compute_tree_delta_errors_on_non_utf8_path() {
+        // Git holds paths as bytes; one that isn't UTF-8 cannot be
+        // uploaded to the JSON trees API under any encoding.
+        // `from_utf8_lossy` would re-create the MRGFY-8288
+        // corruption (file lands under a mangled name, the
+        // original stays) and skipping the entry would silently
+        // under-apply the replay, so this errors and
+        // `replay_for_revision` falls back to the plain compare
+        // URL. Built with `mktree` because macOS refuses to create
+        // such a filename in a worktree.
+        let dir = init_repo();
+        let path = dir.path();
+        let blob = run_with_stdin(path, &["hash-object", "-w", "--stdin"], b"hello\n");
+        // `mktree -z` entry: "<mode> SP <type> SP <sha> TAB <path> NUL".
+        // The path is `latin1-é.txt` as latin-1, i.e. a lone 0xe9
+        // where UTF-8 would need two bytes.
+        let mut entry = format!("100644 blob {blob}\t").into_bytes();
+        entry.extend_from_slice(b"latin1-\xe9.txt\0");
+        let tree = run_with_stdin(path, &["mktree", "-z"], &entry);
+        let empty_tree = run_with_stdin(path, &["mktree", "-z"], b"");
+
+        let err = compute_tree_delta(Some(path), &empty_tree, &tree).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not valid UTF-8"), "{msg}");
+        assert!(msg.contains(".txt"), "the offending entry is named: {msg}");
     }
 
     #[test]

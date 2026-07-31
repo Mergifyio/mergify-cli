@@ -64,6 +64,25 @@ pub fn git_cmd(repo_dir: Option<&Path>) -> Command {
 /// [`CliError::Generic`]; non-UTF-8 stdout is the same error
 /// class.
 pub fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
+    let stdout = run_git_capture_raw(repo_dir, args)?;
+    let stdout = String::from_utf8(stdout).map_err(|e| {
+        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
+    })?;
+    Ok(stdout.trim_end().to_string())
+}
+
+/// Run `git <args>` and return raw, **untrimmed** stdout.
+///
+/// The byte-level counterpart of [`run_git_capture`], for the
+/// callers that pass `-z`: NUL-delimited output must not be
+/// trimmed (a leading or trailing space is a legal filename
+/// character) and must not be forced through UTF-8 before the
+/// caller has a chance to name the entry that isn't. Same
+/// spawn/exit error mapping as [`run_git_capture`].
+pub(crate) fn run_git_capture_raw(
+    repo_dir: Option<&Path>,
+    args: &[&str],
+) -> Result<Vec<u8>, CliError> {
     let output = git_cmd(repo_dir)
         .args(args)
         .output()
@@ -76,10 +95,7 @@ pub fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<String,
             stderr
         }));
     }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| {
-        CliError::Generic(format!("`git {}` output is not UTF-8: {e}", args.join(" ")))
-    })?;
-    Ok(stdout.trim_end().to_string())
+    Ok(output.stdout)
 }
 
 /// Run `git <args>` discarding stdout. Useful for `fetch`, `push`,
