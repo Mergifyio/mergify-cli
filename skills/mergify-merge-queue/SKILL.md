@@ -9,7 +9,7 @@ description: Use Mergify merge queue to queue/dequeue PRs, to monitor and inspec
 
 The merge queue serializes PR merges, running CI on temporary merge commits to catch integration failures before they reach the target branch. Use comments on the PR to queue/dequeue it, and the CLI to monitor queue state, inspect individual PRs, and manage the queue.
 
-A PR that left the queue is diagnosed from **GitHub artifacts and the Mergify API**, not from the CLI — see [Diagnosing a dequeued PR](#diagnosing-a-dequeued-pr). Know that boundary before you start: `mergify queue show` only reports on PRs that are *currently* in the queue.
+`mergify queue show <PR>` reports on a PR that is **no longer** in the queue too — whether it was dequeued, merged by the queue, or never queued, and why — so start there for a PR that vanished from the queue. See [Diagnosing a dequeued PR](#diagnosing-a-dequeued-pr); the GitHub-side surfaces documented there are the fallback for when the CLI cannot read the activity log.
 
 ## Queuing and Dequeuing a PR
 
@@ -37,38 +37,81 @@ mergify queue pause --reason "..."   # Pause the queue (requires reason)
 mergify queue unpause                # Resume the queue
 ```
 
-That is the whole `queue` group: `status`, `show`, `pause`, `unpause`. There is no subcommand for dequeuing a PR, none for queue history, and no flag that reports a dequeue reason.
+That is the whole `queue` group: `status`, `show`, `pause`, `unpause`. There is no subcommand for dequeuing a PR and none for browsing queue history — the dequeue reason comes from `queue show` on a PR that has left the queue, not from a flag.
 
 ## Is the PR queued, dequeued, or never queued?
 
 Start here — the rest of the workflow branches on this answer.
 
-`mergify queue show <PR>` asks the API for the PR's *current* queue entry. A PR with no entry is a normal answer, not an error: the command prints a notice and **exits 0**.
+`mergify queue show <PR>` answers all four cases. A PR with no queue entry is a normal answer, not an error: the command prints a notice and **exits 0** in every case below.
 
 | `queue show` result | Meaning |
 |---|---|
 | `PR #N` block with position / CI state | The PR **is in the queue** |
-| `PR #N is not in the merge queue` | The PR is **not in the queue** — dequeued, never queued, or not a real PR number |
+| `PR #N was dequeued <when>` + a `Dequeue code` | It **left the queue without merging** — see the reason table |
+| `PR #N was merged by the merge queue <when>` | It left the queue **by merging**. Not a dequeue |
+| `PR #N is not in the merge queue` | **No queue activity in the retained window** — never queued, aged out, or not a real PR number |
 
-In `--json`, the not-queued case is the only payload carrying a `queued` key, so it is an unambiguous test:
+Under `--json`, a PR that is not currently queued carries `queued: false` plus a `dequeued` discriminator:
 
 ```bash
 mergify queue show 1234 --json | jq -e '.queued == false' >/dev/null && echo "not in queue"
 ```
 
-**`queue show` cannot tell "dequeued" from "never queued".** Both are the same 404 from the API and the same notice line. To separate them, look for a queue *history*. The discriminator is an `action.queue.leave` event: present means the PR was in the queue and left it, absent means it never got in. Get it from surface 1 below.
+- `dequeued: true` — left without merging; the raw leave event is under `queue_leave`
+- `dequeued: false` — merged by the queue, or never queued (`queue_leave` tells the two apart: `null` means never queued)
+- `dequeued: null` — the lookup itself failed, and `queue_leave_error` says why. **Not** the same as "never queued" — fall back to the GitHub-side surfaces rather than concluding anything
 
-The command does not check that the PR exists, so a typo'd number prints the same notice. If the leave-event lookup also comes back empty, confirm the PR is real (`gh pr view <PR>`) before concluding anything.
+`queue_leave_head_sha` carries the head the diagnosis describes. **Compare it against the PR's current head before reporting anything from it** — a dequeue is often *caused* by a push, so its failing checks routinely belong to a commit the PR no longer has:
+
+```bash
+mergify queue show 1234 --json | jq -r '.queue_leave_head_sha'   # 31b4a485b8ce…
+gh pr view 1234 --json headRefOid -q .headRefOid                 # 340361aae580…  → superseded, stay quiet
+```
+
+Two limits to keep in mind. History goes back **90 days** (the activity log's retention), so an older dequeue reads as "no activity". And the command does not check that the PR exists, so a typo'd number prints the same "not in the merge queue" notice — confirm the PR is real (`gh pr view <PR>`) before concluding it was never queued.
 
 Do not use the presence of a `Mergify Merge Queue` check run as the test — a PR that merely *matches* the queue conditions gets one titled `Waiting for queue conditions` without ever being queued. A `# Merge Queue Status` comment is a reliable positive signal (the pre-queue "Queue this pull request" offer comment deliberately carries no such heading), but its absence proves nothing, since the comment can be disabled per repository.
 
 ## Diagnosing a dequeued PR
 
-Three surfaces carry the reason. Prefer them in this order.
+Four surfaces carry the reason. Prefer them in this order.
 
-### 1. The Mergify activity log (machine-readable, authoritative)
+### 1. `mergify queue show <PR>` (start here)
 
-`GET /v1/repos/{owner}/{repo}/logs` returns the queue lifecycle events, newest first. **No CLI command exposes this** — call it directly:
+On a PR that is no longer queued, `queue show` reads the PR's last merge-queue exit and renders it:
+
+```
+PR #37823 was dequeued 24m ago
+
+  Dequeue code:  CHECKS_FAILED
+  Queue:         default
+  Queued at:     46m ago
+  Trigger:       merge queue internal
+  Head SHA:      31b4a48
+
+  The merge conditions cannot be satisfied due to failing checks
+
+  - `@github-actions/all-greens`
+
+  Failing checks:
+    ✗ all-greens  failure
+      https://github.com/Mergifyio/monorepo/actions/runs/…/job/…
+
+  Fix the cause above, then comment `@mergifyio queue` on the pull request.
+```
+
+That is the engine's own explanation plus the failing checks **with their job-log URLs** — go straight to the failing job rather than hunting for it. The explanation is capped at 12 lines in compact mode; add `-v` for the whole thing (a `PR_DEQUEUED` reason embeds the full unmet-condition tree, which runs to dozens of lines).
+
+`Head SHA` is the commit all of that describes. If it is not the PR's current head, the report is about a commit that has since been replaced — the checks above may already be green again. Check it before acting on the failure.
+
+`--json` gives the same thing machine-readably: `dequeued`, plus `queue_leave` carrying the raw event, so read `dequeue_code`, `reason`, and `unsuccessful_checks[].details_url` from `.queue_leave.metadata`. Use the promoted `queue_leave_head_sha` for the staleness check above.
+
+Reading the activity log is **best-effort**: a token scoped to the merge queue can be refused the repository's event log (403). The command then degrades to the plain "not in the merge queue" notice plus a warning on stderr, and reports `dequeued: null` — that is the signal to fall through to the surfaces below, not a statement that the PR was never queued.
+
+### 2. The Mergify activity log (what surface 1 reads underneath)
+
+`GET /v1/repos/{owner}/{repo}/logs` returns the queue lifecycle events, newest first. `queue show` calls this for you; go direct when it degrades (403 above), when you need the whole lifecycle rather than the last exit, or from somewhere the CLI is not installed:
 
 ```bash
 REPO=owner/repo
@@ -113,7 +156,7 @@ Two traps that make this silently return nothing:
 
 Same endpoint, other useful filters: `&outcome=failure` restricts leave events to dequeues (a merge is `success`); drop `event_type` to see the whole lifecycle (`action.queue.enter`, `checks_start`, `checks_end`, `leave`).
 
-### 2. The `Mergify Merge Queue` check run
+### 3. The `Mergify Merge Queue` check run
 
 The check-run **title** names the reason directly, and its summary is the full queue report:
 
@@ -132,9 +175,9 @@ Titles map to state without any parsing:
 | `Merged via merge queue` (conclusion `success`) | Merged by the queue |
 | `Waiting for queue conditions`, `Checks …`, `In merge queue` | Still in the lifecycle |
 
-Caveat: the check run lives on the **head SHA it was written against**. If the dequeue was caused by a push (`PULL_REQUEST_UPDATED`, `DRAFT_PULL_REQUEST_CHANGED`), the current head has a *fresh* check run and the dequeue report sits on the previous SHA. Use surface 1 or 3 in that case. Note also that `gh pr view --json statusCheckRollup` returns a null `title` — go through `gh api .../check-runs` as above.
+Caveat: the check run lives on the **head SHA it was written against**. If the dequeue was caused by a push (`PULL_REQUEST_UPDATED`, `DRAFT_PULL_REQUEST_CHANGED`), the current head has a *fresh* check run and the dequeue report sits on the previous SHA. Use surface 1 or 4 in that case — surface 1 names the SHA (`Head SHA` / `queue_leave_head_sha`), so it is the one that lets you *detect* the mismatch rather than fall into it. Note also that `gh pr view --json statusCheckRollup` returns a null `title` — go through `gh api .../check-runs` as above.
 
-### 3. The `# Merge Queue Status` comment
+### 4. The `# Merge Queue Status` comment
 
 `mergify[bot]` posts one comment per queue session, so **read the last one**. It survives pushes, which makes it the most robust GitHub-side surface.
 
@@ -206,7 +249,7 @@ Use `mergify queue show <PR_NUMBER>` to check why a PR is stuck or how it's prog
 - **Conditions**: which conditions are met and which are blocking
 - Use `-v` (verbose) for the full checks table and conditions tree
 
-`-v` lists check **names and states only — no links to the CI jobs**. For job-log URLs, use the dequeue-report surfaces above (they apply to a queued PR too, via the check-run summary). `--json` is a raw passthrough of the API payload, so it carries two fields the human render drops: `checks_timeout_at` (when this PR will hit `CHECKS_TIMEOUT` — worth reading *before* it does) and `queue_rule` (the resolved queue rule config, not just its name).
+`-v` lists check **names and states only — no links to the CI jobs**. For job-log URLs on a PR that is still queued, use the GitHub-side surfaces above (the check-run summary and the status comment); once the PR has left the queue, `queue show` itself prints them. `--json` is a raw passthrough of the API payload, so it carries two fields the human render drops: `checks_timeout_at` (when this PR will hit `CHECKS_TIMEOUT` — worth reading *before* it does) and `queue_rule` (the resolved queue rule config, not just its name).
 
 ## Queue States
 
@@ -243,7 +286,7 @@ mergify queue unpause
 - Make sure the PR was queued: post `@mergifyio queue` and confirm Mergify reacted with 👍 on the comment
 - Check that the PR's merge conditions are met: `mergify queue show <PR_NUMBER> -v`
 - Look at the conditions section for unmet requirements
-- If `queue show` says the PR is not in the queue, it may have been queued and dequeued already — check for a leave event before assuming the queue command never landed
+- Do not assume the queue command never landed: `queue show` tells a PR that was queued and dequeued apart from one that never entered
 
 **PR stuck in queue:**
 - Check CI state: `mergify queue show <PR_NUMBER>`
@@ -251,8 +294,9 @@ mergify queue unpause
 - If the queue is paused, check who paused it: `mergify queue status`
 
 **PR disappeared from the queue:**
-- Do not conclude it was never queued — `mergify queue show` reports the same "not in the merge queue" for both cases
-- Go to [Diagnosing a dequeued PR](#diagnosing-a-dequeued-pr): get `dequeue_code`, then act per the reason table
+- `mergify queue show <PR_NUMBER>` — it says whether the PR was dequeued, merged by the queue, or never queued, and prints the dequeue code, the reason, and the failing checks' URLs
+- Never assume "not in the merge queue" means "never queued": read the headline (or `dequeued` under `--json`) before telling anyone to requeue
+- Then act per the [reason table](#dequeue-reasons-and-what-to-do-next)
 
 **Queue moving slowly:**
 - Check for failing batches that trigger bisection: `mergify queue status`

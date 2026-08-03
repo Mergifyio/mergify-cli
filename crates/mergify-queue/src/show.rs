@@ -17,10 +17,23 @@
 //! not currently in the merge queue", which is a routine queryable
 //! state rather than a server failure. The command reports it on
 //! stdout and exits 0 — a not-queued PR is a normal answer, not an
-//! error a script should branch on as an API failure. Under `--json`
-//! the not-queued state is a `{"number": N, "queued": false}`
-//! document so pipeline consumers always get parseable output; in
-//! human mode it is the line `PR #N is not in the merge queue`. Live
+//! error a script should branch on as an API failure.
+//!
+//! That 404 is also *overloaded*: it is the same answer for a PR
+//! dequeued ten minutes ago on failing CI, a PR nobody ever queued,
+//! and a PR number that does not exist. So the 404 path asks the
+//! activity log for the pull request's last `action.queue.leave` (see
+//! [`crate::last_leave`]) and reports which of those three worlds it
+//! is in, with the dequeue reason and the failing checks' URLs.
+//!
+//! Contract, unchanged in both modes: **exit 0**, and under `--json` a
+//! `queued: false` document. The JSON gains `dequeued` (`true` /
+//! `false` / `null` when the log could not be read), `queue_leave`,
+//! the raw event verbatim so unknown fields survive, and
+//! `queue_leave_head_sha`, the head that diagnosis describes — without
+//! it a consumer cannot tell a live failure from one a later push has
+//! already superseded. In human mode a PR with no queue history still
+//! prints the exact line `PR #N is not in the merge queue` — live
 //! smoke tests assert against that substring, which is a stable
 //! contract.
 
@@ -32,11 +45,15 @@ use chrono::Utc;
 use mergify_core::CliError;
 use mergify_core::CommandContext;
 use mergify_core::Output;
+use mergify_core::http::Client;
 use mergify_tui::StyledGlyph;
 use mergify_tui::Theme;
 use mergify_tui::relative_time;
 use mergify_tui::tree;
 use serde::Deserialize;
+
+use crate::last_leave;
+use crate::last_leave::LastLeave;
 
 pub struct ShowOptions<'a> {
     pub repository: Option<&'a str>,
@@ -119,7 +136,7 @@ pub async fn run(opts: ShowOptions<'_>, output: &mut dyn Output) -> Result<(), C
 
     let raw: Option<serde_json::Value> = client.get_if_exists(&path).await?;
     let Some(raw) = raw else {
-        emit_not_queued(output, opts.pr_number, opts.output_json)?;
+        emit_not_queued(&client, &ctx.repository, output, &opts).await?;
         return Ok(());
     };
 
@@ -134,26 +151,103 @@ pub async fn run(opts: ShowOptions<'_>, output: &mut dyn Output) -> Result<(), C
     Ok(())
 }
 
-/// Emit the "PR is not in the merge queue" state. This is a normal
+/// Emit the "PR is not currently in the merge queue" state, with the
+/// diagnosis of *why* when the activity log has one. This is a normal
 /// answer, not a failure, so the command exits 0 — see the module
-/// docs. Under `--json` we emit a `{number, queued: false}` document
-/// (a machine consumer always gets parseable output); in human mode
-/// a single notice line. The wording is load-bearing: live smoke
-/// tests assert on the "is not in the merge queue" substring.
-fn emit_not_queued(
+/// docs.
+///
+/// Reading the activity log is best-effort. A token that can read the
+/// merge queue but not the repository's whole event log gets a 403
+/// here; turning that into a command failure would break a command
+/// that worked before. So a lookup failure degrades to the plain
+/// notice plus a stderr warning, and `--json` reports it as
+/// `dequeued: null` with a `queue_leave_error` — never as a silent
+/// "no dequeue found", which is the very ambiguity this path exists
+/// to remove.
+async fn emit_not_queued(
+    client: &Client,
+    repository: &str,
     output: &mut dyn Output,
-    pr_number: u64,
-    output_json: bool,
+    opts: &ShowOptions<'_>,
 ) -> Result<(), CliError> {
-    if output_json {
-        let payload = serde_json::json!({ "number": pr_number, "queued": false });
-        output.emit_json_value(&payload)?;
-    } else {
-        output.emit(&(), &mut |w: &mut dyn Write| {
-            writeln!(w, "PR #{pr_number} is not in the merge queue")
-        })?;
+    let pr_number = opts.pr_number;
+    let now = Utc::now();
+    let lookup = last_leave::fetch(client, repository, pr_number, now).await;
+    let (leave, error) = match lookup {
+        Ok(leave) => (leave, None),
+        Err(e) => {
+            let message = e.to_string();
+            output.status(&format!(
+                "could not read the activity log to check for a past dequeue: {message}",
+            ))?;
+            (None, Some(message))
+        }
+    };
+
+    if opts.output_json {
+        output.emit_json_value(&not_queued_json(
+            pr_number,
+            leave.as_ref(),
+            error.as_deref(),
+        ))?;
+        return Ok(());
     }
+
+    let theme = Theme::detect();
+    output.emit(&(), &mut |w: &mut dyn Write| {
+        if let Some(leave) = &leave {
+            return last_leave::render(w, &theme, leave, pr_number, now, opts.verbose);
+        }
+        // The exact wording live smoke tests assert on. It is also
+        // the truthful headline when the log lookup failed — the PR
+        // is not in the queue either way; the warning already went
+        // to stderr.
+        writeln!(w, "PR #{pr_number} is not in the merge queue")?;
+        if error.is_none() {
+            writeln!(w)?;
+            last_leave::render_no_activity(w, &theme)?;
+        }
+        Ok(())
+    })?;
     Ok(())
+}
+
+/// `--json` payload for the not-queued state. `queued: false` is kept
+/// verbatim for back-compat; `dequeued` is the tri-state answer
+/// (`true` left without merging, `false` never left / merged, `null`
+/// undetermined) and `queue_leave` republishes the raw API event so
+/// unknown fields survive, exactly as the queued path does.
+///
+/// `queue_leave_head_sha` is promoted out of that raw event because a
+/// consumer cannot act on the diagnosis without it: the failing checks
+/// it reports belong to the head the queue was testing, so a caller
+/// that does not compare it against the PR's current head will report
+/// a red that a later push has already superseded.
+fn not_queued_json(
+    pr_number: u64,
+    leave: Option<&LastLeave>,
+    error: Option<&str>,
+) -> serde_json::Value {
+    // `null` only when the lookup failed. "No leave event in the
+    // retained window" is a real answer — the PR was not dequeued —
+    // so it is `false`, not "undetermined".
+    let dequeued = match error {
+        Some(_) => None,
+        None => Some(leave.is_some_and(LastLeave::dequeued)),
+    };
+    let mut payload = serde_json::json!({
+        "number": pr_number,
+        "queued": false,
+        "dequeued": dequeued,
+        "queue_leave_head_sha": leave.and_then(LastLeave::head_sha),
+        "queue_leave": leave.map(|l| l.raw.clone()),
+    });
+    if let Some(error) = error
+        && let Some(map) = payload.as_object_mut()
+    {
+        map.insert("queue_leave_error".to_string(), error.into());
+    }
+    payload
 }
 
 fn emit_human(output: &mut dyn Output, view: &PullView, verbose: bool) -> std::io::Result<()> {
@@ -676,38 +770,101 @@ mod tests {
         assert_eq!(parsed["future_field"], json!("preserved"));
     }
 
-    #[tokio::test]
-    async fn run_404_human_is_not_in_queue_and_succeeds() {
-        // A not-queued PR is a normal queryable state, not an API
-        // failure: human mode prints the notice to stdout and the
-        // command returns Ok (exit 0).
-        let server = MockServer::start().await;
+    /// Mock the merge-queue 404 that sends `queue show` to the
+    /// activity-log fallback.
+    async fn arrange_not_queued(server: &MockServer, pr_number: u64) {
         Mock::given(method("GET"))
-            .and(path("/v1/repos/owner/repo/merge-queue/pull/999"))
+            .and(path(format!(
+                "/v1/repos/owner/repo/merge-queue/pull/{pr_number}"
+            )))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
-            .mount(&server)
+            .mount(server)
             .await;
+    }
 
-        let mut cap = Captured::human();
+    /// Mock the activity-log lookup with `events`.
+    async fn arrange_logs(server: &MockServer, events: Vec<serde_json::Value>) {
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "size": events.len(),
+                "per_page": 1,
+                "events": events,
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    fn dequeue_event() -> serde_json::Value {
+        json!({
+            "id": 1,
+            "received_at": "2026-07-20T23:25:11.263987Z",
+            "trigger": "merge queue internal",
+            "repository": "owner/repo",
+            "pull_request": 999,
+            "base_ref": "main",
+            "outcome": "failure",
+            "type": "action.queue.leave",
+            "metadata": {
+                "reason": "The merge conditions cannot be satisfied due to failing checks",
+                "merged": false,
+                "queue_name": "default",
+                "queued_at": "2026-07-20T23:11:42.944734Z",
+                "pull_request_head_sha": "31b4a485b8ce6f2c1d0e9a7b4c5d6e7f80910111",
+                "dequeue_code": "CHECKS_FAILED",
+                "unsuccessful_checks": [{
+                    "name": "ci-gate",
+                    "state": "failure",
+                    "details_url": "https://github.com/owner/repo/actions/runs/1/job/2",
+                }],
+            },
+        })
+    }
+
+    async fn run_not_queued(server: &MockServer, pr_number: u64, output_json: bool) -> Captured {
+        let mut cap = if output_json {
+            Captured::new(OutputMode::Json)
+        } else {
+            Captured::human()
+        };
         let api_url = server.uri();
         run(
             ShowOptions {
                 repository: Some("owner/repo"),
                 token: Some("t"),
                 api_url: Some(&api_url),
-                pr_number: 999,
+                pr_number,
                 verbose: false,
-                output_json: false,
+                output_json,
             },
             &mut cap.output,
         )
         .await
         .unwrap();
+        cap
+    }
 
+    #[tokio::test]
+    async fn run_404_human_is_not_in_queue_and_succeeds() {
+        // A PR with no queue history at all: a normal queryable
+        // state, not an API failure. Human mode prints the notice on
+        // stdout and the command returns Ok (exit 0). The wording is
+        // pinned by live smoke tests.
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![]).await;
+
+        let cap = run_not_queued(&server, 999, false).await;
         let stdout = cap.stdout();
         assert!(
             stdout.contains("PR #999 is not in the merge queue"),
+            "got: {stdout:?}",
+        );
+        // "we looked and found nothing" is an answer; silence is not.
+        assert!(
+            stdout.contains("No merge-queue activity"),
             "got: {stdout:?}",
         );
     }
@@ -717,35 +874,180 @@ mod tests {
         // Under `--json`, the not-queued state is a parseable
         // `{number, queued: false}` document on stdout (exit 0), so
         // pipeline consumers never get empty output for the common
-        // case.
+        // case. `queued: false` is back-compat and must not move.
         let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![]).await;
+
+        let cap = run_not_queued(&server, 999, true).await;
+        let parsed: serde_json::Value = serde_json::from_str(&cap.stdout()).unwrap();
+        assert_eq!(parsed["number"], json!(999));
+        assert_eq!(parsed["queued"], json!(false));
+        assert_eq!(parsed["dequeued"], json!(false));
+        assert_eq!(parsed["queue_leave"], json!(null));
+    }
+
+    #[tokio::test]
+    async fn run_404_human_reports_the_dequeue_reason_and_check_urls() {
+        // The gap this fallback closes: one line used to cover
+        // "dequeued 10 minutes ago on failing CI" and "never queued"
+        // alike.
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![dequeue_event()]).await;
+
+        let cap = run_not_queued(&server, 999, false).await;
+        let stdout = cap.stdout();
+        assert!(stdout.contains("PR #999 was dequeued"), "got: {stdout:?}");
+        assert!(stdout.contains("CHECKS_FAILED"), "got: {stdout:?}");
+        assert!(
+            stdout.contains("The merge conditions cannot be satisfied"),
+            "got: {stdout:?}",
+        );
+        assert!(
+            stdout.contains("https://github.com/owner/repo/actions/runs/1/job/2"),
+            "got: {stdout:?}",
+        );
+        assert!(stdout.contains("@mergifyio queue"), "got: {stdout:?}");
+    }
+
+    #[tokio::test]
+    async fn run_404_json_reports_dequeued_with_the_raw_event() {
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![dequeue_event()]).await;
+
+        let cap = run_not_queued(&server, 999, true).await;
+        let parsed: serde_json::Value = serde_json::from_str(&cap.stdout()).unwrap();
+        assert_eq!(parsed["queued"], json!(false));
+        assert_eq!(parsed["dequeued"], json!(true));
+        // The event is republished verbatim — the schema is
+        // Mergify's contract, not this CLI's.
+        assert_eq!(parsed["queue_leave"], dequeue_event());
+    }
+
+    #[tokio::test]
+    async fn run_404_json_promotes_the_head_sha_the_diagnosis_describes() {
+        // Without this, a consumer reading `unsuccessful_checks` has
+        // no way to notice the checks belong to a commit a later push
+        // replaced, and reports a red the PR no longer has. Full SHA,
+        // not the abbreviation the human render uses — the caller
+        // compares it against the PR head.
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![dequeue_event()]).await;
+
+        let cap = run_not_queued(&server, 999, true).await;
+        let parsed: serde_json::Value = serde_json::from_str(&cap.stdout()).unwrap();
+        assert_eq!(
+            parsed["queue_leave_head_sha"],
+            json!("31b4a485b8ce6f2c1d0e9a7b4c5d6e7f80910111"),
+        );
+    }
+
+    #[tokio::test]
+    async fn run_404_json_head_sha_is_null_when_there_is_no_leave_event() {
+        // The key is always present, like `dequeued` and
+        // `queue_leave`, so a consumer can read it unconditionally.
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![]).await;
+
+        let cap = run_not_queued(&server, 999, true).await;
+        let parsed: serde_json::Value = serde_json::from_str(&cap.stdout()).unwrap();
+        assert_eq!(parsed["queue_leave_head_sha"], json!(null));
+    }
+
+    #[tokio::test]
+    async fn run_404_reports_a_merge_as_merged_not_dequeued() {
+        // A merge is also an `action.queue.leave`. Reporting it as a
+        // dequeue would tell an agent to requeue a merged PR.
+        let server = MockServer::start().await;
+        let mut event = dequeue_event();
+        event["metadata"]["merged"] = json!(true);
+        event["metadata"]["dequeue_code"] = json!("PR_MERGED");
+        event["metadata"]["unsuccessful_checks"] = json!([]);
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![event]).await;
+
+        let cap = run_not_queued(&server, 999, false).await;
+        let stdout = cap.stdout();
+        assert!(
+            stdout.contains("PR #999 was merged by the merge queue"),
+            "got: {stdout:?}",
+        );
+        assert!(!stdout.contains("dequeued"), "got: {stdout:?}");
+    }
+
+    #[tokio::test]
+    async fn run_404_json_reports_a_merge_as_not_dequeued() {
+        let server = MockServer::start().await;
+        let mut event = dequeue_event();
+        event["metadata"]["merged"] = json!(true);
+        arrange_not_queued(&server, 999).await;
+        arrange_logs(&server, vec![event]).await;
+
+        let cap = run_not_queued(&server, 999, true).await;
+        let parsed: serde_json::Value = serde_json::from_str(&cap.stdout()).unwrap();
+        assert_eq!(parsed["dequeued"], json!(false));
+        assert_eq!(parsed["queue_leave"]["metadata"]["merged"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn run_404_degrades_when_the_activity_log_is_unreadable() {
+        // A queue-scoped token may be refused the repository's event
+        // log. `queue show` worked before this fallback existed and
+        // must keep working: exit 0, the notice on stdout, the reason
+        // on stderr — and never a silent "no dequeue found".
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
         Mock::given(method("GET"))
-            .and(path("/v1/repos/owner/repo/merge-queue/pull/999"))
-            .respond_with(ResponseTemplate::new(404))
+            .and(path("/v1/repos/owner/repo/logs"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({"detail": "nope"})))
             .expect(1)
             .mount(&server)
             .await;
 
-        let mut cap = Captured::new(OutputMode::Json);
-        let api_url = server.uri();
-        run(
-            ShowOptions {
-                repository: Some("owner/repo"),
-                token: Some("t"),
-                api_url: Some(&api_url),
-                pr_number: 999,
-                verbose: false,
-                output_json: true,
-            },
-            &mut cap.output,
-        )
-        .await
-        .unwrap();
-
+        let cap = run_not_queued(&server, 999, false).await;
         let stdout = cap.stdout();
-        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(parsed["number"], json!(999));
+        assert!(
+            stdout.contains("PR #999 is not in the merge queue"),
+            "got: {stdout:?}",
+        );
+        assert!(
+            !stdout.contains("No merge-queue activity"),
+            "must not claim we looked when the lookup failed: {stdout:?}",
+        );
+        assert!(
+            cap.stderr().contains("could not read the activity log"),
+            "got: {:?}",
+            cap.stderr(),
+        );
+    }
+
+    #[tokio::test]
+    async fn run_404_json_reports_an_unreadable_log_as_undetermined() {
+        let server = MockServer::start().await;
+        arrange_not_queued(&server, 999).await;
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/logs"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({"detail": "nope"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cap = run_not_queued(&server, 999, true).await;
+        let parsed: serde_json::Value = serde_json::from_str(&cap.stdout()).unwrap();
         assert_eq!(parsed["queued"], json!(false));
+        // `null`, not `false`: "we could not tell" is not "it was
+        // never dequeued".
+        assert_eq!(parsed["dequeued"], json!(null));
+        assert!(
+            parsed["queue_leave_error"]
+                .as_str()
+                .is_some_and(|e| e.contains("403")),
+            "got: {parsed}",
+        );
     }
 
     #[tokio::test]
