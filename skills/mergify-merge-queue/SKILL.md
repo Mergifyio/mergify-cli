@@ -245,11 +245,12 @@ Use `mergify queue show <PR_NUMBER>` to check why a PR is stuck or how it's prog
 
 - **Position**: where the PR sits in the queue
 - **Priority**: which priority rule matched
+- **CI timeout**: when the queue will give up on the PR's checks (`-` when no timeout is configured) — watch this to catch a `CHECKS_TIMEOUT` before it fires
 - **CI state**: whether checks are passing, pending, or failing
 - **Conditions**: which conditions are met and which are blocking
 - Use `-v` (verbose) for the full checks table and conditions tree
 
-`-v` lists check **names and states only — no links to the CI jobs**. For job-log URLs on a PR that is still queued, use the GitHub-side surfaces above (the check-run summary and the status comment); once the PR has left the queue, `queue show` itself prints them. `--json` is a raw passthrough of the API payload, so it carries two fields the human render drops: `checks_timeout_at` (when this PR will hit `CHECKS_TIMEOUT` — worth reading *before* it does) and `queue_rule` (the resolved queue rule config, not just its name).
+`-v` lists check **names and states only — no links to the CI jobs**. For job-log URLs on a PR that is still queued, use the GitHub-side surfaces above (the check-run summary and the status comment); once the PR has left the queue, `queue show` itself prints them. `--json` is a raw passthrough of the API payload, so it carries one more field the human render drops: `queue_rule` (the resolved queue rule config, not just its name).
 
 ## Queue States
 
