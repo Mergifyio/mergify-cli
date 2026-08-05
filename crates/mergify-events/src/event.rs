@@ -30,6 +30,8 @@ struct Envelope {
     trigger: Option<String>,
     #[serde(default)]
     pull_request: Option<u64>,
+    #[serde(default)]
+    outcome: Option<String>,
 }
 
 impl Event {
@@ -77,6 +79,13 @@ impl Event {
     #[must_use]
     pub const fn pull_request(&self) -> Option<u64> {
         self.envelope.pull_request
+    }
+
+    /// The API's derived outcome label (`success` / `failure` /
+    /// `pending` / `neutral`).
+    #[must_use]
+    pub fn outcome(&self) -> Option<&str> {
+        non_empty(self.envelope.outcome.as_deref())
     }
 
     /// The event's type-specific `metadata` object; `Null` when the

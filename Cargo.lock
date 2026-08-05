@@ -1381,6 +1381,7 @@ dependencies = [
  "mergify-ci",
  "mergify-config",
  "mergify-core",
+ "mergify-events",
  "mergify-freeze",
  "mergify-queue",
  "mergify-stack",
@@ -1439,6 +1440,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "mergify-core",
+ "mergify-test-support",
  "mergify-tui",
  "serde",
  "serde_json",

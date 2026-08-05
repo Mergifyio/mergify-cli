@@ -21,6 +21,7 @@ clap_mangen = { workspace = true }
 mergify-ci = { path = "../mergify-ci" }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
+mergify-events = { path = "../mergify-events" }
 mergify-freeze = { path = "../mergify-freeze" }
 mergify-queue = { path = "../mergify-queue" }
 mergify-stack = { path = "../mergify-stack" }

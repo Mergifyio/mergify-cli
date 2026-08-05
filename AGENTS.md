@@ -18,8 +18,10 @@ pedantic clean, snapshot-tested output. Concrete rules follow.
   Stays dependency-light and **clap-free**.
 - `mergify-cli` — the binary: clap tree, dispatch, `run_native`, `self_update`,
   `cli_schema`.
-- `mergify-stack` / `mergify-ci` / `mergify-queue` / `mergify-freeze` /
-  `mergify-config` — one crate per command group.
+- `mergify-stack` / `mergify-ci` / `mergify-queue` / `mergify-events` /
+  `mergify-freeze` / `mergify-config` — one crate per command group.
+  `mergify-events` also hosts the shared `/logs` client the `queue`
+  crate's dequeue diagnosis consumes.
 - `mergify-test-support` — shared test scaffolding (not published).
 
 ## Error handling
@@ -236,6 +238,7 @@ Doc updates ship in the **same** commit/PR as the change, never a follow-up.
    | `ci`, `tests` | `mergify-ci` |
    | `config` | `mergify-config` |
    | `queue` | `mergify-merge-queue` |
+   | `events` | `mergify-events` |
    | `freeze` | `mergify-merge-protections` |
 
 3. **Crate `//!` module docs** — keep the purpose/invariant header accurate when

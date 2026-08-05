@@ -1747,6 +1747,164 @@ expression: schema
         "usage": "mergify queue [OPTIONS] <COMMAND>"
       },
       {
+        "about": "Browse the events Mergify recorded for the repository",
+        "aliases": [],
+        "args": [
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and then ``GITHUB_TOKEN`` env vars",
+            "id": "token",
+            "kind": "option",
+            "long": "token",
+            "longHelp": "Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and then ``GITHUB_TOKEN`` env vars",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": "t",
+            "valueHint": null,
+            "valueNames": [
+              "TOKEN"
+            ]
+          },
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var, then to the default",
+            "id": "api_url",
+            "kind": "option",
+            "long": "api-url",
+            "longHelp": "Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var, then to the default",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": "u",
+            "valueHint": null,
+            "valueNames": [
+              "API_URL"
+            ]
+          },
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "Repository full name (owner/repo). Falls back to ``GITHUB_REPOSITORY`` env var",
+            "id": "repository",
+            "kind": "option",
+            "long": "repository",
+            "longHelp": "Repository full name (owner/repo). Falls back to ``GITHUB_REPOSITORY`` env var",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": "r",
+            "valueHint": null,
+            "valueNames": [
+              "REPOSITORY"
+            ]
+          },
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "Only events for this pull request; omit to cover the whole repository",
+            "id": "pr",
+            "kind": "option",
+            "long": "pr",
+            "longHelp": "Only events for this pull request; omit to cover the whole repository",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": null,
+            "valueHint": null,
+            "valueNames": [
+              "PR_NUMBER"
+            ]
+          },
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "How far back to look: an integer with a unit — s, m, h, d or w (e.g. 30m, 12h, 7d). Defaults to 24h; the log retains 90 days (--since 90d is the widest useful window). The window always ends now and is stated in the output",
+            "id": "since",
+            "kind": "option",
+            "long": "since",
+            "longHelp": "How far back to look: an integer with a unit — s, m, h, d or w (e.g. 30m, 12h, 7d). Defaults to 24h; the log retains 90 days (--since 90d is the widest useful window). The window always ends now and is stated in the output",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": null,
+            "valueHint": null,
+            "valueNames": [
+              "DURATION"
+            ]
+          },
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "Only events of this type (e.g. action.queue.leave). Repeat the flag to match several types; values pass to the API verbatim, so types newer than this CLI work too",
+            "id": "type",
+            "kind": "option",
+            "long": "type",
+            "longHelp": "Only events of this type (e.g. action.queue.leave). Repeat the flag to match several types; values pass to the API verbatim, so types newer than this CLI work too",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": null,
+            "valueHint": null,
+            "valueNames": [
+              "EVENT_TYPE"
+            ]
+          },
+          {
+            "default": null,
+            "env": null,
+            "global": false,
+            "help": "Stop after the newest N events instead of fetching the whole window. The output says so when it takes effect",
+            "id": "limit",
+            "kind": "option",
+            "long": "limit",
+            "longHelp": "Stop after the newest N events instead of fetching the whole window. The output says so when it takes effect",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": null,
+            "valueHint": null,
+            "valueNames": [
+              "N"
+            ]
+          },
+          {
+            "default": "false",
+            "env": null,
+            "global": false,
+            "help": "Emit a single JSON document (the raw events, newest first, with the queried window echoed) instead of the timeline",
+            "id": "json",
+            "kind": "flag",
+            "long": "json",
+            "longHelp": "Emit a single JSON document (the raw events, newest first, with the queried window echoed) instead of the timeline",
+            "numArgs": "0",
+            "possibleValues": [],
+            "required": false,
+            "short": null,
+            "valueHint": null,
+            "valueNames": []
+          }
+        ],
+        "commands": [],
+        "longAbout": "Browse the events Mergify recorded for the repository.\n\nList the activity log as a timeline — queue enters and leaves, merges, commands, CI Insights, every event type — for the whole repository or one pull request (`--pr`). The output always states the time window it covers: the last 24 hours by default, up to the 90 days the log retains (`--since 90d`).",
+        "name": "events",
+        "path": [
+          "mergify",
+          "events"
+        ],
+        "source": "native",
+        "subcommandRequired": false,
+        "usage": "mergify events [OPTIONS]"
+      },
+      {
         "about": "Schedule and manage merge freezes",
         "aliases": [],
         "args": [
