@@ -2,7 +2,8 @@
 //!
 //! - [`create_or_update_pr`] — the `Create` action `POST`s a
 //!   fresh PR; `Update` `PATCH`es the existing one with refreshed
-//!   `head`/`base`/`title`/`body`. Body always goes through
+//!   `head`/`title`/`body`, plus `base` only when the PR is really
+//!   being retargeted (see [`base_if_changed`]). Body always goes through
 //!   [`crate::push_helpers::format_pull_description`] so the
 //!   `Change-Id:` trailer is stripped and the rendered
 //!   `Depends-On:` header points at the current predecessor PR.
@@ -63,7 +64,8 @@ pub struct PrUpsertInput<'a> {
 #[derive(Serialize)]
 struct UpdateBodyBoth<'a> {
     head: &'a str,
-    base: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base: Option<&'a str>,
     title: &'a str,
     body: String,
 }
@@ -71,7 +73,8 @@ struct UpdateBodyBoth<'a> {
 #[derive(Serialize)]
 struct UpdateBodyKeepTitle<'a> {
     head: &'a str,
-    base: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base: Option<&'a str>,
     body: String,
 }
 
@@ -82,6 +85,34 @@ struct CreateBody<'a> {
     draft: bool,
     head: &'a str,
     base: &'a str,
+}
+
+/// The `base` value to PATCH, or `None` when the PR already targets
+/// `planned` and the key must be left out of the body entirely.
+///
+/// Omitting it is not just economy. GitHub treats the *presence* of
+/// `base` as a retarget attempt: while a PR belongs to a native stack,
+/// `PATCH /repos/{owner}/{repo}/pulls/{n}` carrying `base` fails with
+/// 422 *"Cannot change the base branch because the pull request is
+/// part of a stack"* even when the value is the one the PR already has
+/// (measured against the live API, 2026-08-05). Sending it only when
+/// it actually moves is what lets a routine push run over a registered
+/// stack untouched — see [`crate::native_stack`].
+///
+/// A payload without `base.ref` (a mock, a proxy, a future API
+/// version) falls back to sending the key, which is what this code did
+/// unconditionally before.
+///
+/// `head` needs no such care: it is not an updatable field, and GitHub
+/// ignores it silently — a PATCH carrying a `head` that does not even
+/// exist is a 200 that changes nothing, stacked or not (measured the
+/// same day). We keep sending it for parity with the Python
+/// implementation.
+fn base_if_changed<'a>(pull: &Value, planned: &'a str) -> Option<&'a str> {
+    match pull.pointer("/base/ref").and_then(Value::as_str) {
+        Some(current) if current == planned => None,
+        _ => Some(planned),
+    }
 }
 
 /// Upsert the PR for `input.action` and return the PR payload.
@@ -113,6 +144,8 @@ pub async fn create_or_update_pr(
                 .ok_or_else(|| CliError::Generic("update pull payload missing `number`".into()))?;
             let path = format!("/repos/{user}/{repo}/pulls/{number}");
 
+            let base = base_if_changed(pull, input.base_branch);
+
             // Two PATCH body shapes for the same endpoint: when
             // `keep_pull_request_title_and_body` is true we want
             // GitHub to leave `title` alone, so we just don't
@@ -123,14 +156,14 @@ pub async fn create_or_update_pr(
                 let existing_body = pull.get("body").and_then(Value::as_str).unwrap_or("");
                 let body = UpdateBodyKeepTitle {
                     head: input.dest_branch,
-                    base: input.base_branch,
+                    base,
                     body: format_pull_description(existing_body, input.depends_on_number),
                 };
                 let _: Value = client.patch(&path, &body).await?;
             } else {
                 let body = UpdateBodyBoth {
                     head: input.dest_branch,
-                    base: input.base_branch,
+                    base,
                     title: input.title,
                     body: format_pull_description(input.message, input.depends_on_number),
                 };
@@ -308,6 +341,8 @@ mod tests {
         let existing = json!({
             "number": 42,
             "body": "old body\n\nDepends-On: #999",
+            // Base is moving (stack/x → main), so the key is sent.
+            "base": {"ref": "stack/x"},
         });
         Mock::given(method("PATCH"))
             .and(wm_path("/repos/o/r/pulls/42"))
@@ -341,6 +376,117 @@ mod tests {
         // Body is the commit message, not the old PR body, when
         // keep_pull_request_title_and_body is false.
         assert_eq!(body["body"], "feat: x\n\nfresh body");
+    }
+
+    #[tokio::test]
+    async fn update_omits_base_when_the_pull_already_targets_it() {
+        // The routine push: nothing was reordered, so the PR's base is
+        // the one the planner picked. Sending it anyway is what makes
+        // GitHub 422 the PATCH while the PR is in a native stack, even
+        // though nothing is moving.
+        let server = MockServer::start().await;
+        let existing = json!({
+            "number": 42,
+            "body": "old body",
+            "base": {"ref": "stack/tester/feature/a--Iaaaaaa"},
+        });
+        Mock::given(method("PATCH"))
+            .and(wm_path("/repos/o/r/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        let input = PrUpsertInput {
+            action: Action::Update,
+            title: "feat: x",
+            message: "feat: x",
+            dest_branch: "jd/feature/Ibbbbbb",
+            base_branch: "stack/tester/feature/a--Iaaaaaa",
+            pull: Some(&existing),
+            depends_on_number: None,
+            create_as_draft: false,
+            keep_pull_request_title_and_body: false,
+        };
+        create_or_update_pr(&client(&server), "o", "r", input)
+            .await
+            .unwrap();
+
+        let body = request_body(&server.received_requests().await.unwrap()[0]);
+        assert!(
+            body.get("base").is_none(),
+            "an unchanged base must not be sent at all, got: {body}",
+        );
+        // The rest of the update still happens.
+        assert_eq!(body["title"], "feat: x");
+        assert_eq!(body["head"], "jd/feature/Ibbbbbb");
+    }
+
+    #[tokio::test]
+    async fn update_sends_base_when_the_pull_is_actually_retargeted() {
+        // The reorder/drop path: the planner moved this PR, so the key
+        // has to be there — and this is the case that legitimately
+        // needs the native stack dissolved first.
+        let server = MockServer::start().await;
+        let existing = json!({
+            "number": 42,
+            "body": "old body",
+            "base": {"ref": "stack/tester/feature/a--Iaaaaaa"},
+        });
+        Mock::given(method("PATCH"))
+            .and(wm_path("/repos/o/r/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        let input = PrUpsertInput {
+            action: Action::Update,
+            title: "feat: x",
+            message: "feat: x",
+            dest_branch: "jd/feature/Ibbbbbb",
+            base_branch: "main",
+            pull: Some(&existing),
+            depends_on_number: None,
+            create_as_draft: false,
+            keep_pull_request_title_and_body: false,
+        };
+        create_or_update_pr(&client(&server), "o", "r", input)
+            .await
+            .unwrap();
+
+        let body = request_body(&server.received_requests().await.unwrap()[0]);
+        assert_eq!(body["base"], "main");
+    }
+
+    #[tokio::test]
+    async fn update_sends_base_when_the_payload_does_not_say_what_it_is() {
+        // Unknown current base → behave as this code always did and
+        // send it. Better a redundant key than a PR left on a stale
+        // base because a payload was missing a field.
+        let server = MockServer::start().await;
+        let existing = json!({"number": 42, "body": "old body"});
+        Mock::given(method("PATCH"))
+            .and(wm_path("/repos/o/r/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        let input = PrUpsertInput {
+            action: Action::Update,
+            title: "feat: x",
+            message: "feat: x",
+            dest_branch: "b",
+            base_branch: "main",
+            pull: Some(&existing),
+            depends_on_number: None,
+            create_as_draft: false,
+            keep_pull_request_title_and_body: true,
+        };
+        create_or_update_pr(&client(&server), "o", "r", input)
+            .await
+            .unwrap();
+
+        let body = request_body(&server.received_requests().await.unwrap()[0]);
+        assert_eq!(body["base"], "main");
     }
 
     #[tokio::test]

@@ -21,6 +21,20 @@
 //! 10. Upsert stack comments, and render + upsert each prepared
 //!     revision-history comment, per PR via [`crate::comment_upsert`].
 //! 11. Tear down orphan branches.
+//! 12. With `--github-native`, bring GitHub's native stack in line
+//!     with what was just pushed, via [`crate::native_stack`].
+//!
+//! Step 12 has a conditional step 0. A registered stack blocks one
+//! thing: changing a PR's base. So a push that retargets a PR, or
+//! tears down an orphan branch (which is only survivable because the
+//! survivors were retargeted first), dissolves the registration
+//! *before* step 5 and rebuilds it in step 12 — the fence is why the
+//! two steps are far apart. A push that only refreshes commits does
+//! neither and leaves the registration alone; step 12 then extends it
+//! if changes were added on top, and otherwise issues no request at
+//! all. See [`crate::native_stack`] for the measured behaviour behind
+//! each case. Between the two steps the flow is exactly what it is
+//! with the flag off.
 //!
 //! PR upserts run sequentially. Async here is incidental — it comes
 //! from reqwest's async-only client, not from a need for concurrency:
@@ -44,6 +58,7 @@ use crate::changes::Action;
 use crate::commands::sync as sync_cmd;
 use crate::comment_upsert;
 use crate::local_commits;
+use crate::native_stack;
 use crate::notes_push::{self, NotesLease, PushEntry};
 use crate::plan::{self, PlannedChange, PlannedChanges, PlannerOpts};
 use crate::pr_upsert::{self, PrUpsertInput, StaleBase};
@@ -93,6 +108,11 @@ pub struct Options<'a> {
     pub only_update_existing_pulls: bool,
     pub revision_history: bool,
     pub no_verify: bool,
+    /// Opt-in: also register the pushed stack with GitHub's native
+    /// Stacks API. Off by default — when off, this flow issues no
+    /// stacks request at all and behaves exactly as it did before the
+    /// feature existed. See [`crate::native_stack`].
+    pub github_native: bool,
 }
 
 /// Outcome of [`run`]. `DryRun` carries the plan + the rebase
@@ -512,6 +532,58 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         }
     }
 
+    // Step 0 of the native-stack fence — but only for the pushes that
+    // need one. A live registration blocks exactly one thing: a `PATCH
+    // /pulls/{n}` whose body carries `base`. So the fence is needed
+    // when, and only when, this push
+    //
+    //   * retargets a PR — either through `neutralize_stale_bases`
+    //     below or through the upsert itself, which sends `base` only
+    //     when it moves (see `pr_upsert::base_if_changed`); or
+    //   * tears down an orphan branch, which closes every PR still
+    //     based on it. That is survivable only because the survivors
+    //     were retargeted first — the very PATCH the lock blocks — and
+    //     it would anyway leave the dropped PR in the stack, closed.
+    //
+    // A push that merely refreshes commits does neither: its PATCHes
+    // carry no `base`, and the force-push leaves membership intact. It
+    // runs over the registered stack untouched. See
+    // [`crate::native_stack`] for the measurements.
+    //
+    // `registered_stack` is read from the PR payloads the pre-flight
+    // already fetched — GitHub puts the `stack` object on them — so
+    // discovering the current membership costs no extra request.
+    let registered_stack = opts
+        .github_native
+        .then(|| {
+            native_stack::registered_number(
+                planned.locals.iter().filter_map(|p| p.change.pull.as_ref()),
+            )
+        })
+        .flatten();
+    let retargets_a_pull = planned
+        .locals
+        .iter()
+        .filter(|p| matches!(p.change.action, Action::Update))
+        .any(|p| {
+            p.change.pull.as_ref().is_some_and(|pull| {
+                pull.pointer("/base/ref").and_then(Value::as_str) != Some(p.base_branch.as_str())
+            })
+        });
+    let needs_fence = retargets_a_pull || !planned.orphans.is_empty();
+    let dissolved = if let Some(number) = registered_stack
+        && needs_fence
+    {
+        // Fatal on failure: the whole point is to not proceed. Unlike
+        // the registration at the end, this one is load-bearing.
+        let unstacking = native_stack::unstack(opts.client, opts.user, opts.repo, number);
+        prog.run_optional(publishing, "unstacking on GitHub", unstacking)
+            .await?;
+        true
+    } else {
+        false
+    };
+
     // Before the force-push, repoint any Update PR whose base is
     // moving onto the trunk. A reorder can make a head branch
     // briefly an ancestor of its stale base once the atomic push
@@ -786,6 +858,83 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         prog.resolve(oidx, Mark::Noop, Some("deleted"));
     }
 
+    // Step 12 — make GitHub's registration describe the stack this
+    // push produced. Last, after the orphan teardown, so the members
+    // are the ones that survived it: retargeted during the upsert loop,
+    // with the dropped changes' branches already gone.
+    //
+    // Three outcomes, cheapest first, because a re-registration is not
+    // free — it churns the stack number and re-emits
+    // `pull_request.stacked` for every member:
+    //
+    // - the registration already describes the stack → no request;
+    // - it is missing changes on top → one `append`, which preserves
+    //   the stack and its members' registration;
+    // - anything else (a reorder, a drop, a change inserted in the
+    //   middle, or a stack we dissolved up front) → register from
+    //   scratch, which is only possible because nothing is registered
+    //   at that point.
+    if opts.github_native {
+        // The stack still standing on GitHub, if any: the one we read
+        // before the mutations and did not dissolve.
+        let live_stack = if dissolved { None } else { registered_stack };
+        // Bottom-to-top, open members only. Merged members are
+        // GitHub's to infer, and orphans aren't in `locals` at all.
+        let members: Vec<native_stack::Member> = planned
+            .locals
+            .iter()
+            .filter_map(|p| {
+                let pull = p.change.pull.as_ref()?;
+                let number = native_stack::open_pull_number(Some(pull))?;
+                Some(native_stack::Member {
+                    number,
+                    registered: live_stack.is_some_and(|n| native_stack::is_member_of(pull, n)),
+                })
+            })
+            .collect();
+        let numbers: Vec<u64> = members.iter().map(|m| m.number).collect();
+
+        // `Some(tail)` on a live stack is an append (possibly of
+        // nothing); everything else falls through to a full rebuild.
+        let tail = live_stack.zip(native_stack::appendable_tail(&members));
+        match tail {
+            Some((number, tail)) if tail.is_empty() => {
+                prog.add_resolved(Mark::Noop, format!("GitHub stack #{number} unchanged"));
+            }
+            Some((number, tail)) => {
+                let sidx = prog.add("queued");
+                let appended = prog
+                    .run(
+                        sidx,
+                        "extending GitHub stack",
+                        native_stack::append(opts.client, opts.user, opts.repo, number, &tail),
+                    )
+                    .await;
+                if appended {
+                    prog.resolve(
+                        sidx,
+                        Mark::Done,
+                        Some(&format!("added to GitHub stack #{number}")),
+                    );
+                } else {
+                    // The append is best-effort by design; when GitHub
+                    // won't extend the stack (someone dissolved it, the
+                    // chain doesn't line up) rebuild it rather than
+                    // leaving a registration that describes a stack
+                    // that no longer exists. The mutations are done, so
+                    // a failing unstack is now harmless — it just means
+                    // the registration stays as it was.
+                    let _ = native_stack::unstack(opts.client, opts.user, opts.repo, number).await;
+                    register_stack(opts, &mut prog, sidx, &numbers).await;
+                }
+            }
+            None => {
+                let sidx = prog.add("queued");
+                register_stack(opts, &mut prog, sidx, &numbers).await;
+            }
+        }
+    }
+
     // Warnings stashed during the live block (a mid-block print would
     // corrupt the in-place redraw) surface now, after the last row.
     for note in deferred_notes {
@@ -806,6 +955,31 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         planned,
         rebase: rebase_decision,
     })
+}
+
+/// Register `numbers` (bottom-to-top) as a native stack and report the
+/// outcome on progress row `idx`.
+///
+/// Never fails the push: a repo without the Stacks API, a chain with a
+/// hole in it, or a stack below GitHub's 2-PR floor all just leave the
+/// PRs unregistered, which is the state the flag-off flow produces
+/// anyway. See [`crate::native_stack::register`].
+async fn register_stack(opts: &Options<'_>, prog: &mut Progress, idx: usize, numbers: &[u64]) {
+    let registered = prog
+        .run(
+            idx,
+            "registering GitHub stack",
+            native_stack::register(opts.client, opts.user, opts.repo, numbers),
+        )
+        .await;
+    match registered {
+        Some(number) => prog.resolve(
+            idx,
+            Mark::Done,
+            Some(&format!("registered as GitHub stack #{number}")),
+        ),
+        None => prog.resolve(idx, Mark::Noop, Some("not registered on GitHub")),
+    }
 }
 
 /// Append the "what will happen" preview lines (locals first, then
