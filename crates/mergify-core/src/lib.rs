@@ -27,7 +27,7 @@ pub mod pull_request;
 pub use command_context::CommandContext;
 pub use error::CliError;
 pub use exit_code::ExitCode;
-pub use http::{ApiFlavor, Client as HttpClient, DeleteOutcome, RetryPolicy};
+pub use http::{ApiFlavor, Client as HttpClient, DeleteOutcome, Page, RetryPolicy};
 pub use output::{Output, OutputMode, StdioOutput};
 
 /// Compile-time version string taken from the crate package metadata
