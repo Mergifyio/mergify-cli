@@ -89,6 +89,7 @@ pub mod comment_upsert;
 pub mod git;
 pub mod local_commits;
 pub mod match_commit;
+pub mod native_stack;
 pub mod notes_push;
 pub mod plan;
 pub mod plan_display;

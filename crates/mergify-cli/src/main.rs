@@ -375,6 +375,9 @@ struct StackPushOpts {
     /// `mergify-cli.stack-revision-history` at dispatch time.
     revision_history: Option<bool>,
     no_verify: bool,
+    /// `None` = fall back to git config
+    /// `mergify-cli.stack-github-native` at dispatch time.
+    github_native: Option<bool>,
 }
 
 struct StackListOpts {
@@ -2244,6 +2247,9 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 let revision_history = opts.revision_history.unwrap_or_else(|| {
                     mergify_stack::stack_context::resolve_default_revision_history(None)
                 });
+                let github_native = opts.github_native.unwrap_or_else(|| {
+                    mergify_stack::stack_context::resolve_default_github_native(None)
+                });
                 let outcome = mergify_stack::commands::push::run(
                     &mergify_stack::commands::push::Options {
                         repo_dir: None,
@@ -2264,6 +2270,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         only_update_existing_pulls: opts.only_update_existing_pulls,
                         revision_history,
                         no_verify: opts.no_verify,
+                        github_native,
                     },
                 )
                 .await?;
@@ -3274,6 +3281,13 @@ struct StackPushCli {
     /// hooks).
     #[arg(long = "no-verify", action = clap::ArgAction::SetTrue)]
     no_verify: bool,
+
+    /// Also register the stack with GitHub's native Stacks API, so
+    /// GitHub shows it as a stack. Experimental, and silently skipped
+    /// where the API isn't available. Default falls back to git config
+    /// `mergify-cli.stack-github-native` (`false` when unset).
+    #[arg(long = "github-native", num_args = 0, default_missing_value = "true")]
+    github_native: Option<bool>,
 }
 
 impl From<StackPushCli> for StackPushOpts {
@@ -3293,6 +3307,7 @@ impl From<StackPushCli> for StackPushOpts {
             only_update_existing_pulls: cli.only_update_existing_pulls,
             revision_history: cli.revision_history,
             no_verify: cli.no_verify,
+            github_native: cli.github_native,
         }
     }
 }
