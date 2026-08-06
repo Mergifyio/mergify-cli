@@ -1479,6 +1479,7 @@ dependencies = [
  "tempfile",
  "terminal_size",
  "tokio",
+ "tracing",
  "unicode-width",
  "url",
  "wiremock",

@@ -3301,6 +3301,24 @@ expression: schema
                 "short": null,
                 "valueHint": null,
                 "valueNames": []
+              },
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Also register the stack with GitHub's native Stacks API, so GitHub shows it as a stack. Experimental, and silently skipped where the API isn't available. Default falls back to git config `mergify-cli.stack-github-native` (`false` when unset)",
+                "id": "github_native",
+                "kind": "option",
+                "long": "github-native",
+                "longHelp": "Also register the stack with GitHub's native Stacks API, so GitHub shows it as a stack. Experimental, and silently skipped where the API isn't available. Default falls back to git config `mergify-cli.stack-github-native` (`false` when unset)",
+                "numArgs": "0",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": [
+                  "GITHUB_NATIVE"
+                ]
               }
             ],
             "commands": [],

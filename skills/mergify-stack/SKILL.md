@@ -58,6 +58,7 @@ A branch is a stack. Keep stacks short and focused:
 ```bash
 mergify stack new NAME       # Create a new stack/branch for new work
 mergify stack push           # Push and create/update PRs
+mergify stack push --github-native  # ...and register it as a GitHub-native stack (opt-in)
 mergify stack checkout NAME  # Checkout an existing stack from GitHub (e.g. someone else's)
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
 mergify stack list           # Show commit <-> PR mapping for current stack
@@ -87,6 +88,36 @@ Use `mergify stack checkout NAME` to check out a stack that exists on GitHub (e.
 Use `mergify stack sync` to bring your stack up to date. It fetches the latest trunk, detects which PRs have been merged, removes those commits from your local branch, and rebases the remaining commits. Run this before starting new work on an existing stack.
 
 Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. It also shows CI status, review status, and merge conflicts for each PR. Use `--verbose` for detailed check names and reviewer names. Use `--json` when you need to parse the output programmatically — it includes full CI check details and review data.
+
+## GitHub-native stacks (experimental, opt-in)
+
+`mergify stack push --github-native` additionally registers the stack with
+GitHub's own Stacks API, so GitHub renders it as a stack. Off by default; turn
+it on per repo with `git config mergify-cli.stack-github-native true`.
+
+It is *additive* — Change-Ids, branch layout, stack comments and revision
+history are unchanged — and it degrades quietly: where the API isn't available
+(older GitHub Enterprise, a repo without the feature) the push reports
+`not registered on GitHub` and succeeds exactly as it would have.
+
+Two things to know before turning it on:
+
+- **A stack needs at least 2 pull requests.** GitHub rejects a 1-PR stack, so a
+  single-change stack stays a plain PR — and a 2-PR stack that loses a member
+  is dissolved rather than re-registered.
+- **Registering changes how the PRs merge.** While a stack is registered,
+  GitHub refuses the classic merge endpoint
+  (`PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` → 403) for
+  its members. That is GitHub's contract, not ours; it is the reason this is
+  opt-in.
+
+Pushing stays cheap. Refreshing commits (amend, reword, force-push) leaves the
+registration untouched, and adding a change on top extends the same stack.
+Only a push that moves a pull request's base — a reorder, a drop, a change
+inserted in the middle — dissolves the registration first and rebuilds it at
+the end, because GitHub rejects any base-branch change while a PR is stacked.
+An interrupted push therefore leaves the stack merely unregistered — never
+half-registered — and the next push repairs it.
 
 ## Amend Notes
 

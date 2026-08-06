@@ -257,6 +257,21 @@ pub fn resolve_default_revision_history(repo_dir: Option<&Path>) -> bool {
     .map_or(true, |v| v != "false")
 }
 
+/// `mergify-cli.stack-github-native`, defaulting to `false`.
+///
+/// Opt-in like `stack-create-as-draft`: only the literal string
+/// `"true"` enables it, so a stray value can't silently start
+/// registering stacks with GitHub — which changes how those pull
+/// requests can be merged (see [`crate::native_stack`]).
+#[must_use]
+pub fn resolve_default_github_native(repo_dir: Option<&Path>) -> bool {
+    run_git_capture(
+        repo_dir,
+        &["config", "--get", "mergify-cli.stack-github-native"],
+    )
+    .is_ok_and(|v| v == "true")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

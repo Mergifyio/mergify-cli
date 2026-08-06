@@ -244,6 +244,26 @@ impl Client {
             .map(drop)
     }
 
+    /// POST to `path` with **no** request body, treating 404 as
+    /// success and discarding the response body.
+    ///
+    /// For "make sure this is off" endpoints that take no body and
+    /// answer with an empty 2xx — GitHub's `POST
+    /// /repos/{o}/{r}/stacks/{n}/unstack` is the first caller. A 404
+    /// means the resource is already gone, which is exactly the
+    /// postcondition the caller wanted, so it is not an error (same
+    /// reasoning as [`Self::delete_if_exists`]).
+    ///
+    /// Distinct from [`Self::post_no_response`], which serializes a
+    /// JSON body and treats 404 as a failure: an endpoint documented
+    /// as taking no body should be sent none, not a JSON `null`.
+    pub async fn post_empty_if_exists(&self, path: &str) -> Result<(), CliError> {
+        let url = self.join(path)?;
+        self.execute_with_retry(self.inner.post(url), true, None)
+            .await
+            .map(drop)
+    }
+
     /// PUT `body` as JSON to `path` and deserialize the JSON
     /// response as `T`.
     pub async fn put<B: Serialize + ?Sized, T: DeserializeOwned>(
@@ -706,6 +726,53 @@ mod tests {
             .post_no_response("/empty", &Foo { bar: 1 })
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn post_empty_if_exists_sends_no_body_and_tolerates_404() {
+        // `POST .../unstack` is documented as taking no request body,
+        // so we must not send a JSON `null`; and a 404 (already
+        // dissolved) satisfies the caller's postcondition.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/present"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/absent"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("gone"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::GitHub);
+        client.post_empty_if_exists("/present").await.unwrap();
+        client.post_empty_if_exists("/absent").await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.body.is_empty()),
+            "no request body may be sent",
+        );
+    }
+
+    #[tokio::test]
+    async fn post_empty_if_exists_propagates_other_4xx() {
+        // Only 404 is "already done"; a 403 is a real failure the
+        // caller must see.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/denied"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::GitHub);
+        let err = client.post_empty_if_exists("/denied").await.unwrap_err();
+        assert!(matches!(err, CliError::GitHubApi(_)), "got {err:?}");
     }
 
     #[tokio::test]
