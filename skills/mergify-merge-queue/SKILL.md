@@ -37,7 +37,7 @@ mergify queue pause --reason "..."   # Pause the queue (requires reason)
 mergify queue unpause                # Resume the queue
 ```
 
-That is the whole `queue` group: `status`, `show`, `pause`, `unpause`. There is no subcommand for dequeuing a PR and none for browsing queue history — the dequeue reason comes from `queue show` on a PR that has left the queue, not from a flag.
+That is the whole `queue` group: `status`, `show`, `pause`, `unpause`. There is no subcommand for dequeuing a PR — the dequeue reason comes from `queue show` on a PR that has left the queue, not from a flag. For the full queue *trail* (every enter / checks / leave event, not just the last exit), use `mergify events --pr <PR> --since 90d` — see the `mergify-events` skill.
 
 ## Is the PR queued, dequeued, or never queued?
 
@@ -111,7 +111,7 @@ Reading the activity log is **best-effort**: a token scoped to the merge queue c
 
 ### 2. The Mergify activity log (what surface 1 reads underneath)
 
-`GET /v1/repos/{owner}/{repo}/logs` returns the queue lifecycle events, newest first. `queue show` calls this for you; go direct when it degrades (403 above), when you need the whole lifecycle rather than the last exit, or from somewhere the CLI is not installed:
+`GET /v1/repos/{owner}/{repo}/logs` returns the queue lifecycle events, newest first. `queue show` calls this for you, and `mergify events --pr <PR> --since 90d` (the `mergify-events` skill) browses the whole lifecycle from the CLI — including every event type, not just queue ones. Go direct with `curl` only when it degrades (403 above, with a token that can read the log) or from somewhere the CLI is not installed:
 
 ```bash
 REPO=owner/repo

@@ -42,6 +42,7 @@
 
 pub mod client;
 pub mod event;
+pub mod list;
 pub mod queue_leave;
 pub mod window;
 

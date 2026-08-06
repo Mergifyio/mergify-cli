@@ -105,6 +105,8 @@ Every command group maps to a section of the
   [Docs](https://docs.mergify.com/stacks/)
 - **`mergify queue`** — Inspect and control the merge queue.
   [Docs](https://docs.mergify.com/merge-queue/)
+- **`mergify events`** — Browse the events Mergify recorded for the
+  repository or one pull request, as a timeline or JSON.
 - **`mergify ci`** — Send JUnit results and pull request scopes from any CI
   provider. [Docs](https://docs.mergify.com/ci-insights/)
 - **`mergify tests`** — Look up test health and manage the flaky-test

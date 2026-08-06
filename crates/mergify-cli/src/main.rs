@@ -13,6 +13,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use chrono::TimeDelta;
 use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
@@ -29,6 +30,7 @@ use mergify_config::simulate::SimulateOptions;
 use mergify_core::OutputMode;
 use mergify_core::StdioOutput;
 use mergify_core::pull_request::PullRequestRef;
+use mergify_events::list::ListOptions as EventsListOptions;
 use mergify_freeze::common::parse_naive_datetime;
 use mergify_freeze::create::CreateOptions as FreezeCreateOptions;
 use mergify_freeze::delete::DeleteOptions as FreezeDeleteOptions;
@@ -180,6 +182,7 @@ enum NativeCommand {
     QueueUnpause(QueueUnpauseOpts),
     QueueStatus(QueueStatusOpts),
     QueueShow(QueueShowOpts),
+    Events(EventsOpts),
     FreezeList(FreezeListOpts),
     FreezeCreate(FreezeCreateOpts),
     FreezeUpdate(FreezeUpdateOpts),
@@ -544,6 +547,17 @@ struct QueueShowOpts {
     api_url: Option<String>,
     pr_number: u64,
     verbose: bool,
+    output_json: bool,
+}
+
+struct EventsOpts {
+    repository: Option<String>,
+    token: Option<String>,
+    api_url: Option<String>,
+    pr_number: Option<u64>,
+    since: Option<TimeDelta>,
+    event_types: Vec<String>,
+    limit: Option<usize>,
     output_json: bool,
 }
 
@@ -1026,6 +1040,25 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             api_url,
             pr_number,
             verbose: parsed.verbose > 0,
+            output_json: json,
+        })),
+        Subcommands::Events(EventsCliArgs {
+            repository,
+            token,
+            api_url,
+            pr,
+            since,
+            r#type,
+            limit,
+            json,
+        }) => Dispatch::Native(NativeCommand::Events(EventsOpts {
+            repository,
+            token,
+            api_url,
+            pr_number: pr,
+            since,
+            event_types: r#type,
+            limit,
             output_json: json,
         })),
         Subcommands::Freeze(FreezeArgs {
@@ -1659,6 +1692,21 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     api_url: opts.api_url.as_deref(),
                     pr_number: opts.pr_number,
                     verbose: opts.verbose,
+                    output_json: opts.output_json,
+                },
+                &mut output,
+            )
+            .await
+            .map(|()| mergify_core::ExitCode::Success),
+            NativeCommand::Events(opts) => mergify_events::list::run(
+                EventsListOptions {
+                    repository: opts.repository.as_deref(),
+                    token: opts.token.as_deref(),
+                    api_url: opts.api_url.as_deref(),
+                    pr_number: opts.pr_number,
+                    since: opts.since,
+                    event_types: opts.event_types,
+                    limit: opts.limit,
                     output_json: opts.output_json,
                 },
                 &mut output,
@@ -2682,6 +2730,14 @@ enum Subcommands {
     /// pull request's queue state, and pause or resume merging for a
     /// repository.
     Queue(QueueArgs),
+    /// Browse the events Mergify recorded for the repository.
+    ///
+    /// List the activity log as a timeline — queue enters and leaves,
+    /// merges, commands, CI Insights, every event type — for the
+    /// whole repository or one pull request (`--pr`). The output
+    /// always states the time window it covers: the last 24 hours by
+    /// default, up to the 90 days the log retains (`--since 90d`).
+    Events(EventsCliArgs),
     /// Schedule and manage merge freezes.
     ///
     /// Create, list, update, and delete freezes that temporarily stop
@@ -4205,6 +4261,52 @@ struct ShowCliArgs {
 }
 
 #[derive(clap::Args)]
+struct EventsCliArgs {
+    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
+    /// then ``GITHUB_TOKEN`` env vars.
+    #[arg(long, short = 't')]
+    token: Option<String>,
+
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u')]
+    api_url: Option<String>,
+
+    /// Repository full name (owner/repo). Falls back to
+    /// ``GITHUB_REPOSITORY`` env var.
+    #[arg(long, short = 'r')]
+    repository: Option<String>,
+
+    /// Only events for this pull request; omit to cover the whole
+    /// repository.
+    #[arg(long, value_name = "PR_NUMBER")]
+    pr: Option<u64>,
+
+    /// How far back to look: an integer with a unit — s, m, h, d or w
+    /// (e.g. 30m, 12h, 7d). Defaults to 24h; the log retains 90 days
+    /// (--since 90d is the widest useful window). The window always
+    /// ends now and is stated in the output.
+    #[arg(long, value_name = "DURATION", value_parser = mergify_events::list::parse_since)]
+    since: Option<TimeDelta>,
+
+    /// Only events of this type (e.g. action.queue.leave). Repeat the
+    /// flag to match several types; values pass to the API verbatim,
+    /// so types newer than this CLI work too.
+    #[arg(long = "type", value_name = "EVENT_TYPE")]
+    r#type: Vec<String>,
+
+    /// Stop after the newest N events instead of fetching the whole
+    /// window. The output says so when it takes effect.
+    #[arg(long, value_name = "N")]
+    limit: Option<usize>,
+
+    /// Emit a single JSON document (the raw events, newest first,
+    /// with the queried window echoed) instead of the timeline.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(clap::Args)]
 struct FreezeArgs {
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
     /// then ``GITHUB_TOKEN`` env vars.
@@ -4376,6 +4478,7 @@ mod tests {
                 "ci",
                 "tests",
                 "queue",
+                "events",
                 "freeze",
                 "stack",
                 "self-update",
@@ -4612,6 +4715,62 @@ mod tests {
         assert_eq!(opts.token.as_deref(), Some("tok"));
         assert_eq!(opts.tests_target_branch.as_deref(), Some("main"));
         assert_eq!(opts.files, vec!["report.xml"]);
+    }
+
+    #[test]
+    fn events_dispatches_natively_with_every_flag() {
+        let parsed = parse(&[
+            "events",
+            "-r",
+            "owner/repo",
+            "--pr",
+            "1740",
+            "--since",
+            "7d",
+            "--type",
+            "action.queue.leave",
+            "--type",
+            "command.queue",
+            "--limit",
+            "50",
+            "--json",
+        ]);
+        let Dispatch::Native(NativeCommand::Events(opts)) = dispatch_from_parsed(parsed) else {
+            panic!("events must dispatch to the native Events variant");
+        };
+        assert_eq!(opts.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(opts.pr_number, Some(1740));
+        assert_eq!(opts.since, Some(TimeDelta::days(7)));
+        assert_eq!(
+            opts.event_types,
+            vec!["action.queue.leave", "command.queue"],
+        );
+        assert_eq!(opts.limit, Some(50));
+        assert!(opts.output_json);
+    }
+
+    #[test]
+    fn events_defaults_to_repo_wide_last_24h() {
+        // No --pr, no --since: the command covers the repository and
+        // the run applies (and states) the 24h default itself.
+        let parsed = parse(&["events"]);
+        let Dispatch::Native(NativeCommand::Events(opts)) = dispatch_from_parsed(parsed) else {
+            panic!("events must dispatch to the native Events variant");
+        };
+        assert_eq!(opts.pr_number, None);
+        assert_eq!(opts.since, None);
+        assert!(opts.event_types.is_empty());
+        assert!(!opts.output_json);
+    }
+
+    #[test]
+    fn events_rejects_a_since_past_the_retention_cap() {
+        // The impossible window dies as a usage error carrying the
+        // fix, not as an API 422 later.
+        let Err(err) = CliRoot::try_parse_from(["mergify", "events", "--since", "94d"]) else {
+            panic!("a 94d window must be a usage error");
+        };
+        assert!(err.to_string().contains("90d"), "got: {err}");
     }
 
     #[test]
