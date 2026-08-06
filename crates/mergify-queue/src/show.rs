@@ -23,8 +23,9 @@
 //! dequeued ten minutes ago on failing CI, a PR nobody ever queued,
 //! and a PR number that does not exist. So the 404 path asks the
 //! activity log for the pull request's last `action.queue.leave` (see
-//! [`crate::last_leave`]) and reports which of those three worlds it
-//! is in, with the dequeue reason and the failing checks' URLs.
+//! [`mergify_events::queue_leave`]) and reports which of those three
+//! worlds it is in, with the dequeue reason and the failing checks'
+//! URLs.
 //!
 //! Contract, unchanged in both modes: **exit 0**, and under `--json` a
 //! `queued: false` document. The JSON gains `dequeued` (`true` /
@@ -46,14 +47,13 @@ use mergify_core::CliError;
 use mergify_core::CommandContext;
 use mergify_core::Output;
 use mergify_core::http::Client;
+use mergify_events::queue_leave;
+use mergify_events::queue_leave::LastLeave;
 use mergify_tui::StyledGlyph;
 use mergify_tui::Theme;
 use mergify_tui::relative_time;
 use mergify_tui::tree;
 use serde::Deserialize;
-
-use crate::last_leave;
-use crate::last_leave::LastLeave;
 
 pub struct ShowOptions<'a> {
     pub repository: Option<&'a str>,
@@ -178,7 +178,7 @@ async fn emit_not_queued(
 ) -> Result<(), CliError> {
     let pr_number = opts.pr_number;
     let now = Utc::now();
-    let lookup = last_leave::fetch(client, repository, pr_number, now).await;
+    let lookup = queue_leave::fetch_last(client, repository, pr_number, now).await;
     let (leave, error) = match lookup {
         Ok(leave) => (leave, None),
         Err(e) => {
@@ -202,7 +202,7 @@ async fn emit_not_queued(
     let theme = Theme::detect();
     output.emit(&(), &mut |w: &mut dyn Write| {
         if let Some(leave) = &leave {
-            return last_leave::render(w, &theme, leave, pr_number, now, opts.verbose);
+            return queue_leave::render(w, &theme, leave, pr_number, now, opts.verbose);
         }
         // The exact wording live smoke tests assert on. It is also
         // the truthful headline when the log lookup failed — the PR
@@ -211,7 +211,7 @@ async fn emit_not_queued(
         writeln!(w, "PR #{pr_number} is not in the merge queue")?;
         if error.is_none() {
             writeln!(w)?;
-            last_leave::render_no_activity(w, &theme)?;
+            queue_leave::render_no_activity(w, &theme)?;
         }
         Ok(())
     })?;

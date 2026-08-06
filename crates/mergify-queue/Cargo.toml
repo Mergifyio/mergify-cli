@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 mergify-core = { path = "../mergify-core" }
+mergify-events = { path = "../mergify-events" }
 mergify-tui = { path = "../mergify-tui" }
 anstyle = { workspace = true }
 chrono = { workspace = true }

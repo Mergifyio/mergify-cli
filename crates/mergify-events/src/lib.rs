@@ -32,9 +32,17 @@
 //!   fields every event shares — a newer engine cannot break an older
 //!   CLI, and `--json` consumers see Mergify's contract, not this
 //!   crate's.
+//!
+//! On top of the raw client sits the queue-leave **explain layer**
+//! ([`queue_leave`]): decode a pull request's last
+//! `action.queue.leave` and render why it left — the engine's own
+//! reason prose, the failing checks with their job URLs, and the next
+//! step. `queue show`'s dequeue diagnosis is a consumer of this
+//! crate, not a second implementation of the contract.
 
 pub mod client;
 pub mod event;
+pub mod queue_leave;
 pub mod window;
 
 pub use client::{Query, fetch};

@@ -1,36 +1,15 @@
-//! Diagnosis fallback for a pull request that is **not** currently in
-//! the merge queue.
+//! The queue-leave explain layer: decode a pull request's last
+//! `action.queue.leave` event and render *why* it left the merge
+//! queue — the sentence, the per-reason hint, the failing checks with
+//! their URLs, and the next step.
 //!
-//! `GET /v1/repos/<repo>/merge-queue/pull/<n>` answers only for a PR
-//! that is queued *right now*; it 404s for everything else. That 404
-//! is overloaded — it covers "dequeued ten minutes ago on failing
-//! CI", "nobody ever queued it", and "that PR number doesn't exist" —
-//! so `queue show` falls back to the activity log to tell them apart:
+//! The generic [`fetch`](crate::fetch) client owns the window,
+//! pagination and ordering traps; two are queue-specific and live
+//! here:
 //!
-//! ```text
-//! GET /v1/repos/<repo>/logs
-//!     ?pull_request=<n>
-//!     &event_type=action.queue.leave
-//!     &received_from=<now - 90d>
-//!     &per_page=1
-//! ```
-//!
-//! Four things about that request are load-bearing:
-//!
-//! - **The window.** `/logs` defaults `received_from` to
-//!   `received_to - 1 day`. Without an explicit range a PR dequeued
-//!   last week comes back as `size: 0`, which reads exactly like
-//!   never-queued — the failure mode this module exists to remove. The
-//!   API rejects a span over 93 days (422), and event retention is 90,
-//!   so [`LOOKBACK_DAYS`] asks for the whole retained history and no
-//!   more.
-//! - **The ordering.** Events come back newest-first, so `events[0]`
-//!   with `per_page=1` is the PR's *last* transition out of the queue.
-//!   A PR that conflicted, was requeued and then merged reports the
-//!   merge, not the conflict.
-//! - **The event type.** `action.queue.leave` is emitted only when the
-//!   PR actually leaves. The sibling `abort_code` values that ride on
-//!   `action.queue.checks_end` (`PR_AHEAD_DEQUEUED`,
+//! - **The event type.** `action.queue.leave` is emitted only when
+//!   the PR actually leaves. The sibling `abort_code` values that
+//!   ride on `action.queue.checks_end` (`PR_AHEAD_DEQUEUED`,
 //!   `MERGE_QUEUE_RESET`, `CHECKS_RETRIED`, …) interrupt the *checks*
 //!   while the PR stays queued; filtering on the event type is what
 //!   keeps them out of this diagnosis. Reporting one as a dequeue
@@ -48,7 +27,6 @@
 use std::io::Write;
 
 use chrono::DateTime;
-use chrono::TimeDelta;
 use chrono::Utc;
 use mergify_core::CliError;
 use mergify_core::http::Client;
@@ -56,11 +34,10 @@ use mergify_tui::Theme;
 use mergify_tui::relative_time;
 use serde::Deserialize;
 
-/// How far back to look for the pull request's last queue exit.
-/// Bounded by the API on both sides: `/logs` retains 90 days of
-/// events and rejects a `received_from`/`received_to` span over 93
-/// days with a 422.
-const LOOKBACK_DAYS: i64 = 90;
+use crate::client::Query;
+use crate::event::Event;
+use crate::window::RETENTION_DAYS;
+use crate::window::Window;
 
 const LEAVE_EVENT_TYPE: &str = "action.queue.leave";
 
@@ -82,6 +59,20 @@ pub struct LastLeave {
 }
 
 impl LastLeave {
+    /// Decode the leave-specific view out of a fetched [`Event`].
+    ///
+    /// # Errors
+    ///
+    /// A payload whose fields have the wrong shape fails with a
+    /// wrapped decode error; callers treat that like an unreadable
+    /// log, never as "no dequeue found".
+    pub fn from_event(event: Event) -> Result<Self, CliError> {
+        let raw = event.raw;
+        let event: LeaveEvent = serde_json::from_value(raw.clone())
+            .map_err(|e| CliError::wrap("decode queue leave event", e))?;
+        Ok(Self { raw, event })
+    }
+
     /// Whether the PR *left the queue without merging* — the answer
     /// `queued: false` alone could never give.
     #[must_use]
@@ -164,12 +155,6 @@ impl LeaveCheck {
     }
 }
 
-#[derive(Deserialize)]
-struct EventsResponse {
-    #[serde(default)]
-    events: Vec<serde_json::Value>,
-}
-
 /// Fetch the pull request's last exit from the merge queue, or `None`
 /// when the activity log holds no `action.queue.leave` for it in the
 /// retained window (the genuine never-queued case, and the case of a
@@ -181,36 +166,25 @@ struct EventsResponse {
 /// determine", not as a command failure: `queue show` must keep
 /// answering (and exiting 0) for a token that cannot read the
 /// repository's activity log.
-pub async fn fetch(
+pub async fn fetch_last(
     client: &Client,
     repository: &str,
     pr_number: u64,
     now: DateTime<Utc>,
 ) -> Result<Option<LastLeave>, CliError> {
-    let path = format!("/v1/repos/{repository}/logs");
-    let received_from = (now - TimeDelta::days(LOOKBACK_DAYS)).to_rfc3339();
-    let pr = pr_number.to_string();
-
-    let response: EventsResponse = client
-        .get_with_query(
-            &path,
-            &[
-                ("pull_request", pr.as_str()),
-                ("event_type", LEAVE_EVENT_TYPE),
-                ("received_from", received_from.as_str()),
-                // Newest-first ordering makes the single returned
-                // event the PR's latest exit.
-                ("per_page", "1"),
-            ],
-        )
-        .await?;
-
-    let Some(raw) = response.events.into_iter().next() else {
-        return Ok(None);
+    let query = Query {
+        pull_request: Some(pr_number),
+        event_types: vec![LEAVE_EVENT_TYPE.to_string()],
+        window: Window::retained(now),
+        // Newest-first ordering makes the single fetched event the
+        // PR's latest exit.
+        limit: Some(1),
     };
-    let event: LeaveEvent = serde_json::from_value(raw.clone())
-        .map_err(|e| CliError::wrap("decode queue leave event", e))?;
-    Ok(Some(LastLeave { raw, event }))
+    let events = crate::client::fetch(client, repository, &query).await?;
+    match events.into_iter().next() {
+        Some(event) => LastLeave::from_event(event).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// Render the diagnosis for a PR that left the merge queue: a
@@ -378,7 +352,7 @@ fn print_failing_checks(
 pub fn render_no_activity(w: &mut dyn Write, theme: &Theme) -> std::io::Result<()> {
     writeln!(
         w,
-        "  {D}No merge-queue activity in the last {LOOKBACK_DAYS} days.{R}",
+        "  {D}No merge-queue activity in the last {RETENTION_DAYS} days.{R}",
         D = theme.dim,
         R = theme.reset,
     )
@@ -467,16 +441,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_sends_the_queue_leave_query_with_a_90_day_window() {
-        // Every one of these four parameters is a documented trap:
-        // the default 1-day window hides older dequeues, the event
-        // type keeps `checks_end` abort codes (which do NOT dequeue)
-        // out, newest-first + per_page=1 selects the latest exit.
+    async fn fetch_last_sends_the_queue_leave_query_with_a_90_day_window() {
+        // Every one of these parameters is a documented trap: the
+        // default 1-day window hides older dequeues, the event type
+        // keeps `checks_end` abort codes (which do NOT dequeue) out,
+        // newest-first + a single-event page selects the latest exit.
         let server = MockServer::start().await;
         arrange(&server, vec![checks_failed_event()]).await;
 
         let now = at("2026-07-30T00:00:00Z");
-        let got = fetch(&client(&server), "owner/repo", 1700, now)
+        let got = fetch_last(&client(&server), "owner/repo", 1700, now)
             .await
             .unwrap();
         assert!(got.is_some());
@@ -508,11 +482,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_returns_none_when_the_log_holds_no_leave_event() {
+    async fn fetch_last_returns_none_when_the_log_holds_no_leave_event() {
         let server = MockServer::start().await;
         arrange(&server, vec![]).await;
 
-        let got = fetch(
+        let got = fetch_last(
             &client(&server),
             "owner/repo",
             999,
@@ -524,13 +498,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_tolerates_an_event_missing_every_optional_field() {
+    async fn fetch_last_tolerates_an_event_missing_every_optional_field() {
         // A payload the CLI has never seen must still produce a
         // diagnosis rather than a decode error.
         let server = MockServer::start().await;
         arrange(&server, vec![json!({"type": "action.queue.leave"})]).await;
 
-        let got = fetch(
+        let got = fetch_last(
             &client(&server),
             "owner/repo",
             1,
@@ -551,7 +525,7 @@ mod tests {
         event["metadata"]["dequeue_code"] = json!("PR_MERGED");
         arrange(&server, vec![event]).await;
 
-        let got = fetch(
+        let got = fetch_last(
             &client(&server),
             "owner/repo",
             1700,
@@ -582,8 +556,7 @@ mod tests {
     }
 
     fn leave_from(raw: serde_json::Value) -> LastLeave {
-        let event = serde_json::from_value(raw.clone()).unwrap();
-        LastLeave { raw, event }
+        LastLeave::from_event(Event::from_raw(raw)).unwrap()
     }
 
     #[test]

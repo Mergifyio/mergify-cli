@@ -1439,6 +1439,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "mergify-core",
+ "mergify-tui",
  "serde",
  "serde_json",
  "thiserror",
@@ -1470,6 +1471,7 @@ dependencies = [
  "anstyle",
  "chrono",
  "mergify-core",
+ "mergify-events",
  "mergify-test-support",
  "mergify-tui",
  "serde",
