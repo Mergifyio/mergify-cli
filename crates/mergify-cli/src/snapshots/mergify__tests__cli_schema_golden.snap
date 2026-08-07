@@ -1859,14 +1859,14 @@ expression: schema
             ]
           },
           {
-            "default": null,
+            "default": "100",
             "env": null,
             "global": false,
-            "help": "Stop after the newest N events instead of fetching the whole window. The output says so when it takes effect",
+            "help": "Stop after the newest N events. The default is one API page — a busy repository records thousands of events a day, so fetching the whole window takes minutes. The output says when the cap took effect; raise it to read further back",
             "id": "limit",
             "kind": "option",
             "long": "limit",
-            "longHelp": "Stop after the newest N events instead of fetching the whole window. The output says so when it takes effect",
+            "longHelp": "Stop after the newest N events. The default is one API page — a busy repository records thousands of events a day, so fetching the whole window takes minutes. The output says when the cap took effect; raise it to read further back",
             "numArgs": "1",
             "possibleValues": [],
             "required": false,
@@ -1894,7 +1894,7 @@ expression: schema
           }
         ],
         "commands": [],
-        "longAbout": "Browse the events Mergify recorded for the repository.\n\nList the activity log as a timeline — queue enters and leaves, merges, commands, CI Insights, every event type — for the whole repository or one pull request (`--pr`). The output always states the time window it covers: the last 24 hours by default, up to the 90 days the log retains (`--since 90d`).",
+        "longAbout": "Browse the events Mergify recorded for the repository.\n\nList the activity log as a timeline — queue enters and leaves, merges, commands, CI Insights, every event type — for the whole repository or one pull request (`--pr`). The output always states the time window it covers: the last 24 hours by default, up to the 90 days the log retains (`--since 90d`), and the newest page of events within it (`--limit`).",
         "name": "events",
         "path": [
           "mergify",

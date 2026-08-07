@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 mergify-core = { path = "../mergify-core" }
 mergify-tui = { path = "../mergify-tui" }
+anstyle = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
