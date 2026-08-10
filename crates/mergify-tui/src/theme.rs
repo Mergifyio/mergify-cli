@@ -30,6 +30,11 @@ static COLOR_CHOICE: OnceLock<ColorChoice> = OnceLock::new();
 /// Record the process-wide color preference (from `--color`), once,
 /// at startup before any [`Theme::detect`]. Subsequent calls are
 /// ignored, so a stray second call can't flip colors mid-run.
+///
+/// Calling this is also what makes color possible at all: until it
+/// does, [`Theme::detect`] reports disabled. Only the CLI entry point
+/// calls it, so a process that never went through `main` — a test
+/// harness, a doctest, an embedder — is never colored.
 pub fn set_color_choice(choice: ColorChoice) {
     let _ = COLOR_CHOICE.set(choice);
 }
@@ -40,7 +45,7 @@ pub fn set_color_choice(choice: ColorChoice) {
 /// nothing); `reset` mirrors that with `"\x1b[0m"` vs `""`.
 ///
 /// Construct via [`Theme::detect`] for the production policy
-/// (TTY-only, `NO_COLOR`-aware, suppressed under `cfg!(test)`).
+/// (TTY-only, `NO_COLOR`-aware, off outside the CLI entry point).
 /// Tests that need to assert on styled output explicitly can pass
 /// `enabled = true` to [`Theme::new`].
 pub struct Theme {
@@ -69,9 +74,10 @@ impl Theme {
     ///
     /// Policy:
     ///
-    /// 1. `cfg!(test)` ⇒ disabled. `cargo test` may inherit a TTY
-    ///    parent stdout, but tests assert on in-memory buffers and
-    ///    shouldn't take a dependency on the developer's terminal.
+    /// 1. No [`set_color_choice`] yet ⇒ disabled. Only the CLI entry
+    ///    point records one, so this is a test harness or an embedder:
+    ///    it asserts on in-memory buffers and must not take a
+    ///    dependency on the developer's terminal or environment.
     /// 2. `--color always`/`never` (via [`set_color_choice`]) wins.
     /// 3. Otherwise (`auto`): `NO_COLOR` forces off; `FORCE_COLOR` /
     ///    `CLICOLOR_FORCE` force on (e.g. through a pager or CI
@@ -117,11 +123,18 @@ impl Theme {
 /// Pure color decision, factored out of [`colors_enabled`] so the
 /// precedence is unit-testable without touching global state, env, or
 /// the real TTY.
-fn resolve_enabled(choice: ColorChoice, no_color: bool, force_color: bool, is_tty: bool) -> bool {
+fn resolve_enabled(
+    choice: Option<ColorChoice>,
+    no_color: bool,
+    force_color: bool,
+    is_tty: bool,
+) -> bool {
     match choice {
-        ColorChoice::Always => true,
-        ColorChoice::Never => false,
-        ColorChoice::Auto => {
+        Some(ColorChoice::Always) => true,
+        // `None` is nobody having recorded a preference, which means
+        // nobody is watching a terminal — see [`set_color_choice`].
+        None | Some(ColorChoice::Never) => false,
+        Some(ColorChoice::Auto) => {
             if no_color {
                 false
             } else if force_color {
@@ -134,11 +147,13 @@ fn resolve_enabled(choice: ColorChoice, no_color: bool, force_color: bool, is_tt
 }
 
 pub(crate) fn colors_enabled() -> bool {
-    // Tests assert on in-memory buffers; never depend on the dev's TTY.
-    if cfg!(test) {
-        return false;
-    }
-    let choice = COLOR_CHOICE.get().copied().unwrap_or_default();
+    // An unset choice means we are not the CLI: colors off. This
+    // used to be `cfg!(test)`, which cannot do the job — it is false
+    // whenever this crate is compiled as a dependency, so every
+    // *consumer* crate's tests were reading the developer's
+    // environment after all. `FORCE_COLOR=1 cargo test` failed on the
+    // escape sequences that leaked into asserted output.
+    let choice = COLOR_CHOICE.get().copied();
     let no_color = std::env::var_os("NO_COLOR").is_some();
     let force_color =
         std::env::var_os("FORCE_COLOR").is_some() || std::env::var_os("CLICOLOR_FORCE").is_some();
@@ -156,16 +171,35 @@ mod tests {
 
     #[test]
     fn color_precedence() {
+        // No recorded choice: not the CLI, so nothing is colored —
+        // not even with a TTY and FORCE_COLOR both saying yes. This
+        // is what keeps a consumer crate's tests reproducible.
+        assert!(!resolve_enabled(None, false, true, true));
         // Explicit choice overrides everything.
-        assert!(resolve_enabled(ColorChoice::Always, true, false, false));
-        assert!(!resolve_enabled(ColorChoice::Never, false, true, true));
+        assert!(resolve_enabled(
+            Some(ColorChoice::Always),
+            true,
+            false,
+            false
+        ));
+        assert!(!resolve_enabled(
+            Some(ColorChoice::Never),
+            false,
+            true,
+            true
+        ));
         // Auto: NO_COLOR wins over FORCE_COLOR and TTY.
-        assert!(!resolve_enabled(ColorChoice::Auto, true, true, true));
+        assert!(!resolve_enabled(Some(ColorChoice::Auto), true, true, true));
         // Auto: FORCE_COLOR turns it on without a TTY.
-        assert!(resolve_enabled(ColorChoice::Auto, false, true, false));
+        assert!(resolve_enabled(Some(ColorChoice::Auto), false, true, false));
         // Auto: otherwise follow the TTY.
-        assert!(resolve_enabled(ColorChoice::Auto, false, false, true));
-        assert!(!resolve_enabled(ColorChoice::Auto, false, false, false));
+        assert!(resolve_enabled(Some(ColorChoice::Auto), false, false, true));
+        assert!(!resolve_enabled(
+            Some(ColorChoice::Auto),
+            false,
+            false,
+            false
+        ));
     }
 
     #[test]
