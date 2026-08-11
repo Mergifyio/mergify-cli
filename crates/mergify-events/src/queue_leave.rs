@@ -180,8 +180,8 @@ pub async fn fetch_last(
         // PR's latest exit.
         limit: Some(1),
     };
-    let events = crate::client::fetch(client, repository, &query).await?;
-    match events.into_iter().next() {
+    let log = crate::client::fetch(client, repository, &query).await?;
+    match log.events.into_iter().next() {
         Some(event) => LastLeave::from_event(event).map(Some),
         None => Ok(None),
     }

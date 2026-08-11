@@ -1438,6 +1438,7 @@ dependencies = [
 name = "mergify-events"
 version = "0.0.0"
 dependencies = [
+ "anstyle",
  "chrono",
  "mergify-core",
  "mergify-test-support",

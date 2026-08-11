@@ -557,7 +557,7 @@ struct EventsOpts {
     pr_number: Option<u64>,
     since: Option<TimeDelta>,
     event_types: Vec<String>,
-    limit: Option<usize>,
+    limit: usize,
     output_json: bool,
 }
 
@@ -2736,7 +2736,8 @@ enum Subcommands {
     /// merges, commands, CI Insights, every event type — for the
     /// whole repository or one pull request (`--pr`). The output
     /// always states the time window it covers: the last 24 hours by
-    /// default, up to the 90 days the log retains (`--since 90d`).
+    /// default, up to the 90 days the log retains (`--since 90d`), and
+    /// the newest page of events within it (`--limit`).
     Events(EventsCliArgs),
     /// Schedule and manage merge freezes.
     ///
@@ -4295,10 +4296,19 @@ struct EventsCliArgs {
     #[arg(long = "type", value_name = "EVENT_TYPE")]
     r#type: Vec<String>,
 
-    /// Stop after the newest N events instead of fetching the whole
-    /// window. The output says so when it takes effect.
-    #[arg(long, value_name = "N")]
-    limit: Option<usize>,
+    /// Stop after the newest N events. The default is one API page —
+    /// a busy repository records thousands of events a day, so
+    /// fetching the whole window takes minutes. The output says when
+    /// the cap took effect; raise it to read further back.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = mergify_events::list::DEFAULT_LIMIT,
+        // Zero would fetch a page and then print none of it, which
+        // reads exactly like an empty window.
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..),
+    )]
+    limit: usize,
 
     /// Emit a single JSON document (the raw events, newest first,
     /// with the queried window echoed) instead of the timeline.
@@ -4745,14 +4755,15 @@ mod tests {
             opts.event_types,
             vec!["action.queue.leave", "command.queue"],
         );
-        assert_eq!(opts.limit, Some(50));
+        assert_eq!(opts.limit, 50);
         assert!(opts.output_json);
     }
 
     #[test]
-    fn events_defaults_to_repo_wide_last_24h() {
+    fn events_defaults_to_repo_wide_last_24h_capped_at_one_page() {
         // No --pr, no --since: the command covers the repository and
-        // the run applies (and states) the 24h default itself.
+        // the run applies (and states) the 24h default itself. The
+        // limit is not optional — an uncapped default is the bug.
         let parsed = parse(&["events"]);
         let Dispatch::Native(NativeCommand::Events(opts)) = dispatch_from_parsed(parsed) else {
             panic!("events must dispatch to the native Events variant");
@@ -4760,7 +4771,18 @@ mod tests {
         assert_eq!(opts.pr_number, None);
         assert_eq!(opts.since, None);
         assert!(opts.event_types.is_empty());
+        assert_eq!(opts.limit, mergify_events::list::DEFAULT_LIMIT);
         assert!(!opts.output_json);
+    }
+
+    #[test]
+    fn events_rejects_a_zero_limit() {
+        // `--limit 0` would fetch a page and print none of it, which
+        // is indistinguishable from an empty window.
+        let Err(err) = CliRoot::try_parse_from(["mergify", "events", "--limit", "0"]) else {
+            panic!("a zero limit must be a usage error");
+        };
+        assert!(err.to_string().contains('0'), "got: {err}");
     }
 
     #[test]

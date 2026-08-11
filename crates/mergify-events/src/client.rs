@@ -34,6 +34,22 @@ struct EventsResponse {
     events: Vec<serde_json::Value>,
 }
 
+/// The result of a [`fetch`]: the events, plus whether the limit cut
+/// the log short.
+///
+/// `truncated` is observed, not inferred: only the fetch knows it
+/// stopped on [`Query::limit`] while the window still had more to
+/// give. A caller comparing `events.len()` to the limit would call a
+/// window holding exactly `limit` events truncated, and say so in an
+/// output whose whole job is to state what it did not show.
+#[derive(Debug)]
+pub struct Log {
+    /// The window's events, newest first, capped at [`Query::limit`].
+    pub events: Vec<Event>,
+    /// The limit stopped the walk with events left in the window.
+    pub truncated: bool,
+}
+
 /// Fetch every event matching `query`, newest first.
 ///
 /// Both window bounds are always sent (the API's silent
@@ -49,15 +65,14 @@ struct EventsResponse {
 /// Propagates the API failure ([`CliError::MergifyApi`] for HTTP
 /// errors). What that means is the caller's call — `queue show`
 /// treats it as "could not determine", not as a command failure.
-pub async fn fetch(
-    client: &Client,
-    repository: &str,
-    query: &Query,
-) -> Result<Vec<Event>, CliError> {
+pub async fn fetch(client: &Client, repository: &str, query: &Query) -> Result<Log, CliError> {
     let path = format!("/v1/repos/{repository}/logs");
     let from = query.window.from().to_rfc3339();
     let to = query.window.to().to_rfc3339();
     let pull_request = query.pull_request.map(|n| n.to_string());
+    // Sizing the page to the limit is what makes a limited fetch a
+    // single request: the default limit is one page, so the no-flag
+    // command asks the API once and stops.
     let per_page = query
         .limit
         .map_or(PER_PAGE_MAX, |limit| limit.clamp(1, PER_PAGE_MAX))
@@ -76,6 +91,7 @@ pub async fn fetch(
 
     let mut raw_events: Vec<serde_json::Value> = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut truncated = false;
     loop {
         let mut pairs = base.clone();
         if let Some(cursor) = &cursor {
@@ -83,14 +99,23 @@ pub async fn fetch(
         }
         let page = client.get_page::<EventsResponse>(&path, &pairs).await?;
         raw_events.extend(page.body.events);
-        if query.limit.is_some_and(|limit| raw_events.len() >= limit) {
+        // A server bug echoing the cursor we just used would
+        // otherwise loop forever.
+        let next = page
+            .next_cursor
+            .filter(|next| Some(next) != cursor.as_ref());
+        if let Some(limit) = query.limit
+            && raw_events.len() >= limit
+        {
+            // Either this page overshot the limit, or the server says
+            // another page exists: both mean the window outlives what
+            // we return.
+            truncated = raw_events.len() > limit || next.is_some();
             break;
         }
-        match page.next_cursor {
-            // A server bug echoing the cursor we just used would
-            // otherwise loop forever.
-            Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
-            _ => break,
+        match next {
+            Some(next) => cursor = Some(next),
+            None => break,
         }
     }
 
@@ -101,7 +126,7 @@ pub async fn fetch(
     if let Some(limit) = query.limit {
         events.truncate(limit);
     }
-    Ok(events)
+    Ok(Log { events, truncated })
 }
 
 #[cfg(test)]
@@ -226,7 +251,10 @@ mod tests {
             window: Window::retained(at("2026-07-30T00:00:00Z")),
             limit: None,
         };
-        let events = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        let events = fetch(&client(&server), "owner/repo", &query)
+            .await
+            .unwrap()
+            .events;
         assert!(events.is_empty());
     }
 
@@ -277,7 +305,10 @@ mod tests {
             window: Window::retained(at("2026-07-30T00:00:00Z")),
             limit: None,
         };
-        let events = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        let events = fetch(&client(&server), "owner/repo", &query)
+            .await
+            .unwrap()
+            .events;
         let ids: Vec<u64> = events
             .iter()
             .map(|e| e.raw["id"].as_u64().unwrap())
@@ -315,8 +346,97 @@ mod tests {
             window: Window::retained(at("2026-07-30T00:00:00Z")),
             limit: Some(2),
         };
-        let events = fetch(&client(&server), "owner/repo", &query).await.unwrap();
-        assert_eq!(events.len(), 2);
+        let log = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        assert_eq!(log.events.len(), 2);
+        // The server said another page exists, so the window outlives
+        // what we return — and the caller has to be able to say so.
+        assert!(log.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_window_that_fits_the_limit_exactly_is_not_truncated() {
+        // The reason `truncated` is observed rather than inferred
+        // from `events.len() == limit`: a window holding exactly the
+        // limit is complete, and announcing "newest 2 events" over it
+        // would be a lie in an output whose job is to state what it
+        // left out.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page_body(&[
+                event(2, "2026-07-29T12:00:00Z"),
+                event(1, "2026-07-29T11:00:00Z"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let query = Query {
+            pull_request: None,
+            event_types: vec![],
+            window: Window::retained(at("2026-07-30T00:00:00Z")),
+            limit: Some(2),
+        };
+        let log = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        assert_eq!(log.events.len(), 2);
+        assert!(!log.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_page_overshooting_the_limit_is_truncated() {
+        // No `next` link, but the page held more than the caller
+        // asked for: the extras are dropped, and dropping them is
+        // exactly what `truncated` reports.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page_body(&[
+                event(3, "2026-07-29T13:00:00Z"),
+                event(2, "2026-07-29T12:00:00Z"),
+                event(1, "2026-07-29T11:00:00Z"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let query = Query {
+            pull_request: None,
+            event_types: vec![],
+            window: Window::retained(at("2026-07-30T00:00:00Z")),
+            limit: Some(2),
+        };
+        let log = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        let ids: Vec<u64> = log
+            .events
+            .iter()
+            .map(|e| e.raw["id"].as_u64().unwrap())
+            .collect();
+        // Newest first, so the limit keeps the newest.
+        assert_eq!(ids, vec![3, 2]);
+        assert!(log.truncated);
+    }
+
+    #[tokio::test]
+    async fn an_unlimited_fetch_is_never_truncated() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/repos/owner/repo/logs"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(page_body(&[event(1, "2026-07-29T11:00:00Z")])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let query = Query {
+            pull_request: None,
+            event_types: vec![],
+            window: Window::retained(at("2026-07-30T00:00:00Z")),
+            limit: None,
+        };
+        let log = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        assert!(!log.truncated);
     }
 
     #[tokio::test]
@@ -343,7 +463,10 @@ mod tests {
             window: Window::retained(at("2026-07-30T00:00:00Z")),
             limit: None,
         };
-        let events = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        let events = fetch(&client(&server), "owner/repo", &query)
+            .await
+            .unwrap()
+            .events;
         let ids: Vec<u64> = events
             .iter()
             .map(|e| e.raw["id"].as_u64().unwrap())
@@ -386,7 +509,10 @@ mod tests {
             window: Window::retained(at("2026-07-30T00:00:00Z")),
             limit: None,
         };
-        let events = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        let events = fetch(&client(&server), "owner/repo", &query)
+            .await
+            .unwrap()
+            .events;
         assert_eq!(events.len(), 2);
     }
 
@@ -414,7 +540,10 @@ mod tests {
             window: Window::retained(at("2026-07-30T00:00:00Z")),
             limit: None,
         };
-        let events = fetch(&client(&server), "owner/repo", &query).await.unwrap();
+        let events = fetch(&client(&server), "owner/repo", &query)
+            .await
+            .unwrap()
+            .events;
         assert_eq!(events[0].raw, raw);
     }
 
