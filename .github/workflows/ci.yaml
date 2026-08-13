@@ -26,7 +26,7 @@ jobs:
         # pinned in rust-toolchain.toml.
         run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: cargo fmt
         run: cargo fmt --all --check
@@ -59,7 +59,7 @@ jobs:
           echo "version=${msrv}" >> "${GITHUB_OUTPUT}"
       - name: Install MSRV toolchain
         run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: msrv
       - name: cargo check --locked on MSRV
@@ -129,7 +129,7 @@ jobs:
         # No version argument: installs the channel pinned in
         # rust-toolchain.toml.
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: smoke-${{ matrix.os }}
       - name: Build wheel
@@ -186,7 +186,7 @@ jobs:
         # No version argument: installs the channel pinned in
         # rust-toolchain.toml.
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: install-${{ matrix.os }}
 
@@ -346,7 +346,7 @@ jobs:
         # No version argument: installs the channel pinned in
         # rust-toolchain.toml.
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: self-update-${{ matrix.os }}
 
