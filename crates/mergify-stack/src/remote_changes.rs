@@ -60,14 +60,17 @@ pub struct RemoteChange {
 /// `user` / `repo` form the search scope (`repo:user/repo`).
 /// `stack_prefix` filters the search to PRs whose head branch
 /// starts with `prefix/`. `author` restricts the search to PRs
-/// the current user opened (Mergify only manages PRs the local
-/// user owns).
+/// one user opened — `Some(me)` for the commands that only ever
+/// manage the local user's own stack, `None` for `stack checkout`,
+/// which has to reach anyone's stack. Branch names are unique
+/// within a repo, so the branch filter alone already pins the
+/// result set.
 pub async fn get_remote_changes(
     client: &Client,
     user: &str,
     repo: &str,
     stack_prefix: &str,
-    author: &str,
+    author: Option<&str>,
 ) -> Result<Vec<RemoteChange>, CliError> {
     get_remote_changes_reporting(client, user, repo, stack_prefix, author, |_| {}).await
 }
@@ -81,10 +84,13 @@ pub async fn get_remote_changes_reporting(
     user: &str,
     repo: &str,
     stack_prefix: &str,
-    author: &str,
+    author: Option<&str>,
     mut on_pull: impl FnMut(u64),
 ) -> Result<Vec<RemoteChange>, CliError> {
-    let q = format!("repo:{user}/{repo} author:{author} is:pull-request head:{stack_prefix}/");
+    // Omitted entirely rather than left empty when there's no
+    // author — GitHub rejects a bare `author:` qualifier.
+    let author_filter = author.map_or_else(String::new, |a| format!("author:{a} "));
+    let q = format!("repo:{user}/{repo} {author_filter}is:pull-request head:{stack_prefix}/");
     let search: SearchResponse = client
         .get_with_query(
             "/search/issues",
@@ -385,7 +391,7 @@ mod tests {
             ApiFlavor::GitHub,
         )
         .unwrap();
-        let got = get_remote_changes(&client, "user", "repo", "prefix", "author")
+        let got = get_remote_changes(&client, "user", "repo", "prefix", Some("author"))
             .await
             .unwrap();
 
@@ -394,5 +400,41 @@ mod tests {
         assert_eq!(got[0].pull["number"], 11);
         assert_eq!(got[1].change_id, "bbbbbbbb");
         assert_eq!(got[1].pull["number"], 22);
+    }
+
+    #[tokio::test]
+    async fn get_remote_changes_omits_author_filter_when_author_is_none() {
+        // `stack checkout` works on anyone's stack, so it searches
+        // the branch alone. The `author:` qualifier has to be
+        // absent entirely — an empty one (`author:`) is a search
+        // syntax error on GitHub's side.
+        use url::Url;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .and(query_param(
+                "q",
+                "repo:user/repo is:pull-request head:prefix/",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Client::new(
+            Url::parse(&server.uri()).unwrap(),
+            "tok".to_string(),
+            ApiFlavor::GitHub,
+        )
+        .unwrap();
+        let got = get_remote_changes(&client, "user", "repo", "prefix", None)
+            .await
+            .unwrap();
+
+        assert!(got.is_empty());
     }
 }

@@ -232,9 +232,9 @@ enum NativeCommand {
     /// [--dry-run]` — fold several commits into a target,
     /// reordering them adjacent first.
     StackSquash(StackSquashOpts),
-    /// `mergify stack checkout <NAME>` — fetch a stack of pull
-    /// requests from GitHub and create a local branch tracking
-    /// the leaf head.
+    /// `mergify stack checkout <BRANCH|PR_URL>` — fetch a stack of
+    /// pull requests from GitHub and create a local branch
+    /// tracking the leaf head.
     StackCheckout(StackCheckoutOpts),
     /// `mergify stack sync [--dry-run]` — rebase the stack onto
     /// trunk, dropping commits whose PR has merged.
@@ -330,11 +330,10 @@ struct StackSquashOpts {
 }
 
 struct StackCheckoutOpts {
-    name: String,
-    author: Option<String>,
+    /// Stack branch name or pull request URL.
+    target: String,
     repository: Option<String>,
     branch: Option<String>,
-    branch_prefix: Option<String>,
     dry_run: bool,
     /// `Some((remote, branch))` from `--trunk REMOTE/BRANCH`;
     /// `None` falls back to `trunk::get_trunk` at runtime.
@@ -1213,6 +1212,32 @@ async fn resolve_stack_context(
     })
 }
 
+/// Resolve the stack branch prefix this machine pushes under, the
+/// way every other stack command computes it.
+///
+/// `stack checkout` needs it for naming only — never for finding
+/// the stack — so it takes the configured value when there is one
+/// and only falls back to `stack/<login>` (one `GET /user`) when
+/// there isn't. Getting it right is what keeps a multi-segment
+/// branch name intact across a push/checkout/push round-trip.
+async fn resolve_local_stack_prefix(
+    client: &mergify_core::HttpClient,
+) -> Result<String, mergify_core::CliError> {
+    if let Some(configured) = mergify_stack::stack_context::configured_branch_prefix(None) {
+        return Ok(configured);
+    }
+    let user_payload: serde_json::Value = client.get("/user").await?;
+    let login = user_payload
+        .get("login")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            mergify_core::CliError::GitHubApi("/user response missing `login`".to_string())
+        })?;
+    // Not `resolve_default_branch_prefix` — the config lookup it
+    // starts with was just done above and came back empty.
+    Ok(mergify_stack::stack_context::default_branch_prefix(login))
+}
+
 /// Render `stack list` output to stdout in human-readable form.
 /// Port of Python's `display_stack_list`. No colour codes — we
 /// keep it plain so log scrapers don't have to strip ANSI; users
@@ -2080,42 +2105,25 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 };
                 let remote = &trunk.0;
 
-                let slug = mergify_stack::stack_context::resolve_repo(
-                    None,
-                    opts.repository.as_deref(),
-                    remote,
-                )?;
-
-                // Author: explicit wins; else GET /user.
-                let author = if let Some(a) = opts.author.as_deref() {
-                    a.to_string()
+                // This machine's stack prefix, needed only to name
+                // the local branch and to spot a stack that isn't
+                // ours. Skipped entirely when `--branch` already
+                // names the branch, so the `/user` call it may
+                // need doesn't happen for nothing.
+                let local_stack_prefix = if opts.branch.is_some() {
+                    None
                 } else {
-                    let user_payload: serde_json::Value = client.get("/user").await?;
-                    user_payload
-                        .get("login")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .ok_or_else(|| {
-                            mergify_core::CliError::GitHubApi(
-                                "/user response missing `login`".to_string(),
-                            )
-                        })?
+                    Some(resolve_local_stack_prefix(&client).await?)
                 };
-
-                let branch_prefix = opts.branch_prefix.unwrap_or_else(|| {
-                    mergify_stack::stack_context::resolve_default_branch_prefix(None, &author)
-                });
 
                 let outcome = mergify_stack::commands::checkout::run(
                     &mergify_stack::commands::checkout::Options {
                         repo_dir: None,
                         client: &client,
-                        user: &slug.owner,
-                        repo: &slug.repo,
-                        author: &author,
-                        branch_prefix: &branch_prefix,
-                        name: &opts.name,
+                        repository: opts.repository.as_deref(),
+                        target: &opts.target,
                         local_branch: opts.branch.as_deref(),
+                        local_stack_prefix: local_stack_prefix.as_deref(),
                         remote,
                         dry_run: opts.dry_run,
                     },
@@ -2136,8 +2144,10 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         created,
                         local_branch,
                         upstream,
+                        stack_branch,
+                        under_local_prefix,
                     } => {
-                        println!("Stacked pull requests:");
+                        println!("Stacked pull requests on '{stack_branch}':");
                         for pr in &chain {
                             println!(
                                 "* #{n} {title}  {url}",
@@ -2150,6 +2160,26 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         if created {
                             println!(
                                 "Checked out '{local_branch}' tracking {upstream}",
+                            );
+                        } else {
+                            // Dry-run: name the branch it would
+                            // create, since that's half of what
+                            // there is to preview.
+                            println!(
+                                "Would check out '{local_branch}' tracking {upstream}",
+                            );
+                        }
+                        if !under_local_prefix {
+                            // Every other stack command scopes
+                            // itself to your own prefix and login,
+                            // so pushing from here would open a
+                            // second, parallel set of PRs rather
+                            // than update these ones.
+                            println!(
+                                "Note: '{stack_branch}' is not under your stack branch prefix. \
+                                 You can work on these commits, but 'mergify stack push' from \
+                                 '{local_branch}' would create a separate stack rather than \
+                                 update these pull requests.",
                             );
                         }
                         Ok(mergify_core::ExitCode::Success)
@@ -2617,7 +2647,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     &opts.user,
                     &opts.repo,
                     &opts.stack_prefix,
-                    &opts.author,
+                    Some(opts.author.as_str()),
                 )
                 .await?;
                 let json = serde_json::to_string(&changes).map_err(|e| {
@@ -2842,10 +2872,11 @@ enum StackSubcommand {
     Squash(StackSquashCli),
     /// Check out a pull request stack from GitHub.
     ///
-    /// Fetch a stack of pull requests by name and create a local branch
-    /// that tracks its leaf, so you can continue working on a stack
-    /// created elsewhere (a teammate's, or your own from another
-    /// machine).
+    /// Identify the stack by its remote branch name, or by the URL of any
+    /// pull request in it — the middle of the stack works as well as the
+    /// tip. Creates a local branch tracking the stack's leaf, so you can
+    /// continue working on a stack created elsewhere (a teammate's, or
+    /// your own from another machine).
     Checkout(StackCheckoutCli),
     /// Sync the stack with its trunk.
     ///
@@ -3150,24 +3181,21 @@ struct StackSquashCli {
 
 #[derive(clap::Args)]
 struct StackCheckoutCli {
-    /// Name of the stack to check out.
-    name: String,
-
-    /// Author of the stack. Defaults to the token's user.
-    #[arg(long)]
-    author: Option<String>,
+    /// Stack to check out: its remote branch name, or the URL of
+    /// any pull request in it.
+    target: String,
 
     /// `owner/repo`. Falls back to the URL of `--trunk`'s remote.
+    /// Ignored when the target is a pull request URL, which
+    /// carries its own.
     #[arg(long = "repository", alias = "repo")]
     repository: Option<String>,
 
-    /// Local branch name. Defaults to the normalised NAME.
+    /// Local branch name. Defaults to the stack branch minus your
+    /// own stack branch prefix, or to its last segment when the
+    /// stack isn't under that prefix.
     #[arg(long)]
     branch: Option<String>,
-
-    /// Override the stack branch prefix.
-    #[arg(long = "branch-prefix")]
-    branch_prefix: Option<String>,
 
     /// Show the plan without checking out.
     #[arg(short = 'n', long = "dry-run", action = clap::ArgAction::SetTrue)]
@@ -3187,11 +3215,9 @@ struct StackCheckoutCli {
 impl From<StackCheckoutCli> for StackCheckoutOpts {
     fn from(cli: StackCheckoutCli) -> Self {
         Self {
-            name: cli.name,
-            author: cli.author,
+            target: cli.target,
             repository: cli.repository,
             branch: cli.branch,
-            branch_prefix: cli.branch_prefix,
             dry_run: cli.dry_run,
             trunk: cli.trunk,
             token: cli.token,
