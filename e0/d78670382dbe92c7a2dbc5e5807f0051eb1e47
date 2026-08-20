@@ -1,0 +1,1 @@
+address review: correct the 're-rendered from the commit messages' claim for --keep-pull-request-title-and-body (module doc + SKILL.md), narrow description_source/restore_depends_on to pub(crate), and rename the two native-registration tests to the names the plan's proof contract pins
