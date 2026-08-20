@@ -95,16 +95,23 @@ Use `mergify stack list` to see which commits have been pushed, which PRs they m
 GitHub's own Stacks API, so GitHub renders it as a stack. Off by default; turn
 it on per repo with `git config mergify-cli.stack-github-native true`.
 
-It is *additive* — Change-Ids, branch layout, stack comments and revision
-history are unchanged — and it degrades quietly: where the API isn't available
-(older GitHub Enterprise, a repo without the feature) the push reports
+Change-Ids, branch layout, stack comments and revision history are unchanged,
+and it degrades quietly: where the API isn't available (older GitHub
+Enterprise, a repo without the feature) the push reports
 `not registered on GitHub` and succeeds exactly as it would have.
 
-Two things to know before turning it on:
+Three things to know before turning it on:
 
 - **A stack needs at least 2 pull requests.** GitHub rejects a 1-PR stack, so a
   single-change stack stays a plain PR — and a 2-PR stack that loses a member
   is dissolved rather than re-registered.
+- **The `Depends-On:` header goes away.** A registered stack *is* the
+  dependency between two pull requests, so the CLI stops writing a second copy
+  of it into the PR descriptions. It is keyed off the registration, not off the
+  flag: when a push degrades to `not registered on GitHub`, the headers are
+  written back in the same push and Mergify keeps ordering the stack. Your
+  commit messages are never touched either way — the header only ever existed
+  in the rendered PR description.
 - **Registering changes how the PRs merge.** While a stack is registered,
   GitHub refuses the classic merge endpoint
   (`PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` → 403) for
@@ -117,7 +124,13 @@ Only a push that moves a pull request's base — a reorder, a drop, a change
 inserted in the middle — dissolves the registration first and rebuilds it at
 the end, because GitHub rejects any base-branch change while a PR is stacked.
 An interrupted push therefore leaves the stack merely unregistered — never
-half-registered — and the next push repairs it.
+half-registered. It can also leave it without its `Depends-On:` headers, since
+those are restored at the end of the push; re-running `mergify stack push`
+settles both, because every push re-renders the descriptions and recomputes the
+`Depends-On:` markers from the stack's current shape — including with
+`--keep-pull-request-title-and-body`, where the description is re-rendered from
+the pull request's own body rather than the commit message, and the marker is
+still stripped and re-appended rather than carried over.
 
 ## Amend Notes
 

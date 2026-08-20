@@ -148,6 +148,16 @@ async fn mock_github_creating(pr_numbers: &[u64]) -> MockServer {
             .await;
     }
 
+    // The push never patches a pull request it just created — this
+    // mock is here for the one thing that does: writing a
+    // `Depends-On:` header back after a registration that did not
+    // happen.
+    Mock::given(method("PATCH"))
+        .and(path_regex(r"^/repos/myorg/myrepo/pulls/\d+$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+
     // Stack comments: none exist, so each PR gets a POST.
     Mock::given(method("GET"))
         .and(path_regex(r"^/repos/myorg/myrepo/issues/\d+/comments$"))
@@ -303,6 +313,111 @@ async fn without_the_flag_no_stacks_request_is_ever_sent() {
         log.iter().all(|r| !r.contains("/stacks")),
         "flag off must not touch the Stacks API, got: {log:#?}",
     );
+    // …and the `Depends-On:` chain is written exactly as it always was.
+    let bodies = pull_post_bodies(&server).await;
+    assert_eq!(bodies.len(), 2, "two PRs are created: {bodies:#?}");
+    assert!(
+        bodies[1]["body"]
+            .as_str()
+            .unwrap()
+            .contains("Depends-On: #101"),
+        "the upper PR must chain to the lower one, got: {}",
+        bodies[1],
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn depends_on_omitted_when_native_registration_succeeds() {
+    // The point of the flag: once GitHub holds the order, the header
+    // is a second copy of it, in prose, that a reader has to reconcile
+    // against the first. One edge, one source of truth.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let server = mock_github_creating(&[101, 102]).await;
+    Mock::given(method("POST"))
+        .and(wm_path("/repos/myorg/myrepo/stacks"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"number": 12})))
+        .mount(&server)
+        .await;
+
+    assert_success(&run_push(&local, &server.uri(), &["--github-native"]));
+
+    let descriptions = written_descriptions(&server).await;
+    assert_eq!(
+        descriptions.len(),
+        2,
+        "two PRs are created: {descriptions:#?}"
+    );
+    for description in &descriptions {
+        assert!(
+            !description.contains("Depends-On"),
+            "a registered stack needs no marker, got: {description:?}",
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn depends_on_restored_when_native_registration_does_not_happen() {
+    // The whole reason the removal is keyed off the registration and
+    // not off the flag. `--github-native` degrades silently by design,
+    // and a stack that is neither registered on GitHub nor chained by
+    // markers has no ordering anywhere: Mergify would let a mid-stack
+    // pull request merge ahead of the one below it.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let server = mock_github_creating(&[101, 102]).await;
+    Mock::given(method("POST"))
+        .and(wm_path("/repos/myorg/myrepo/stacks"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+        .mount(&server)
+        .await;
+
+    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    assert_success(&output);
+
+    // The repair runs after the failed registration, and only for the
+    // pull request that actually has a predecessor.
+    let log = request_log(&server).await;
+    let register = log
+        .iter()
+        .position(|r| r == "POST /repos/myorg/myrepo/stacks")
+        .expect("registration is attempted");
+    let repair = log
+        .iter()
+        .position(|r| r == "PATCH /repos/myorg/myrepo/pulls/102")
+        .unwrap_or_else(|| panic!("no repair PATCH in {log:#?}"));
+    assert!(
+        repair > register,
+        "repair must follow the verdict: {log:#?}"
+    );
+    assert!(
+        !log.contains(&"PATCH /repos/myorg/myrepo/pulls/101".to_string()),
+        "the bottom PR has no predecessor to restore: {log:#?}",
+    );
+
+    let patched = pull_patch_bodies(&server).await;
+    assert_eq!(patched.len(), 1, "one body is rewritten: {patched:#?}");
+    assert!(
+        patched[0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("Depends-On: #101"),
+        "the marker must come back pointing at the predecessor, got: {}",
+        patched[0],
+    );
+    // Body only: a `base` key is what a stacked PR 422s on, and the
+    // repair has no business retargeting anything.
+    assert!(
+        patched[0].get("base").is_none() && patched[0].get("title").is_none(),
+        "the repair must touch nothing but the body, got: {}",
+        patched[0],
+    );
+
+    let out = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    assert!(
+        out.contains("Depends-On"),
+        "the fallback should be stated, got: {out}",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -404,6 +519,38 @@ async fn pull_patch_bodies(server: &MockServer) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Bodies of every `POST /repos/myorg/myrepo/pulls` the server saw,
+/// in order — i.e. the pull requests this push created.
+async fn pull_post_bodies(server: &MockServer) -> Vec<serde_json::Value> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "POST" && r.url.path() == "/repos/myorg/myrepo/pulls")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect()
+}
+
+/// The rendered PR descriptions this push wrote, in request order,
+/// whether by creating a pull request or by patching one.
+async fn written_descriptions(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            matches!(r.method.as_str(), "POST" | "PATCH")
+                && r.url.path().starts_with("/repos/myorg/myrepo/pulls")
+        })
+        .filter_map(|r| {
+            let body: serde_json::Value = serde_json::from_slice(&r.body).ok()?;
+            Some(body.get("body")?.as_str()?.to_string())
+        })
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_routine_push_leaves_the_registration_completely_alone() {
     // The answer to "does this churn the API on every push?": no. The
@@ -439,6 +586,10 @@ async fn a_routine_push_leaves_the_registration_completely_alone() {
             body.get("base").is_none(),
             "an unchanged base must not be sent — GitHub 422s the whole \
              PATCH while the PR is stacked, got: {body}",
+        );
+        assert!(
+            !body["body"].as_str().unwrap().contains("Depends-On"),
+            "stack #7 still holds the order, so no marker is written: {body}",
         );
     }
     let out = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
