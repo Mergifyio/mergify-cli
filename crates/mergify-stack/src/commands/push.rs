@@ -22,7 +22,9 @@
 //!     revision-history comment, per PR via [`crate::comment_upsert`].
 //! 11. Tear down orphan branches.
 //! 12. With `--github-native`, bring GitHub's native stack in line
-//!     with what was just pushed, via [`crate::native_stack`].
+//!     with what was just pushed, via [`crate::native_stack`], and
+//!     restore any `Depends-On:` header step 9 left out if it did not
+//!     take.
 //!
 //! Step 12 has a conditional step 0. A registered stack blocks one
 //! thing: changing a PR's base. So a push that retargets a PR, or
@@ -34,7 +36,22 @@
 //! if changes were added on top, and otherwise issues no request at
 //! all. See [`crate::native_stack`] for the measured behaviour behind
 //! each case. Between the two steps the flow is exactly what it is
-//! with the flag off.
+//! with the flag off, with one exception: step 9 renders the PR bodies
+//! without their `Depends-On:` header, because a registered stack is
+//! the dependency edge and a second copy of it in prose is the one
+//! users read. That is a bet on step 12, which is allowed to quietly
+//! not happen — so the headers are held and written back when it
+//! doesn't, rather than being dropped on the strength of the flag.
+//! The bet is settled inside the push, so the only way to end up with
+//! neither the registration nor the headers is a push that *fails*
+//! between steps 9 and 12 — and re-running it settles the stack either
+//! way, because every push re-renders each body and recomputes the
+//! marker from the stack's current shape. That holds whichever text
+//! the body is rendered from — the commit message, or the pull
+//! request's own body under `--keep-pull-request-title-and-body`
+//! (see [`crate::pr_upsert::description_source`]): the marker is
+//! stripped and re-appended from the resolved predecessor either way,
+//! never carried over from the source text.
 //!
 //! PR upserts run sequentially. Async here is incidental — it comes
 //! from reqwest's async-only client, not from a need for concurrency:
@@ -712,6 +729,15 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     // Sequential per-PR upsert so each Depends-On has access to the
     // predecessor's freshly-known PR number — and fine for typical
     // stack sizes (see the module doc on why this isn't parallelised).
+    //
+    // With `--github-native` the marker is left out of the rendered
+    // bodies: a registered stack IS the ordering, held by GitHub, and
+    // a second copy of it in prose is one the reader has to reconcile.
+    // Optimistically, though — step 12 is where the registration is
+    // actually attempted, and it is allowed to quietly not happen. So
+    // every marker skipped here is remembered, and written back below
+    // if the stack ends the push unregistered.
+    let mut suppressed_markers: Vec<SuppressedMarker> = Vec::new();
     let mut last_pull_number: Option<u64> = None;
     for (i, entry) in planned.locals.iter_mut().enumerate() {
         let action = entry.change.action;
@@ -727,6 +753,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         }
         let idx = row_idx[i].expect("create/update rows are always added");
 
+        // `Some` = a marker this push is deliberately not writing.
+        let suppressed = last_pull_number.filter(|_| opts.github_native);
         let input = PrUpsertInput {
             action,
             title: &entry.change.title,
@@ -734,10 +762,17 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             dest_branch: &entry.dest_branch,
             base_branch: &entry.base_branch,
             pull: entry.change.pull.as_ref(),
-            depends_on_number: last_pull_number,
+            depends_on_number: if opts.github_native {
+                None
+            } else {
+                last_pull_number
+            },
             create_as_draft: opts.create_as_draft,
             keep_pull_request_title_and_body: opts.keep_pull_request_title_and_body,
         };
+        // Captured before the upsert consumes `input`, and owned
+        // because the loop goes on mutating `planned.locals`.
+        let restore_source = suppressed.map(|_| pr_upsert::description_source(&input).to_string());
         let active = if matches!(action, Action::Create) {
             "creating"
         } else {
@@ -753,6 +788,13 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         let number = pull.get("number").and_then(Value::as_u64);
         if let Some(n) = number {
             last_pull_number = Some(n);
+            if let (Some(depends_on_number), Some(source)) = (suppressed, restore_source) {
+                suppressed_markers.push(SuppressedMarker {
+                    pull_number: n,
+                    depends_on_number,
+                    source,
+                });
+            }
         }
         let url = pull
             .get("html_url")
@@ -874,6 +916,11 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     //   middle, or a stack we dissolved up front) → register from
     //   scratch, which is only possible because nothing is registered
     //   at that point.
+    //
+    // The outcome is load-bearing beyond the progress line: it decides
+    // whether the `Depends-On:` markers the upsert left out have to be
+    // written back.
+    let mut stack_is_registered = false;
     if opts.github_native {
         // The stack still standing on GitHub, if any: the one we read
         // before the mutations and did not dissolve.
@@ -900,6 +947,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         match tail {
             Some((number, tail)) if tail.is_empty() => {
                 prog.add_resolved(Mark::Noop, format!("GitHub stack #{number} unchanged"));
+                stack_is_registered = true;
             }
             Some((number, tail)) => {
                 let sidx = prog.add("queued");
@@ -916,6 +964,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
                         Mark::Done,
                         Some(&format!("added to GitHub stack #{number}")),
                     );
+                    stack_is_registered = true;
                 } else {
                     // The append is best-effort by design; when GitHub
                     // won't extend the stack (someone dissolved it, the
@@ -925,14 +974,50 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
                     // a failing unstack is now harmless — it just means
                     // the registration stays as it was.
                     let _ = native_stack::unstack(opts.client, opts.user, opts.repo, number).await;
-                    register_stack(opts, &mut prog, sidx, &numbers).await;
+                    stack_is_registered = register_stack(opts, &mut prog, sidx, &numbers).await;
                 }
             }
             None => {
                 let sidx = prog.add("queued");
-                register_stack(opts, &mut prog, sidx, &numbers).await;
+                stack_is_registered = register_stack(opts, &mut prog, sidx, &numbers).await;
             }
         }
+    }
+
+    // The other half of the optimism above. GitHub is not holding the
+    // order after all, so the only thing that describes it is the
+    // marker — Mergify rebuilds a stack from `Depends-On:` chains, and
+    // without them a mid-stack pull request has nothing keeping it
+    // behind its predecessor. Put them back.
+    //
+    // Fatal on failure, unlike everything else about `--github-native`:
+    // every other way this feature degrades leaves the pull requests in
+    // the state the flag-off push produces, and this one would not. A
+    // stack that is neither registered nor chained is the one outcome
+    // worth stopping for.
+    if !stack_is_registered && !suppressed_markers.is_empty() {
+        let ridx = prog.add("queued");
+        prog.run(ridx, "restoring dependencies", async {
+            for marker in &suppressed_markers {
+                pr_upsert::restore_depends_on(
+                    opts.client,
+                    opts.user,
+                    opts.repo,
+                    marker.pull_number,
+                    &marker.source,
+                    marker.depends_on_number,
+                )
+                .await?;
+            }
+            Ok::<(), CliError>(())
+        })
+        .await?;
+        prog.resolve(ridx, Mark::Done, Some("dependencies restored"));
+        deferred_notes.push(
+            "GitHub is not holding this stack's order, so the pull requests keep their \
+             `Depends-On:` headers and Mergify orders them."
+                .to_string(),
+        );
     }
 
     // Warnings stashed during the live block (a mid-block print would
@@ -957,14 +1042,34 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     })
 }
 
+/// A `Depends-On:` marker the upsert left out of a pull request body
+/// because `--github-native` was going to hand the ordering to GitHub.
+/// Held until the registration's outcome is known — see
+/// [`pr_upsert::restore_depends_on`].
+struct SuppressedMarker {
+    /// The pull request whose body is missing its marker.
+    pull_number: u64,
+    /// The predecessor the marker would have pointed at.
+    depends_on_number: u64,
+    /// The text the body was rendered from, per
+    /// [`pr_upsert::description_source`] — re-rendering from anything
+    /// else would not reproduce the body that is on the PR now.
+    source: String,
+}
+
 /// Register `numbers` (bottom-to-top) as a native stack and report the
-/// outcome on progress row `idx`.
+/// outcome on progress row `idx`. Returns whether GitHub took it.
 ///
 /// Never fails the push: a repo without the Stacks API, a chain with a
 /// hole in it, or a stack below GitHub's 2-PR floor all just leave the
 /// PRs unregistered, which is the state the flag-off flow produces
 /// anyway. See [`crate::native_stack::register`].
-async fn register_stack(opts: &Options<'_>, prog: &mut Progress, idx: usize, numbers: &[u64]) {
+async fn register_stack(
+    opts: &Options<'_>,
+    prog: &mut Progress,
+    idx: usize,
+    numbers: &[u64],
+) -> bool {
     let registered = prog
         .run(
             idx,
@@ -972,13 +1077,16 @@ async fn register_stack(opts: &Options<'_>, prog: &mut Progress, idx: usize, num
             native_stack::register(opts.client, opts.user, opts.repo, numbers),
         )
         .await;
-    match registered {
-        Some(number) => prog.resolve(
+    if let Some(number) = registered {
+        prog.resolve(
             idx,
             Mark::Done,
             Some(&format!("registered as GitHub stack #{number}")),
-        ),
-        None => prog.resolve(idx, Mark::Noop, Some("not registered on GitHub")),
+        );
+        true
+    } else {
+        prog.resolve(idx, Mark::Noop, Some("not registered on GitHub"));
+        false
     }
 }
 

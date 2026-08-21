@@ -6,7 +6,10 @@
 //!   being retargeted (see [`base_if_changed`]). Body always goes through
 //!   [`crate::push_helpers::format_pull_description`] so the
 //!   `Change-Id:` trailer is stripped and the rendered
-//!   `Depends-On:` header points at the current predecessor PR.
+//!   `Depends-On:` header points at the current predecessor PR —
+//!   unless the orchestrator suppressed it because GitHub is taking
+//!   over the ordering, in which case [`restore_depends_on`] writes it
+//!   back if that hand-over did not happen.
 //! - [`delete_orphan_branch`] — `DELETE
 //!   /repos/<u>/<r>/git/refs/heads/<branch>` for orphan PRs the
 //!   classifier flagged (open PR whose Change-Id is no longer in
@@ -115,6 +118,28 @@ fn base_if_changed<'a>(pull: &Value, planned: &'a str) -> Option<&'a str> {
     }
 }
 
+/// The text [`create_or_update_pr`] renders the PR description from:
+/// the commit message, or the pull request's own current body when
+/// `--keep-pull-request-title-and-body` is in force on an `Update`.
+///
+/// Exposed so the orchestrator can re-render the *same* description
+/// with a different `Depends-On:` target without duplicating that
+/// choice — see [`restore_depends_on`]. The two must agree: rendering
+/// the message where the upsert rendered the existing body would
+/// overwrite a PR description the user asked to keep.
+#[must_use]
+pub(crate) fn description_source<'a>(input: &PrUpsertInput<'a>) -> &'a str {
+    if matches!(input.action, Action::Update) && input.keep_pull_request_title_and_body {
+        input
+            .pull
+            .and_then(|pull| pull.get("body"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    } else {
+        input.message
+    }
+}
+
 /// Upsert the PR for `input.action` and return the PR payload.
 ///
 /// `Update` returns the existing pull verbatim (Python does the
@@ -152,12 +177,13 @@ pub async fn create_or_update_pr(
             // include the key. Sending `title: null` would
             // actually try to clear it — different from "don't
             // touch."
+            let description =
+                format_pull_description(description_source(&input), input.depends_on_number);
             if input.keep_pull_request_title_and_body {
-                let existing_body = pull.get("body").and_then(Value::as_str).unwrap_or("");
                 let body = UpdateBodyKeepTitle {
                     head: input.dest_branch,
                     base,
-                    body: format_pull_description(existing_body, input.depends_on_number),
+                    body: description,
                 };
                 let _: Value = client.patch(&path, &body).await?;
             } else {
@@ -165,7 +191,7 @@ pub async fn create_or_update_pr(
                     head: input.dest_branch,
                     base,
                     title: input.title,
-                    body: format_pull_description(input.message, input.depends_on_number),
+                    body: description,
                 };
                 let _: Value = client.patch(&path, &body).await?;
             }
@@ -175,7 +201,7 @@ pub async fn create_or_update_pr(
         Action::Create => {
             let body = CreateBody {
                 title: input.title,
-                body: format_pull_description(input.message, input.depends_on_number),
+                body: format_pull_description(description_source(&input), input.depends_on_number),
                 draft: input.create_as_draft,
                 head: input.dest_branch,
                 base: input.base_branch,
@@ -191,6 +217,42 @@ pub async fn create_or_update_pr(
             )))
         }
     }
+}
+
+#[derive(Serialize)]
+struct BodyPatch {
+    body: String,
+}
+
+/// Write the `Depends-On: #<n>` marker back into a pull request body
+/// that was rendered without one.
+///
+/// The undo half of the `--github-native` optimism: the upsert leaves
+/// the marker out because GitHub is about to hold the order itself,
+/// and this puts it back for the pushes where GitHub did not (see
+/// [`crate::native_stack::register`], which degrades to `None` rather
+/// than failing). `source` is the same string
+/// [`description_source`] handed the upsert, so the body it writes
+/// differs from the one already there by the marker and nothing else.
+///
+/// `body` is the only key sent. A PATCH carrying `base` is what a
+/// registered stack rejects (see [`base_if_changed`]), and this call
+/// site has no business touching the base anyway — by the time it
+/// runs, the push has finished retargeting.
+pub(crate) async fn restore_depends_on(
+    client: &HttpClient,
+    user: &str,
+    repo: &str,
+    number: u64,
+    source: &str,
+    depends_on_number: u64,
+) -> Result<(), CliError> {
+    let path = format!("/repos/{user}/{repo}/pulls/{number}");
+    let body = BodyPatch {
+        body: format_pull_description(source, Some(depends_on_number)),
+    };
+    let _: Value = client.patch(&path, &body).await?;
+    Ok(())
 }
 
 /// One PR whose base is about to move — input to
