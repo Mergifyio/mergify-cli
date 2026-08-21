@@ -49,11 +49,30 @@ static SHORT_CHANGEID_RE: LazyLock<Regex> =
 static BRANCH_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"/{CHANGEID_LOOSE_PATTERN}$")).unwrap());
 
-/// Strip a trailing `/Ixxxx…` Change-Id suffix from a branch
-/// name. Returns the input unchanged when there's no match.
+/// Strip a trailing Change-Id segment from a stack branch name,
+/// in either naming scheme: the legacy `/Ixxxx…` suffix or the
+/// current `/<slug>--xxxxxxxx` one. Returns the input unchanged
+/// when the last segment isn't a Change-Id segment — including
+/// when it's the *only* segment, since a branch name has to keep
+/// at least one.
+///
+/// This is what lets `stack checkout` accept a leaf branch ref
+/// (or a PR head ref) pasted verbatim and resolve it to the stack
+/// stem the rest of the stack hangs off.
 #[must_use]
 pub fn strip_branch_suffix(name: &str) -> String {
-    BRANCH_SUFFIX_RE.replace(name, "").into_owned()
+    // The legacy form goes through the loose pattern on purpose —
+    // a malformed `I<40 non-hex>` segment is still a suffix the
+    // user meant to paste, and dropping it beats searching for a
+    // stack branch that can't exist.
+    let stripped = BRANCH_SUFFIX_RE.replace(name, "");
+    if stripped != name {
+        return stripped.into_owned();
+    }
+    match name.rsplit_once('/') {
+        Some((stem, last)) if SHORT_CHANGEID_RE.is_match(last) => stem.to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// Return `true` if `value` is a strict, full-form Change-Id
@@ -210,5 +229,36 @@ mod tests {
         // Has the right shape but wrong length on the short tail.
         assert_eq!(extract_from_branch_segment("slug--abcd123"), None);
         assert_eq!(extract_from_branch_segment("slug--abcd12345"), None);
+    }
+
+    #[test]
+    fn strip_branch_suffix_removes_legacy_full_changeid_segment() {
+        assert_eq!(
+            strip_branch_suffix("stack/a/my-branch/I0123456789abcdef0123456789abcdef01234567"),
+            "stack/a/my-branch",
+        );
+    }
+
+    #[test]
+    fn strip_branch_suffix_removes_new_style_short_changeid_segment() {
+        // `stack push` names branches `<stack>/<slug>--<8 hex>`;
+        // pasting such a leaf ref into `stack checkout` must
+        // resolve to the stack stem, not to the leaf itself.
+        assert_eq!(
+            strip_branch_suffix("stack/a/my-branch/feat-a--abcd1234"),
+            "stack/a/my-branch",
+        );
+    }
+
+    #[test]
+    fn strip_branch_suffix_leaves_plain_branches_untouched() {
+        assert_eq!(
+            strip_branch_suffix("stack/a/my-branch"),
+            "stack/a/my-branch"
+        );
+        assert_eq!(strip_branch_suffix("my-feature"), "my-feature");
+        // A single segment that *is* a change-id segment is the
+        // whole branch name — nothing left to strip down to.
+        assert_eq!(strip_branch_suffix("feat-a--abcd1234"), "feat-a--abcd1234");
     }
 }
