@@ -104,7 +104,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
                 opts.user,
                 opts.repo,
                 &stack_prefix,
-                opts.author,
+                Some(opts.author),
             )
             .await?
         }

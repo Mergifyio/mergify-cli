@@ -59,7 +59,8 @@ A branch is a stack. Keep stacks short and focused:
 mergify stack new NAME       # Create a new stack/branch for new work
 mergify stack push           # Push and create/update PRs
 mergify stack push --github-native  # ...and register it as a GitHub-native stack (opt-in)
-mergify stack checkout NAME  # Checkout an existing stack from GitHub (e.g. someone else's)
+mergify stack checkout BRANCH    # Checkout an existing stack from GitHub (e.g. someone else's)
+mergify stack checkout PR_URL    # Same, from any PR in the stack — middle included
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
 mergify stack list           # Show commit <-> PR mapping for current stack
 mergify stack list --json    # Same, but machine-readable JSON output
@@ -83,7 +84,9 @@ mergify stack note --append -m "more"                  # Append to an existing n
 mergify stack note --remove                            # Remove the note from a commit
 ```
 
-Use `mergify stack checkout NAME` to check out a stack that exists on GitHub (e.g. a colleague's stack). NAME is the remote branch name of the stack. It fetches all stacked PRs, creates a local branch, and sets up tracking. Use `--branch` to override the local branch name.
+Use `mergify stack checkout` to check out a stack that exists on GitHub (e.g. a colleague's stack). The argument is either the stack's remote branch name — whatever prefix it uses, no assumption that it contains an author — or the URL of any pull request in the stack, including one from the middle. It fetches all stacked PRs, creates a local branch, and sets up tracking.
+
+The local branch defaults to the stack branch with your own stack branch prefix removed, so a stack you pushed from `feature/login` comes back as `feature/login` and a later `mergify stack push` updates the same PRs. For a stack that is not under your prefix — a colleague's — the last segment is used and checkout warns you: you can work on those commits, but `mergify stack push` from that branch would create a separate stack rather than update their pull requests. Use `--branch` to override the name. A pull request URL carries its own `owner/repo`, so `--repository` is ignored in that form.
 
 Use `mergify stack sync` to bring your stack up to date. It fetches the latest trunk, detects which PRs have been merged, removes those commits from your local branch, and rebases the remaining commits. Run this before starting new work on an existing stack.
 
