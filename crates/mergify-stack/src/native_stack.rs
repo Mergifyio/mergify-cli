@@ -1,11 +1,20 @@
 //! Opt-in registration of a pushed stack with GitHub's **native**
 //! Stacks API (`stack push --github-native`).
 //!
-//! Native membership is *additive*: Change-Id identity, the branch
+//! Native membership is *additive* in identity: Change-Id, the branch
 //! layout and the revision history stay ours. All this module does is
 //! tell GitHub "these PRs, in this order, are one stack" so its UI and
 //! its stack-aware merge path see what our stack comment already
 //! describes.
+//!
+//! It is not additive in *ordering*, and deliberately so. A registered
+//! stack holds the dependency between two pull requests, so
+//! [`crate::commands::push`] stops writing the `Depends-On:` header
+//! that used to hold it: one edge, one place it is recorded, and the
+//! one users read is no longer the redundant copy. Because
+//! [`register`] is allowed to do nothing (below), the removal is keyed
+//! off the registration having actually happened — a push that
+//! degrades keeps the header and Mergify keeps ordering the stack.
 //!
 //! # What a live registration does and does not block
 //!
