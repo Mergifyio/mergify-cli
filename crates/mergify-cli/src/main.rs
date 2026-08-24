@@ -3340,8 +3340,10 @@ struct StackPushCli {
     no_verify: bool,
 
     /// Also register the stack with GitHub's native Stacks API, so
-    /// GitHub shows it as a stack. Experimental, and silently skipped
-    /// where the API isn't available. Default falls back to git config
+    /// GitHub shows it as a stack and holds the ordering (the PR
+    /// descriptions then carry no `Depends-On:` header).
+    /// Experimental, and silently skipped where the API isn't
+    /// available. Default falls back to git config
     /// `mergify-cli.stack-github-native` (`false` when unset).
     #[arg(long = "github-native", num_args = 0, default_missing_value = "true")]
     github_native: Option<bool>,
