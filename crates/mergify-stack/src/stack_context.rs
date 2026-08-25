@@ -204,21 +204,34 @@ pub fn resolve_github_server(repo_dir: Option<&Path>) -> Result<Url, CliError> {
     Ok(url)
 }
 
-/// Resolve the default branch prefix from
-/// `mergify-cli.stack-branch-prefix`, falling back to
-/// `stack/<author>`. Mirrors `utils.get_default_branch_prefix`.
+/// The explicitly configured `mergify-cli.stack-branch-prefix`,
+/// or `None` when the repo leaves it to the default.
+///
+/// Split out from [`resolve_default_branch_prefix`] for the caller
+/// that has no author to fall back on and would rather pay for a
+/// `GET /user` only when the config is silent.
 #[must_use]
-pub fn resolve_default_branch_prefix(repo_dir: Option<&Path>, author: &str) -> String {
+pub fn configured_branch_prefix(repo_dir: Option<&Path>) -> Option<String> {
     let configured = run_git_capture(
         repo_dir,
         &["config", "--get", "mergify-cli.stack-branch-prefix"],
     )
     .unwrap_or_default();
-    if configured.is_empty() {
-        format!("stack/{author}")
-    } else {
-        configured
-    }
+    (!configured.is_empty()).then_some(configured)
+}
+
+/// The branch prefix used when nothing is configured.
+#[must_use]
+pub fn default_branch_prefix(author: &str) -> String {
+    format!("stack/{author}")
+}
+
+/// Resolve the default branch prefix from
+/// `mergify-cli.stack-branch-prefix`, falling back to
+/// `stack/<author>`. Mirrors `utils.get_default_branch_prefix`.
+#[must_use]
+pub fn resolve_default_branch_prefix(repo_dir: Option<&Path>, author: &str) -> String {
+    configured_branch_prefix(repo_dir).unwrap_or_else(|| default_branch_prefix(author))
 }
 
 /// `mergify-cli.stack-create-as-draft`, defaulting to `false`.

@@ -112,7 +112,7 @@ pub async fn run(opts: &Options<'_>) -> Result<StackListOutput, CliError> {
         opts.user,
         opts.repo,
         &stack_prefix,
-        opts.author,
+        Some(opts.author),
     )
     .await?;
     let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
