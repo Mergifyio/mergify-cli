@@ -2942,47 +2942,29 @@ expression: schema
                 "default": null,
                 "env": null,
                 "global": false,
-                "help": "Name of the stack to check out",
-                "id": "name",
+                "help": "Stack to check out: its remote branch name, or the URL of any pull request in it",
+                "id": "target",
                 "kind": "positional",
                 "long": null,
-                "longHelp": "Name of the stack to check out",
+                "longHelp": "Stack to check out: its remote branch name, or the URL of any pull request in it",
                 "numArgs": "1",
                 "possibleValues": [],
                 "required": true,
                 "short": null,
                 "valueHint": null,
                 "valueNames": [
-                  "NAME"
+                  "TARGET"
                 ]
               },
               {
                 "default": null,
                 "env": null,
                 "global": false,
-                "help": "Author of the stack. Defaults to the token's user",
-                "id": "author",
-                "kind": "option",
-                "long": "author",
-                "longHelp": "Author of the stack. Defaults to the token's user",
-                "numArgs": "1",
-                "possibleValues": [],
-                "required": false,
-                "short": null,
-                "valueHint": null,
-                "valueNames": [
-                  "AUTHOR"
-                ]
-              },
-              {
-                "default": null,
-                "env": null,
-                "global": false,
-                "help": "`owner/repo`. Falls back to the URL of `--trunk`'s remote",
+                "help": "`owner/repo`. Falls back to the URL of `--trunk`'s remote. Ignored when the target is a pull request URL, which carries its own",
                 "id": "repository",
                 "kind": "option",
                 "long": "repository",
-                "longHelp": "`owner/repo`. Falls back to the URL of `--trunk`'s remote",
+                "longHelp": "`owner/repo`. Falls back to the URL of `--trunk`'s remote. Ignored when the target is a pull request URL, which carries its own",
                 "numArgs": "1",
                 "possibleValues": [],
                 "required": false,
@@ -2996,11 +2978,11 @@ expression: schema
                 "default": null,
                 "env": null,
                 "global": false,
-                "help": "Local branch name. Defaults to the normalised NAME",
+                "help": "Local branch name. Defaults to the stack branch minus your own stack branch prefix, or to its last segment when the stack isn't under that prefix",
                 "id": "branch",
                 "kind": "option",
                 "long": "branch",
-                "longHelp": "Local branch name. Defaults to the normalised NAME",
+                "longHelp": "Local branch name. Defaults to the stack branch minus your own stack branch prefix, or to its last segment when the stack isn't under that prefix",
                 "numArgs": "1",
                 "possibleValues": [],
                 "required": false,
@@ -3008,24 +2990,6 @@ expression: schema
                 "valueHint": null,
                 "valueNames": [
                   "BRANCH"
-                ]
-              },
-              {
-                "default": null,
-                "env": null,
-                "global": false,
-                "help": "Override the stack branch prefix",
-                "id": "branch_prefix",
-                "kind": "option",
-                "long": "branch-prefix",
-                "longHelp": "Override the stack branch prefix",
-                "numArgs": "1",
-                "possibleValues": [],
-                "required": false,
-                "short": null,
-                "valueHint": null,
-                "valueNames": [
-                  "BRANCH_PREFIX"
                 ]
               },
               {
@@ -3082,7 +3046,7 @@ expression: schema
               }
             ],
             "commands": [],
-            "longAbout": "Check out a pull request stack from GitHub.\n\nFetch a stack of pull requests by name and create a local branch that tracks its leaf, so you can continue working on a stack created elsewhere (a teammate's, or your own from another machine).",
+            "longAbout": "Check out a pull request stack from GitHub.\n\nIdentify the stack by its remote branch name, or by the URL of any pull request in it — the middle of the stack works as well as the tip. Creates a local branch tracking the stack's leaf, so you can continue working on a stack created elsewhere (a teammate's, or your own from another machine).",
             "name": "checkout",
             "path": [
               "mergify",
@@ -3091,7 +3055,7 @@ expression: schema
             ],
             "source": "native",
             "subcommandRequired": false,
-            "usage": "mergify stack checkout [OPTIONS] <NAME>"
+            "usage": "mergify stack checkout [OPTIONS] <TARGET>"
           },
           {
             "about": "Sync the stack with its trunk",

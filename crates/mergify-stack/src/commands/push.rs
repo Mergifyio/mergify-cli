@@ -223,7 +223,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         opts.user,
         opts.repo,
         &stack_prefix,
-        opts.author,
+        Some(opts.author),
         move |number| reading_writer.store(number, Ordering::Relaxed),
     );
     let (owner, repo_name) = (opts.user, opts.repo);
