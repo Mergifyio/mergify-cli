@@ -239,20 +239,28 @@ fn detect_from_pull_request_event(
     }
 
     if let Some(meta) = extract_from_event(event, output)? {
-        if let Some(base) = checking_base_sha(&meta) {
-            return Ok(Some(References {
-                base: Some(base),
-                head,
-                source: ReferencesSource::MergeQueue,
-            }));
+        // Anyone who can open a pull request writes this body, so the
+        // value only becomes a base once it looks like one. Either way
+        // a payload we can't use is not metadata: fall through to the
+        // PR base below, which is the *wrong* base for a genuine batch
+        // build, so warn rather than let it be diagnosed silently.
+        match checking_base_sha(&meta) {
+            Some(base) if is_object_name(&base) => {
+                return Ok(Some(References {
+                    base: Some(base),
+                    head,
+                    source: ReferencesSource::MergeQueue,
+                }));
+            }
+            Some(rejected) => output.status(&format!(
+                "WARNING: MQ pull request checking_base_sha {} is not a git object name, skipping metadata extraction",
+                elided(&rejected),
+            ))?,
+            // No such key — the shape a future engine rename produces.
+            None => output.status(
+                "WARNING: MQ pull request metadata without checking_base_sha, skipping metadata extraction",
+            )?,
         }
-        // MQ metadata is present but carries no `checking_base_sha`
-        // (e.g. a future engine renamed it). We fall through to the PR
-        // base below, but that would be the *wrong* base for a batch
-        // build — warn so it isn't diagnosed silently.
-        output.status(
-            "WARNING: MQ pull request metadata without checking_base_sha, skipping metadata extraction",
-        )?;
     }
 
     if let Some(pr) = &event.pull_request
@@ -330,21 +338,71 @@ pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<String> {
     checking_base_sha(&crate::git::read_note(&notes_ref_short, head_sha)?)
 }
 
+/// Whether `value` is a full git object name: 40 lowercase hex
+/// digits (SHA-1) or 64 (SHA-256).
+///
+/// The gate this backs is on the *pull request body* payload alone,
+/// and that asymmetry is the point. `queue_metadata::extract_from_event`
+/// admits a body on the title prefix `merge queue: ` and nothing
+/// else, so whoever opens a pull request writes the value; the git
+/// note comes from the engine, over a push to `origin`. A value
+/// admitted here leaves the CLI as `base`: into `$GITHUB_OUTPUT` and
+/// the `--format=shell` eval for the caller's workflow, into
+/// `ci scopes`' git invocations, and onto stderr, which GitHub
+/// Actions also scans for `::` workflow commands. Something like
+/// `--output=/tmp/x` is read as an *option* by whichever of those
+/// gets it first (MRGFY-8845).
+///
+/// Gating the note as well would be worse, not better: a note the
+/// check rejected would fall through to the body path, handing the
+/// untrusted payload the precedence the note is supposed to hold, and
+/// with no warning since `real_notes_reader` has no `Output`.
+///
+/// Full object names only, no abbreviations. The engine types the
+/// field `github_types.SHAType` and writes a full SHA, and
+/// `scopes_detect::changed_files::is_sha` routes only full SHAs as
+/// revisions — an abbreviated one is fetched as a branch name and
+/// fails the run, so accepting it would buy nothing.
+fn is_object_name(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Pull `checking_base_sha` out of an engine merge-queue payload —
 /// either the git note ([`real_notes_reader`]) or the YAML block in
 /// the MQ draft PR body (`queue_metadata`), which carry the same dump.
 /// Both read it through here so neither is coupled to the payload's
 /// other keys, which the engine renames independently.
 ///
-/// Accepts the YAML scalar as either a string or (defensively) a
-/// number — a SHA is always a string in practice, but reading it
-/// tolerantly avoids silently dropping a payload over a formatting
-/// quirk.
+/// The value is returned as the payload spells it. The body path
+/// holds it to [`is_object_name`] before use; see there for why the
+/// note path does not.
 fn checking_base_sha(note: &serde_json::Value) -> Option<String> {
     match note.get("checking_base_sha")? {
         serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
         _ => None,
+    }
+}
+
+/// Render an untrusted scalar for a warning: `{:?}`-escaped, and cut
+/// to a length a log can hold.
+///
+/// Both halves are load-bearing. `output.status` writes to stderr,
+/// which GitHub Actions scans for `::` workflow commands, and `{:?}`
+/// escapes the newline that would be needed to start one. Nothing
+/// upstream bounds the scalar — `queue_metadata::parse_yaml_block`
+/// joins the whole fenced block — and `{:?}` expands a control
+/// character to six chars, so the cut keeps a rejected value from
+/// filling the log.
+fn elided(value: &str) -> String {
+    const LIMIT: usize = 64;
+    let head: String = value.chars().take(LIMIT).collect();
+    if head.len() == value.len() {
+        format!("{head:?}")
+    } else {
+        format!("{head:?} ({} bytes total)", value.len())
     }
 }
 
@@ -443,30 +501,81 @@ fn buildkite_meta_data_set(key: &str, value: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use mergify_test_support::Captured;
     use tempfile::TempDir;
 
     use super::*;
+
+    /// Full object names, since that is now all `is_object_name`
+    /// admits and the engine only ever writes one.
+    const MQ_BASE: &str = "cafef00dcafef00dcafef00dcafef00dcafef00d";
+    const NOTE_BASE: &str = "0badc0de0badc0de0badc0de0badc0de0badc0de";
 
     fn no_notes(_branch: &str, _sha: &str) -> Option<String> {
         None
     }
 
     #[test]
-    fn checking_base_sha_extracts_string_or_number() {
+    fn checking_base_sha_reads_the_scalar_as_the_payload_spells_it() {
         use serde_json::json;
         assert_eq!(
-            checking_base_sha(&json!({"checking_base_sha": "deadbeef", "scopes": ["x"]})),
-            Some("deadbeef".to_string()),
+            checking_base_sha(&json!({"checking_base_sha": MQ_BASE, "scopes": ["x"]})),
+            Some(MQ_BASE.to_string()),
         );
-        // A numeric-looking SHA is read tolerantly, matching the
-        // direct-YAML coercion the typed parse used to do.
+        // Read verbatim: the shape check is `is_object_name`, applied
+        // by the pull request body path and not by the note path.
         assert_eq!(
-            checking_base_sha(&json!({"checking_base_sha": 1_234_567})),
-            Some("1234567".to_string()),
+            checking_base_sha(&json!({"checking_base_sha": "--output=/tmp/x"})),
+            Some("--output=/tmp/x".to_string()),
         );
-        // No field → None, so detection falls back to the PR body.
+        // No field, or one the engine nulled because the batch has no
+        // checking base → None, so detection falls through.
         assert_eq!(checking_base_sha(&json!({"pull_requests": []})), None);
+        assert_eq!(checking_base_sha(&json!({"checking_base_sha": null})), None);
+    }
+
+    #[test]
+    fn is_object_name_admits_only_full_hex_object_names() {
+        // Anyone who can open a pull request writes the body this
+        // gates, and the value ends up as `base` in the caller's
+        // workflow. A leading `-` above all: every consumer of `base`
+        // reads it as an option (MRGFY-8845).
+        for value in [
+            "--output=/home/runner/.gitconfig",
+            "-x",
+            "main",
+            "HEAD^",
+            "../etc/passwd",
+            &format!("{MQ_BASE}\nbase=pwned"),
+            &format!("{MQ_BASE} pwned"),
+            // Abbreviated: `changed_files::is_sha` would fetch it as a
+            // branch name. Off by one either way. Uppercase, which the
+            // engine never writes. Empty.
+            "cafef00d",
+            &"a".repeat(39),
+            &"a".repeat(41),
+            &MQ_BASE.to_uppercase(),
+            "",
+        ] {
+            assert!(!is_object_name(value), "should reject {value:?}");
+        }
+        // SHA-1 and the SHA-256 spelling a future engine would write.
+        assert!(is_object_name(MQ_BASE));
+        assert!(is_object_name(&"b2".repeat(32)));
+    }
+
+    #[test]
+    fn elided_escapes_and_bounds_an_untrusted_scalar() {
+        // A newline must not survive as one, or the warning could
+        // start a `::` workflow command on GitHub Actions.
+        assert_eq!(elided("a\nb"), r#""a\nb""#);
+        // Nothing upstream bounds the scalar, so a long one is cut and
+        // says so rather than filling the log.
+        let rendered = elided(&"x".repeat(300));
+        assert!(rendered.ends_with(" (300 bytes total)"), "got: {rendered}");
+        assert!(rendered.len() < 100, "got: {rendered}");
     }
 
     fn write_event(dir: &TempDir, payload: &serde_json::Value) -> PathBuf {
@@ -542,7 +651,7 @@ mod tests {
             &serde_json::json!({
                 "pull_request": {
                     "title": "merge queue: batch",
-                    "body": "prelude\n```yaml\nchecking_base_sha: mq-base\n```",
+                    "body": format!("prelude\n```yaml\nchecking_base_sha: {MQ_BASE}\n```"),
                     "head": {"sha": "mq-head", "ref": "mq/main/0"},
                 },
             }),
@@ -556,7 +665,7 @@ mod tests {
             ],
             || detect(&mut cap.output, &no_notes).unwrap(),
         );
-        assert_eq!(refs.base.as_deref(), Some("mq-base"));
+        assert_eq!(refs.base.as_deref(), Some(MQ_BASE));
         assert_eq!(refs.head, "mq-head");
         assert_eq!(refs.source, ReferencesSource::MergeQueue);
     }
@@ -577,7 +686,7 @@ mod tests {
             &serde_json::json!({
                 "pull_request": {
                     "title": "merge queue: batch",
-                    "body": "```yaml\nchecking_base_sha: mq-base\nprevious_failed_batches:\n  - batch_pr_number: 42\n    checked_pull_requests:\n      - 7\n```",
+                    "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\nprevious_failed_batches:\n  - batch_pr_number: 42\n    checked_pull_requests:\n      - 7\n```"),
                     "head": {"sha": "mq-head", "ref": "mq/main/0"},
                     "base": {"sha": "wrong-base"},
                 },
@@ -592,7 +701,7 @@ mod tests {
             ],
             || detect(&mut cap.output, &no_notes).unwrap(),
         );
-        assert_eq!(refs.base.as_deref(), Some("mq-base"));
+        assert_eq!(refs.base.as_deref(), Some(MQ_BASE));
         assert_eq!(refs.source, ReferencesSource::MergeQueue);
     }
 
@@ -633,6 +742,83 @@ mod tests {
     }
 
     #[test]
+    fn mq_body_with_option_like_base_warns_and_falls_through() {
+        // MRGFY-8845: `extract_from_event` admits any pull request
+        // whose title starts with "merge queue: ", so the reporter's
+        // fork PR put `--output=<path>` in the body and git-refs
+        // emitted it as `base`, where the workflow's next git call
+        // read it as an option. A value that is not an object name is
+        // not metadata: fall through to the PR base and say so.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_event(
+            &dir,
+            &serde_json::json!({
+                "pull_request": {
+                    "title": "merge queue: batch",
+                    "body": "```yaml\nchecking_base_sha: --output=/home/runner/.gitconfig\n```",
+                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "base": {"sha": "pr-base"},
+                },
+            }),
+        );
+        let mut cap = Captured::human();
+        let refs = temp_env::with_vars(
+            [
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
+                ("BUILDKITE", None),
+            ],
+            || detect(&mut cap.output, &no_notes).unwrap(),
+        );
+        assert_eq!(refs.base.as_deref(), Some("pr-base"));
+        assert_eq!(refs.source, ReferencesSource::GithubEventPullRequest);
+        assert!(
+            cap.stderr().contains("is not a git object name"),
+            "got: {:?}",
+            cap.stderr()
+        );
+    }
+
+    #[test]
+    fn rejected_checking_base_sha_cannot_inject_a_workflow_command() {
+        // The warning echoes the rejected value, and GitHub Actions
+        // scans a step's stderr for `::` workflow commands — so the
+        // escaping matters as much as the rejection. A newline in the
+        // value must not start a line of its own.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_event(
+            &dir,
+            &serde_json::json!({
+                "pull_request": {
+                    "title": "merge queue: batch",
+                    "body": "```yaml\nchecking_base_sha: \"cafef00d\\n::error::pwned\"\n```",
+                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "base": {"sha": "pr-base"},
+                },
+            }),
+        );
+        let mut cap = Captured::human();
+        let refs = temp_env::with_vars(
+            [
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
+                ("BUILDKITE", None),
+            ],
+            || detect(&mut cap.output, &no_notes).unwrap(),
+        );
+        assert_eq!(refs.base.as_deref(), Some("pr-base"));
+        let stderr = cap.stderr();
+        assert!(
+            !stderr.lines().any(|l| l.starts_with("::")),
+            "got: {stderr:?}",
+        );
+        assert!(
+            stderr.contains(r"cafef00d\n::error::pwned"),
+            "got: {stderr:?}",
+        );
+    }
+
+    #[test]
     fn mq_notes_beat_body_yaml() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_event(
@@ -640,14 +826,14 @@ mod tests {
             &serde_json::json!({
                 "pull_request": {
                     "title": "merge queue: batch",
-                    "body": "```yaml\nchecking_base_sha: body-sha\n```",
+                    "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\n```"),
                     "head": {"sha": "mq-head", "ref": "mq/main/0"},
                 },
             }),
         );
         let note_reader = |branch: &str, sha: &str| {
             if branch == "mq/main/0" && sha == "mq-head" {
-                Some("note-sha".to_string())
+                Some(NOTE_BASE.to_string())
             } else {
                 None
             }
@@ -661,7 +847,7 @@ mod tests {
             ],
             || detect(&mut cap.output, &note_reader).unwrap(),
         );
-        assert_eq!(refs.base.as_deref(), Some("note-sha"));
+        assert_eq!(refs.base.as_deref(), Some(NOTE_BASE));
     }
 
     #[test]
