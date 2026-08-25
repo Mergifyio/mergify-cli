@@ -18,10 +18,7 @@
 //! `ghadelimiter_<uuid>` heredoc, matching the pattern the workflow
 //! runtime expects for multi-line outputs.
 
-use std::env;
-use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
 
 use mergify_core::CliError;
 use mergify_core::Output;
@@ -104,38 +101,9 @@ fn emit_json(output: &mut dyn Output, metadata: &Value) -> std::io::Result<()> {
 }
 
 fn write_github_output(metadata: &Value) -> Result<(), CliError> {
-    let Some(path) = env::var("GITHUB_OUTPUT").ok().filter(|s| !s.is_empty()) else {
-        return Ok(());
-    };
-    let delimiter = format!("ghadelimiter_{}", random_delimiter_suffix()?);
     let compact = serde_json::to_string(metadata)
         .map_err(|e| CliError::Generic(format!("failed to serialize queue metadata: {e}")))?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(PathBuf::from(path))?;
-    writeln!(file, "queue_metadata<<{delimiter}")?;
-    writeln!(file, "{compact}")?;
-    writeln!(file, "{delimiter}")?;
-    Ok(())
-}
-
-/// 16 random bytes rendered as 32 lowercase hex chars — enough
-/// entropy to be unguessable inside one GitHub Actions step, which
-/// is all the heredoc delimiter needs (it just has to be absent
-/// from the metadata payload). `getrandom` reads from the OS RNG
-/// directly; we don't need the UUID parsing/formatting plumbing
-/// that `uuid` adds on top.
-fn random_delimiter_suffix() -> Result<String, CliError> {
-    let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf)
-        .map_err(|e| CliError::Generic(format!("OS random source unavailable: {e}")))?;
-    let mut hex = String::with_capacity(buf.len() * 2);
-    for b in buf {
-        use std::fmt::Write as _;
-        write!(hex, "{b:02x}").expect("writing to String is infallible");
-    }
-    Ok(hex)
+    crate::github_output::append(&[("queue_metadata", &compact)])
 }
 
 #[cfg(test)]
