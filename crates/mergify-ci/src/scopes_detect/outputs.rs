@@ -54,19 +54,8 @@ pub fn maybe_write_github_outputs(
     all: &BTreeSet<String>,
     hit: &BTreeSet<String>,
 ) -> Result<(), CliError> {
-    let Some(path) = env::var("GITHUB_OUTPUT").ok().filter(|s| !s.is_empty()) else {
-        return Ok(());
-    };
-    let delimiter = format!("ghadelimiter_{}", random_delimiter_suffix()?);
     let payload = scopes_dict_json(all, hit);
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(PathBuf::from(path))?;
-    writeln!(file, "{GITHUB_ACTIONS_OUTPUT_NAME}<<{delimiter}")?;
-    writeln!(file, "{payload}")?;
-    writeln!(file, "{delimiter}")?;
-    Ok(())
+    crate::github_output::append(&[(GITHUB_ACTIONS_OUTPUT_NAME, &payload)])
 }
 
 /// `buildkite-agent meta-data set mergify-ci.scopes <json>` when
@@ -206,21 +195,6 @@ pub fn maybe_write_buildkite_annotation(
             );
         }
     }
-}
-
-/// 32 random hex chars from the OS RNG. Same approach as
-/// `ci queue-info` for the heredoc delimiter — `uuid` would do
-/// the job but carries more crate surface than we need for a
-/// throwaway delimiter.
-fn random_delimiter_suffix() -> Result<String, CliError> {
-    let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf)
-        .map_err(|e| CliError::Generic(format!("OS random source unavailable: {e}")))?;
-    let mut hex = String::with_capacity(buf.len() * 2);
-    for b in buf {
-        let _ = write!(hex, "{b:02x}");
-    }
-    Ok(hex)
 }
 
 #[cfg(test)]
