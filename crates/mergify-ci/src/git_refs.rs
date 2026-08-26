@@ -21,13 +21,14 @@
 //! - `json`: one JSON object on a single line.
 //!
 //! Side-effects: when `$GITHUB_OUTPUT` is set the command appends
-//! `base=` / `head=` lines. When `BUILDKITE=true` it invokes
-//! `buildkite-agent meta-data set` for base/head/source.
+//! the `base` and `head` step outputs through the crate's
+//! `github_output` module, which writes them in the runner's heredoc
+//! form so no value can declare an output of its own. When
+//! `BUILDKITE=true` it invokes `buildkite-agent meta-data set` for
+//! base/head/source.
 
 use std::env;
-use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
 use std::process::Command;
 
 use mergify_core::CliError;
@@ -462,17 +463,11 @@ fn shell_quote(value: &str) -> String {
     format!("'{escaped}'")
 }
 
-fn write_github_output(refs: &References) -> std::io::Result<()> {
-    let Some(path) = env::var("GITHUB_OUTPUT").ok().filter(|s| !s.is_empty()) else {
-        return Ok(());
-    };
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(PathBuf::from(path))?;
-    writeln!(file, "base={}", refs.base.as_deref().unwrap_or(""))?;
-    writeln!(file, "head={}", refs.head)?;
-    Ok(())
+fn write_github_output(refs: &References) -> Result<(), CliError> {
+    crate::github_output::append(&[
+        ("base", refs.base.as_deref().unwrap_or("")),
+        ("head", &refs.head),
+    ])
 }
 
 fn write_buildkite_metadata(refs: &References) -> std::io::Result<()> {
@@ -953,6 +948,49 @@ mod tests {
         assert_eq!(
             stdout.trim_end(),
             r#"{"base":null,"head":"HEAD","source":"github_event_other"}"#
+        );
+    }
+
+    #[test]
+    fn github_output_never_lets_base_declare_another_output() {
+        // `base` is the one reference that can come from a payload
+        // written by hand, so the step outputs go out in heredoc form
+        // rather than as `base=<value>` lines a newline could split
+        // (MRGFY-8845). `checking_base_sha` validation already keeps
+        // this value out, so the newline here stands in for whatever
+        // reaches `base` next.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gha_output");
+        let refs = References {
+            base: Some(format!("{MQ_BASE}\nevil=1")),
+            head: NOTE_BASE.into(),
+            source: ReferencesSource::MergeQueue,
+        };
+        temp_env::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
+            write_github_output(&refs).unwrap();
+        });
+        let written = std::fs::read_to_string(&path).unwrap();
+        // Parse it the way the runner does, so the assertion is about
+        // the outputs the step declares rather than about the bytes.
+        let mut lines = written.lines();
+        let mut outputs: Vec<(String, String)> = Vec::new();
+        while let Some(line) = lines.next() {
+            let (name, delimiter) = line.split_once("<<").expect("heredoc form");
+            let mut value = Vec::new();
+            for body in lines.by_ref() {
+                if body == delimiter {
+                    break;
+                }
+                value.push(body);
+            }
+            outputs.push((name.to_string(), value.join("\n")));
+        }
+        assert_eq!(
+            outputs,
+            [
+                ("base".to_string(), format!("{MQ_BASE}\nevil=1")),
+                ("head".to_string(), NOTE_BASE.to_string()),
+            ],
         );
     }
 
