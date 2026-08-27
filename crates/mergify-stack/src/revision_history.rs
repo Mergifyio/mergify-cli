@@ -53,6 +53,22 @@ pub const REVISION_COMMENT_FIRST_LINE: &str = "### Revision history\n";
 const MARKER_PREFIX: &str = "<!-- mergify-revision-data: ";
 const MARKER_SUFFIX: &str = " -->";
 
+/// Neutralise the HTML-comment delimiters inside a serialised
+/// marker payload.
+///
+/// The marker rides inside `<!-- … -->`, and a renderer closes an
+/// HTML comment at the *first* `-->`. A `reason` that quotes one
+/// therefore ends the marker early and spills the rest of the
+/// JSON into the rendered comment as visible text. `\u003c` and
+/// `\u003e` are the JSON escapes for `<` and `>`, so the payload
+/// decodes to the exact same string — [`parse_marker_line`]
+/// round-trips it, and markers written before this escape keep
+/// parsing unchanged.
+fn hide_html_comment_delimiters(json: &str) -> String {
+    json.replace("-->", "--\\u003e")
+        .replace("<!--", "\\u003c!--")
+}
+
 /// Soft cap on the reason cell. Long single-line reasons get an
 /// ellipsis to keep the table readable on GitHub. Python uses 200;
 /// keep the same number so re-renders of historic rows match.
@@ -298,6 +314,7 @@ impl RevisionHistoryComment {
             entries,
         };
         let json = serde_json::to_string(&payload).expect("MarkerPayload always serialises");
+        let json = hide_html_comment_delimiters(&json);
         format!("{MARKER_PREFIX}{json}{MARKER_SUFFIX}")
     }
 
@@ -927,6 +944,46 @@ mod tests {
         let payload = parse_marker_line(&line).expect("marker line parses");
         let entries = entries_from_marker(&payload).expect("entries decode");
         assert_eq!(entries, comment.entries);
+    }
+
+    #[test]
+    fn marker_line_survives_a_reason_quoting_an_html_comment() {
+        // A reason may quote `<!-- x -->` verbatim. Left as-is it
+        // closes the marker's own HTML comment, and a renderer
+        // spills the remaining JSON into the PR comment as text.
+        let reason = "guard reads the stripped body, so `<!-- x -->## Commit Message` cannot slip";
+        let mut comment = RevisionHistoryComment::create_initial(
+            "https://api.github.com",
+            "o",
+            "r",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ChangeType::Content,
+            t(),
+            reason,
+            None,
+        );
+        comment.append(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccccccccccccccccccccccc",
+            ChangeType::Rebase,
+            t(),
+            "after the quoting revision",
+            None,
+        );
+
+        let line = comment.marker_line(42);
+        // The only delimiters left are the marker's own.
+        assert_eq!(line.matches("-->").count(), 1);
+        assert!(line.ends_with(MARKER_SUFFIX));
+        assert_eq!(line.matches("<!--").count(), 1);
+        assert!(line.starts_with(MARKER_PREFIX));
+        // And the escape is transparent to the read path.
+        let payload = parse_marker_line(&line).expect("marker line parses");
+        let entries = entries_from_marker(&payload).expect("entries decode");
+        assert_eq!(entries, comment.entries);
+        // `create_initial` puts the reason on the second (real) row.
+        assert_eq!(entries[1].reason, reason);
     }
 
     #[test]
