@@ -3,5 +3,5 @@
 # proposes bumps (after the 7-day minimumReleaseAge); a bump PR that
 # trips new lints fails CI and must fix them in the same PR.
 [toolchain]
-channel = "1.97"
+channel = "1.98"
 components = ["rustfmt", "clippy"]
