@@ -686,8 +686,57 @@ fn ci_scopes_select_all_when_no_base() {
 // ---------------------------------------------------------------
 
 #[test]
+fn scopes_send_commit() {
+    // `PUT /v1/repos/{owner}/{repo}/commits/{sha}/scopes`, the route
+    // `scopes-send` takes whenever it can name the head.
+    //
+    // Worth its own live case precisely because the command falls back
+    // to the pull-request route on a 404: a misspelled path or an
+    // endpoint that never shipped would degrade silently and no
+    // offline test would notice. The SHA is arbitrary — the endpoint
+    // stores a report for a revision no open pull request heads, which
+    // it documents as a normal outcome — so this asserts auth and URL
+    // routing without depending on the canary repository's history.
+    let token = skip_if_unset!(live_token());
+
+    let result = cli(&[
+        "ci",
+        "scopes-send",
+        "--api-url",
+        API_URL,
+        "--token",
+        &token,
+        "--repository",
+        REPOSITORY,
+        "--pull-request",
+        PULL_REQUEST,
+        "--head-sha",
+        "f00d5c0be5f00d5c0be5f00d5c0be5f00d5c0be5",
+        "--scope",
+        "func-tests-live-smoke",
+    ]);
+    assert_eq!(
+        result.returncode,
+        0,
+        "scopes-send --head-sha failed{}",
+        result.context()
+    );
+    // Exit 0 is also what a 404-and-fall-back produces, so the status
+    // alone would pass against the very absence this case exists to
+    // catch. The fallback narrates itself; require that it stayed quiet.
+    assert!(
+        !result
+            .stderr
+            .contains("commit scopes endpoint answered 404"),
+        "scopes-send fell back to the pull request route{}",
+        result.context()
+    );
+}
+
+#[test]
 fn scopes_send() {
-    // `POST /v1/repos/{owner}/{repo}/pulls/{n}/scopes`.
+    // `POST /v1/repos/{owner}/{repo}/pulls/{n}/scopes` — the fallback
+    // route, taken when no head SHA can be named.
     let token = skip_if_unset!(live_token());
 
     let result = cli(&[

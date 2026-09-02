@@ -311,6 +311,29 @@ impl Client {
         self.decode_json(resp).await
     }
 
+    /// PUT `body` as JSON to `path`, discard the response body, and
+    /// report whether the endpoint exists: `Ok(false)` on 404.
+    ///
+    /// For probing a route a Mergify deployment older than the CLI
+    /// does not serve yet, so the caller can fall back to one it does
+    /// — `ci scopes-send` is the first caller. 404 is terminal (never
+    /// retried), so the probe costs exactly one request.
+    ///
+    /// Distinct from [`Self::put`], which treats 404 as a failure like
+    /// any other 4xx, and from [`Self::post_no_response`], which does
+    /// the same for POST.
+    pub async fn put_no_response_if_exists<B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<bool, CliError> {
+        let url = self.join(path)?;
+        Ok(self
+            .execute_request_optional(self.inner.put(url).json(body))
+            .await?
+            .is_some())
+    }
+
     /// PATCH `body` as JSON to `path` and deserialize the JSON
     /// response as `T`. Mirrors [`Self::put`] but for endpoints that
     /// use the more permissive PATCH semantics (partial update) —
@@ -858,6 +881,62 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, CliError::MergifyApi(_)));
         assert!(err.to_string().contains("404"));
+    }
+
+    #[tokio::test]
+    async fn put_no_response_if_exists_reports_whether_the_route_answered() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/present"))
+            .and(body_json(serde_json::json!({"bar": 1})))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/absent"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no such route"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        assert!(
+            client
+                .put_no_response_if_exists("/present", &Foo { bar: 1 })
+                .await
+                .unwrap()
+        );
+        // 404 is the caller's branch, and terminal — one request, no
+        // backoff, so the probe stays cheap.
+        assert!(
+            !client
+                .put_no_response_if_exists("/absent", &Foo { bar: 1 })
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn put_no_response_if_exists_propagates_other_4xx() {
+        // Only 404 is an answer about the route. A 403 is a real
+        // failure, and swallowing it as `false` would silently downgrade
+        // an auth problem into a fallback.
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/forbidden"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("denied"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let err = client
+            .put_no_response_if_exists("/forbidden", &Foo { bar: 1 })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::MergifyApi(_)));
+        assert!(err.to_string().contains("403"));
     }
 
     #[tokio::test]
