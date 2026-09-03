@@ -213,8 +213,9 @@ fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
     // it's the only signal that decides whether `scopes-send` runs
     // at all — silently swallowing a parse error there would hide
     // a misconfigured workflow. The head-SHA lookup (see
-    // [`read_github_event_pull_request_head_sha`]) has a sane
-    // fallback (`GITHUB_SHA`), so it stays lenient.
+    // [`read_github_event_pull_request_head_sha`]) stays lenient
+    // because every one of its callers has somewhere to go without
+    // an answer.
     let Some(event_path) = env::var("GITHUB_EVENT_PATH").ok().filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -233,6 +234,70 @@ fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
     Ok(event
         .pointer("/pull_request/number")
         .and_then(serde_json::Value::as_u64))
+}
+
+/// Whether `value` is a full 40-character hex SHA-1 object name, in
+/// either case.
+///
+/// Sibling to `git_refs::is_object_name`, which also admits a
+/// 64-character SHA-256 name and rejects uppercase: that one gates an
+/// untrusted pull request body being spliced into a git invocation,
+/// where the narrowest spelling wins. This one answers "did the
+/// provider name a revision", and GitHub reports pull request heads as
+/// SHA-1 in lowercase while a hand-passed value may be uppercase.
+pub(crate) fn is_sha1_object_name(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Head SHA of the pull request the build is for. `None` unless a
+/// provider names one as a full 40-character hex SHA — anything else
+/// (`BUILDKITE_COMMIT` unset, which `git_refs` reads as the literal
+/// `HEAD`) is not a revision and is dropped here, so callers can use
+/// the answer without re-checking its shape.
+///
+/// Deliberately not [`get_head_sha`], which answers the different
+/// question "which revision did the tests run against" and falls back
+/// to `GITHUB_SHA`. That fallback is wrong for identifying a pull
+/// request head: on a `pull_request` event `GITHUB_SHA` is the
+/// synthetic merge commit, and on `pull_request_target` it is the base
+/// branch. Neither is any pull request's head, so a report keyed on
+/// one would be stored where nothing ever reads it — a silent no-op,
+/// worse than having no SHA at all and saying so.
+///
+/// Jenkins is the one provider left uncovered, and deliberately: the
+/// GitHub Branch Source plugin builds a pull request by merging it into
+/// its target by default, so `GIT_COMMIT` is that merge commit rather
+/// than the head — the same trap as `GITHUB_SHA`, with no second env
+/// var to tell the two configurations apart.
+#[must_use]
+pub fn get_github_pull_request_head_sha() -> Option<String> {
+    let sha = match get_ci_provider()? {
+        CIProvider::GithubActions => read_github_event_pull_request_head_sha(),
+        // Buildkite and CircleCI both build a pull request from its head
+        // commit, so their revision var *is* that head (`git_refs` reads
+        // `BUILDKITE_COMMIT` for the same purpose).
+        CIProvider::Buildkite => non_empty_env("BUILDKITE_COMMIT"),
+        CIProvider::CircleCi => non_empty_env("CIRCLE_SHA1"),
+        CIProvider::Jenkins => None,
+    }?;
+    is_sha1_object_name(&sha).then_some(sha)
+}
+
+/// Clap `value_parser` for a `--head-sha` flag. Returning
+/// `Result<_, String>` makes clap reject a bad value with exit code 2
+/// rather than letting it reach the API as a 422 — same treatment as
+/// [`parse_owner_repo`].
+///
+/// # Errors
+///
+/// Returns a message when `value` is not a full 40-character hex SHA.
+pub fn parse_head_sha(value: &str) -> Result<String, String> {
+    if is_sha1_object_name(value) {
+        return Ok(value.to_string());
+    }
+    Err(format!(
+        "invalid head SHA {value:?}: expected 40 hexadecimal characters",
+    ))
 }
 
 /// `cicd.pipeline.name` resource attribute. None when the
@@ -397,8 +462,10 @@ fn get_github_actions_head_sha() -> Option<String> {
 /// Read `GITHUB_EVENT_PATH` and pluck the
 /// `pull_request.head.sha` out of the JSON. Returns `None` for
 /// every "not applicable" case — env unset, file missing, file
-/// not JSON, key not present — so the caller can quietly fall
-/// back to `GITHUB_SHA` without surfacing an error to the user.
+/// not JSON, key not present — so a caller can quietly take its own
+/// no-answer branch without surfacing an error to the user. That is
+/// `GITHUB_SHA` for [`get_head_sha`] and no head at all for
+/// [`get_github_pull_request_head_sha`].
 fn read_github_event_pull_request_head_sha() -> Option<String> {
     let event = read_github_event_json()?;
     event
@@ -434,6 +501,7 @@ pub fn get_tests_target_branch() -> Option<String> {
 mod tests {
     use super::*;
     use crate::testing::with_ci_env;
+    use crate::testing::write_github_event;
 
     #[test]
     fn ci_provider_jenkins_takes_precedence() {
@@ -653,6 +721,163 @@ mod tests {
             ],
             || {
                 assert_eq!(get_github_pull_request_number().unwrap(), None);
+            },
+        );
+    }
+
+    #[test]
+    fn parse_head_sha_accepts_a_full_sha_in_either_case() {
+        let lower = "feedface00000000000000000000000000000000";
+        assert_eq!(parse_head_sha(lower).unwrap(), lower);
+        // The engine folds case, so an uppercase spelling names the
+        // same revision rather than a different one.
+        let upper = lower.to_uppercase();
+        assert_eq!(parse_head_sha(&upper).unwrap(), upper);
+    }
+
+    #[test]
+    fn parse_head_sha_rejects_anything_that_is_not_a_full_sha1() {
+        for bad in [
+            "",
+            "HEAD",
+            // Abbreviated: never equal to a stored full-length head.
+            "feedface",
+            // 40 characters, but not hex.
+            "zeedface00000000000000000000000000000000",
+            // A SHA-256 object name: `git_refs::is_object_name` takes
+            // one, this does not — GitHub reports pull request heads
+            // as SHA-1.
+            &"a".repeat(64),
+        ] {
+            assert!(parse_head_sha(bad).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn pull_request_head_sha_reads_the_github_event_payload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = write_github_event(
+            tmp.path(),
+            &serde_json::json!({
+                "pull_request": {"head": {"sha": "feedface00000000000000000000000000000000"}},
+            }),
+        );
+
+        for event_name in ["pull_request", "pull_request_target"] {
+            with_ci_env(
+                &[
+                    ("GITHUB_ACTIONS", Some("true")),
+                    ("GITHUB_EVENT_NAME", Some(event_name)),
+                    ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                    // Never the answer, on either event — see
+                    // `get_github_pull_request_head_sha`.
+                    (
+                        "GITHUB_SHA",
+                        Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+                    ),
+                ],
+                || {
+                    assert_eq!(
+                        get_github_pull_request_head_sha().as_deref(),
+                        Some("feedface00000000000000000000000000000000"),
+                        "event {event_name}",
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn pull_request_head_sha_is_none_without_a_pull_request_in_the_payload() {
+        // Where `get_head_sha` falls back to `GITHUB_SHA`, this must
+        // not.
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = write_github_event(tmp.path(), &serde_json::json!({}));
+        with_ci_env(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("push")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                (
+                    "GITHUB_SHA",
+                    Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+                ),
+            ],
+            || {
+                assert_eq!(get_github_pull_request_head_sha(), None);
+            },
+        );
+    }
+
+    #[test]
+    fn pull_request_head_sha_uses_buildkite_commit() {
+        with_ci_env(
+            &[
+                ("BUILDKITE", Some("true")),
+                (
+                    "BUILDKITE_COMMIT",
+                    Some("0123456789abcdef0123456789abcdef01234567"),
+                ),
+            ],
+            || {
+                assert_eq!(
+                    get_github_pull_request_head_sha().as_deref(),
+                    Some("0123456789abcdef0123456789abcdef01234567"),
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn pull_request_head_sha_drops_a_value_that_is_not_a_revision() {
+        // An unset `BUILDKITE_COMMIT` is what `git_refs` reads as the
+        // literal `HEAD`; callers must not have to re-check the shape.
+        with_ci_env(
+            &[
+                ("BUILDKITE", Some("true")),
+                ("BUILDKITE_COMMIT", Some("HEAD")),
+            ],
+            || {
+                assert_eq!(get_github_pull_request_head_sha(), None);
+            },
+        );
+    }
+
+    #[test]
+    fn pull_request_head_sha_uses_circle_sha1() {
+        with_ci_env(
+            &[
+                ("CIRCLECI", Some("true")),
+                (
+                    "CIRCLE_SHA1",
+                    Some("0123456789abcdef0123456789abcdef01234567"),
+                ),
+            ],
+            || {
+                assert_eq!(
+                    get_github_pull_request_head_sha().as_deref(),
+                    Some("0123456789abcdef0123456789abcdef01234567"),
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn pull_request_head_sha_is_none_on_jenkins() {
+        // `GIT_COMMIT` is the merge commit whenever the Branch Source
+        // plugin builds a pull request merged into its target, which is
+        // its default, and nothing distinguishes that from the head-only
+        // configuration. No answer beats the wrong one.
+        with_ci_env(
+            &[
+                ("JENKINS_URL", Some("http://ci")),
+                (
+                    "GIT_COMMIT",
+                    Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+                ),
+            ],
+            || {
+                assert_eq!(get_github_pull_request_head_sha(), None);
             },
         );
     }

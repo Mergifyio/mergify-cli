@@ -9,6 +9,8 @@
 //! (used by the `#[tokio::test]` cases).
 
 use std::future::Future;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Env vars the CI-provider detection chain inspects. Clear every
 /// one of them before applying the test-specific overrides, so the
@@ -121,6 +123,17 @@ where
     F: Future<Output = R>,
 {
     temp_env::async_with_vars(merged_overrides(extra), f).await
+}
+
+/// Write `payload` as a GitHub Actions event file under `dir` and
+/// return its path, ready to point `GITHUB_EVENT_PATH` at. The
+/// payload-reading helpers across `detector` and `scopes_send` all
+/// need one, and each spelling it out obscures which key the test is
+/// actually about.
+pub(crate) fn write_github_event(dir: &Path, payload: &serde_json::Value) -> PathBuf {
+    let path = dir.join("event.json");
+    std::fs::write(&path, payload.to_string()).expect("write event payload");
+    path
 }
 
 /// A high-entropy alphanumeric string of `len` chars, seeded so

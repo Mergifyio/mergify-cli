@@ -505,6 +505,7 @@ struct CiScopesSendOpts {
     scopes_file: Option<PathBuf>,
     file_deprecated: Option<PathBuf>,
     all_scopes: bool,
+    head_sha: Option<String>,
 }
 
 struct CiJunitProcessOpts {
@@ -930,6 +931,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
                     scopes_file,
                     file_deprecated,
                     all,
+                    head_sha,
                 }),
         }) => Dispatch::Native(NativeCommand::CiScopesSend(CiScopesSendOpts {
             repository,
@@ -941,6 +943,7 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             scopes_file,
             file_deprecated,
             all_scopes: all,
+            head_sha,
         })),
         Subcommands::Ci(CiArgs {
             command: CiSubcommand::GitRefs(GitRefsCliArgs { format }),
@@ -1549,6 +1552,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     scopes_file: opts.scopes_file.as_deref(),
                     deprecated_file: opts.file_deprecated.as_deref(),
                     all_scopes: opts.all_scopes,
+                    head_sha: opts.head_sha.as_deref(),
                 },
                 &mut output,
             )
@@ -3910,6 +3914,17 @@ struct ScopesSendCliArgs {
     /// still sent alongside the flag.
     #[arg(long = "all")]
     all: bool,
+
+    /// Head SHA the scopes were computed for, as 40 hexadecimal
+    /// characters, so a result computed for an older head is not
+    /// taken for the current one. When omitted it is detected from
+    /// the CI environment: under GitHub Actions from the event
+    /// payload (``.pull_request.head.sha`` in ``GITHUB_EVENT_PATH``),
+    /// under Buildkite from ``BUILDKITE_COMMIT``. Pass the pull
+    /// request's head, not the revision the job checked out — on a
+    /// ``pull_request`` event those differ.
+    #[arg(long = "head-sha", value_parser = mergify_ci::detector::parse_head_sha)]
+    head_sha: Option<String>,
 }
 
 #[derive(clap::Args)]

@@ -16,7 +16,7 @@ mergify ci junit-process FILES...         # Upload JUnit XML + evaluate quaranti
 mergify ci junit-upload FILES...          # (Deprecated) Use junit-process instead
 mergify ci git-refs                       # Detect base/head git references for the current PR
 mergify ci scopes --config PATH           # Detect scopes impacted by changed files
-mergify ci scopes-send -s SCOPE           # Send scopes tied to a pull request to Mergify
+mergify ci scopes-send -s SCOPE           # Report scopes against the pull request's head commit
 mergify ci queue-info                     # Output the current build's merge queue batch metadata (from the git note)
 mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
 mergify tests quarantines add NAME        # Add a test to the CI Insights quarantine
@@ -131,6 +131,8 @@ A renamed file counts against **both** of its paths, same as the engine: `git mv
 
 Sends scopes tied to a pull request to the Mergify API. Used when scopes are determined manually or from a file rather than auto-detected.
 
+The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, or `BUILDKITE_COMMIT`); pass `--head-sha` to name it explicitly. When no head SHA can be resolved -- or the Mergify deployment predates the commit endpoint -- the command falls back to reporting against the pull request number alone, which is what it always did.
+
 ```bash
 # Send specific scopes
 mergify ci scopes-send -s frontend -s backend -p 123
@@ -144,6 +146,10 @@ mergify ci scopes-send --scopes-file scopes.txt -p 123
 # Declare the PR impacts every scope (merge-queue barrier),
 # e.g. a build-system or CI-workflow change
 mergify ci scopes-send -s build-system --all -p 123
+
+# Name the revision explicitly (the pull request head, not the
+# revision a `pull_request` job checked out)
+mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 ```
 
 **Key options:**
@@ -153,6 +159,7 @@ mergify ci scopes-send -s build-system --all -p 123
 - `--scope` / `-s` -- Scope name (repeatable)
 - `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
 - `--scopes-file` -- Plain-text file with one scope per line
+- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected from the CI environment)
 - `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
 
 ## Tests Show (`tests show`)

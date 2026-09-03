@@ -349,6 +349,24 @@ expression: schema
                 "short": null,
                 "valueHint": null,
                 "valueNames": []
+              },
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Head SHA the scopes were computed for, as 40 hexadecimal characters, so a result computed for an older head is not taken for the current one. When omitted it is detected from the CI environment: under GitHub Actions from the event payload (``.pull_request.head.sha`` in ``GITHUB_EVENT_PATH``), under Buildkite from ``BUILDKITE_COMMIT``. Pass the pull request's head, not the revision the job checked out — on a ``pull_request`` event those differ",
+                "id": "head_sha",
+                "kind": "option",
+                "long": "head-sha",
+                "longHelp": "Head SHA the scopes were computed for, as 40 hexadecimal characters, so a result computed for an older head is not taken for the current one. When omitted it is detected from the CI environment: under GitHub Actions from the event payload (``.pull_request.head.sha`` in ``GITHUB_EVENT_PATH``), under Buildkite from ``BUILDKITE_COMMIT``. Pass the pull request's head, not the revision the job checked out — on a ``pull_request`` event those differ",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": [
+                  "HEAD_SHA"
+                ]
               }
             ],
             "commands": [],

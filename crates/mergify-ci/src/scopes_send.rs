@@ -1,4 +1,4 @@
-//! `mergify ci scopes-send` — POST the scopes detected for a pull
+//! `mergify ci scopes-send` — report the scopes detected for a pull
 //! request to Mergify.
 //!
 //! Scopes can come from three sources (combined):
@@ -23,6 +23,16 @@
 //! pull-request number the command prints a skip message and
 //! returns success — matches Python's "no PR, nothing to send"
 //! behavior.
+//!
+//! The report is addressed by the pull request's **head SHA**
+//! (``--head-sha``, else the CI environment) so it says which
+//! revision it was computed for: scopes computed for one head do not
+//! describe another, and the number-addressed record cannot tell the
+//! difference — whichever upload lands last wins (MRGFY-8884). The
+//! number-addressed endpoint stays the fallback for the two cases
+//! where the SHA route is not available: no head SHA could be
+//! resolved, or the Mergify deployment is older than the endpoint and
+//! answers 404.
 //!
 //! Auth + API URL resolution goes through `mergify_core::auth`,
 //! which adds a `gh auth token` fallback (matches Python's
@@ -52,6 +62,7 @@ pub struct ScopesSendOptions<'a> {
     pub scopes_file: Option<&'a Path>,
     pub deprecated_file: Option<&'a Path>,
     pub all_scopes: bool,
+    pub head_sha: Option<&'a str>,
 }
 
 /// Run the `ci scopes-send` command.
@@ -86,31 +97,86 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
         scopes.extend(read_scopes_text_file(path)?);
     }
 
-    if all_scopes {
-        output.status(&format!(
-            "Sending {} scope(s) (impacting all scopes) to {api_url}…",
-            scopes.len(),
-        ))?;
-    } else {
-        output.status(&format!("Sending {} scope(s) to {api_url}…", scopes.len()))?;
+    let head_sha = resolve_head_sha(opts.head_sha);
+    if head_sha.is_none() {
+        output.status(
+            "No pull request head SHA detected, reporting against the pull \
+             request number instead: the scopes will not say which revision \
+             they were computed for.",
+        )?;
     }
 
+    let all_scopes_note = if all_scopes {
+        " (impacting all scopes)"
+    } else {
+        ""
+    };
+    let target = match &head_sha {
+        Some(sha) => format!("commit {sha}"),
+        None => format!("pull request #{pull_request}"),
+    };
+    output.status(&format!(
+        "Sending {} scope(s){all_scopes_note} for {target} to {api_url}…",
+        scopes.len(),
+    ))?;
+
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
+    let body = SendScopesRequest {
+        scopes: &scopes,
+        all_scopes,
+    };
+
+    // Both calls below discard the response: each endpoint answers an
+    // empty body on success, which a `::<Value>` variant would surface
+    // as "parse response JSON: error decoding response body".
+    if let Some(sha) = &head_sha {
+        let path = format!("/v1/repos/{repository}/commits/{sha}/scopes");
+        let reported_against_the_commit = client.put_no_response_if_exists(&path, &body).await?;
+        if reported_against_the_commit {
+            return Ok(());
+        }
+        // A Mergify older than the endpoint answers 404, and so does
+        // one that cannot see the repository — the message reports what
+        // was observed rather than diagnosing which, and the fallback
+        // surfaces the second case as its own error when the
+        // pull-request route 404s too.
+        output.status(
+            "The commit scopes endpoint answered 404, falling back to the \
+             pull request one: the scopes will not say which revision they \
+             were computed for.",
+        )?;
+    }
+
+    // The fallback stays on POST rather than the pull-request route's
+    // own PUT: a deployment old enough to 404 the commit endpoint may
+    // be old enough to 404 that PUT too (it landed four months
+    // earlier), which would defeat the point of falling back.
     let path = format!("/v1/repos/{repository}/pulls/{pull_request}/scopes");
-    // The endpoint returns an empty body on success — `post::<Value>`
-    // would surface that as "parse response JSON: error decoding
-    // response body". We only need to know the request was 2xx.
-    client
-        .post_no_response(
-            &path,
-            &SendScopesRequest {
-                scopes: &scopes,
-                all_scopes,
-            },
-        )
-        .await?;
+    client.post_no_response(&path, &body).await?;
 
     Ok(())
+}
+
+/// The pull request head SHA to report the scopes against, or `None`
+/// when nothing names one.
+///
+/// Both sources are re-checked here rather than trusted. Detection
+/// filters its own result and clap's `parse_head_sha` rejects a bad
+/// `--head-sha`, but `ScopesSendOptions` is public: the value lands in
+/// a request path, and `Client::join` resolves `..` segments, so this
+/// is the same rule `detector::resolve_repository` applies to every
+/// source of its own path segment.
+///
+/// Lowercased for the same reason `tests_quarantine` normalizes an id
+/// before pathing it: the engine folds case, but a row stored under a
+/// spelling no reader looks for is worse than a rejected one, and only
+/// one of the two spellings should ever be sent.
+fn resolve_head_sha(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(ToString::to_string)
+        .or_else(detector::get_github_pull_request_head_sha)
+        .filter(|sha| detector::is_sha1_object_name(sha))
+        .map(|sha| sha.to_lowercase())
 }
 
 fn resolve_pull_request(explicit: Option<u64>) -> Result<Option<u64>, CliError> {
@@ -174,6 +240,7 @@ mod tests {
     use super::*;
     use crate::testing::with_ci_env;
     use crate::testing::with_ci_env_async;
+    use crate::testing::write_github_event;
 
     #[test]
     fn resolve_pull_request_prefers_explicit() {
@@ -232,6 +299,7 @@ mod tests {
                     scopes_file: None,
                     deprecated_file: None,
                     all_scopes: false,
+                    head_sha: None,
                 },
                 &mut cap.output,
             )
@@ -281,6 +349,7 @@ mod tests {
                         scopes_file: None,
                         deprecated_file: None,
                         all_scopes: false,
+                        head_sha: None,
                     },
                     &mut cap.output,
                 )
@@ -289,6 +358,14 @@ mod tests {
             },
         )
         .await;
+
+        // No `BUILDKITE_COMMIT`, so nothing names the head: the report
+        // falls back to the pull request number, and says so.
+        let err = cap.stderr();
+        assert!(
+            err.contains("No pull request head SHA detected"),
+            "got: {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -327,6 +404,7 @@ mod tests {
                 scopes_file: Some(&txt_path),
                 deprecated_file: None,
                 all_scopes: false,
+                head_sha: None,
             },
             &mut cap.output,
         )
@@ -363,6 +441,7 @@ mod tests {
                 scopes_file: None,
                 deprecated_file: None,
                 all_scopes: true,
+                head_sha: None,
             },
             &mut cap.output,
         )
@@ -408,6 +487,7 @@ mod tests {
                 scopes_file: None,
                 deprecated_file: None,
                 all_scopes: false,
+                head_sha: None,
             },
             &mut cap.output,
         )
@@ -443,11 +523,183 @@ mod tests {
                 scopes_file: None,
                 deprecated_file: None,
                 all_scopes: false,
+                head_sha: None,
             },
             &mut cap.output,
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_reports_against_the_head_sha_from_the_github_event() {
+        let head = "feedface00000000000000000000000000000000";
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(format!("/v1/repos/owner/repo/commits/{head}/scopes")))
+            .and(body_json(
+                serde_json::json!({"scopes": ["a"], "all_scopes": false}),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = write_github_event(
+            tmp.path(),
+            &serde_json::json!({"pull_request": {"number": 42, "head": {"sha": head}}}),
+        );
+        let mut cap = Captured::human();
+        let api_url = server.uri();
+        let direct = vec!["a".to_string()];
+
+        with_ci_env_async(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                ("GITHUB_REPOSITORY", Some("owner/repo")),
+                // The merge commit, not the head — see
+                // `detector::get_github_pull_request_head_sha`.
+                (
+                    "GITHUB_SHA",
+                    Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+                ),
+            ],
+            async {
+                run(
+                    ScopesSendOptions {
+                        repository: None,
+                        pull_request: None,
+                        token: Some("t"),
+                        api_url: Some(&api_url),
+                        scopes: &direct,
+                        scopes_json: None,
+                        scopes_file: None,
+                        deprecated_file: None,
+                        all_scopes: false,
+                        head_sha: None,
+                    },
+                    &mut cap.output,
+                )
+                .await
+                .unwrap();
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn run_prefers_the_explicit_head_sha_over_detection() {
+        let detected = "feedface00000000000000000000000000000000";
+        // Uppercase on the way in: the path segment must still be the one
+        // spelling a reader looks for.
+        let explicit = "0123456789ABCDEF0123456789ABCDEF01234567";
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(format!(
+                "/v1/repos/owner/repo/commits/{}/scopes",
+                explicit.to_lowercase(),
+            )))
+            .and(body_json(serde_json::json!({
+                "scopes": ["backend"],
+                "all_scopes": true,
+            })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let event_path = write_github_event(
+            tmp.path(),
+            &serde_json::json!({"pull_request": {"number": 42, "head": {"sha": detected}}}),
+        );
+        let mut cap = Captured::human();
+        let api_url = server.uri();
+        let direct = vec!["backend".to_string()];
+
+        with_ci_env_async(
+            &[
+                ("GITHUB_ACTIONS", Some("true")),
+                ("GITHUB_EVENT_NAME", Some("pull_request")),
+                ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
+                ("GITHUB_REPOSITORY", Some("owner/repo")),
+            ],
+            async {
+                run(
+                    ScopesSendOptions {
+                        repository: None,
+                        pull_request: None,
+                        token: Some("t"),
+                        api_url: Some(&api_url),
+                        scopes: &direct,
+                        scopes_json: None,
+                        scopes_file: None,
+                        deprecated_file: None,
+                        all_scopes: true,
+                        head_sha: Some(explicit),
+                    },
+                    &mut cap.output,
+                )
+                .await
+                .unwrap();
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn run_falls_back_to_the_pull_request_when_the_commit_endpoint_is_unknown() {
+        // A Mergify older than the commit endpoint 404s the route. The
+        // upload has to keep working there, at the precision that
+        // deployment already had.
+        let head = "feedface00000000000000000000000000000000";
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(format!("/v1/repos/owner/repo/commits/{head}/scopes")))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/repos/owner/repo/pulls/42/scopes"))
+            .and(body_json(
+                serde_json::json!({"scopes": ["a"], "all_scopes": false}),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut cap = Captured::human();
+        let api_url = server.uri();
+        let direct = vec!["a".to_string()];
+
+        run(
+            ScopesSendOptions {
+                repository: Some("owner/repo"),
+                pull_request: Some(42),
+                token: Some("t"),
+                api_url: Some(&api_url),
+                scopes: &direct,
+                scopes_json: None,
+                scopes_file: None,
+                deprecated_file: None,
+                all_scopes: false,
+                head_sha: Some(head),
+            },
+            &mut cap.output,
+        )
+        .await
+        .unwrap();
+
+        let err = cap.stderr();
+        assert!(
+            err.contains("commit scopes endpoint answered 404"),
+            "got: {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -477,6 +729,7 @@ mod tests {
                 scopes_file: None,
                 deprecated_file: Some(&json_path),
                 all_scopes: false,
+                head_sha: None,
             },
             &mut cap.output,
         )
@@ -524,6 +777,7 @@ mod tests {
                 scopes_file: None,
                 deprecated_file: Some(&deprecated_path),
                 all_scopes: false,
+                head_sha: None,
             },
             &mut cap.output,
         )
