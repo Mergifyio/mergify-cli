@@ -47,8 +47,8 @@ pub async fn run(
 ) -> Result<ExitCode, CliError> {
     let repository = resolve_repository(opts.repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_mergify_token(opts.token, &api_url, auth::Audience::User)?;
     let client = Arc::new(HttpClient::new(api_url, token, ApiFlavor::Mergify)?);
 
     let search_path = format!("/v1/ci/{owner}/repositories/{repo}/search/tests");
