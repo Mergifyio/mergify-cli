@@ -1738,9 +1738,14 @@ dependencies = [
 name = "mergify-auth"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "mergify-core",
+ "mergify-test-support",
+ "mergify-tui",
  "serde",
  "serde_json",
+ "temp-env",
+ "tempfile",
  "tokio",
  "tracing",
  "url",
@@ -1782,6 +1787,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "insta",
+ "mergify-auth",
  "mergify-ci",
  "mergify-config",
  "mergify-core",

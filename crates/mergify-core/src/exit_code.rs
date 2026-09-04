@@ -62,7 +62,7 @@ exit_codes! {
     GitHubApiError = 5 => "GitHub API request failed.",
     MergifyApiError = 6 => "Mergify API request failed.",
     InvalidState = 7 => "CLI invariant violated (e.g. command run outside a valid context).",
-    ConfigurationError = 8 => "Configuration file missing, unparseable, or failing validation.",
+    ConfigurationError = 8 => "Configuration or credentials missing, unparseable, or failing validation.",
 }
 
 impl ExitCode {

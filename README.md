@@ -101,6 +101,8 @@ for any command's flags.
 Every command group maps to a section of the
 [CLI reference](https://docs.mergify.com/cli/).
 
+- **`mergify auth`** — Sign in to Mergify and manage the stored
+  credential (`login`, `logout`, `status`).
 - **`mergify stack`** — Create and maintain stacked pull requests.
   [Docs](https://docs.mergify.com/stacks/)
 - **`mergify queue`** — Inspect and control the merge queue.
@@ -172,7 +174,7 @@ Commands return stable exit codes so scripts and runbooks can branch on them:
 | `5` | GitHub API request failed. |
 | `6` | Mergify API request failed. |
 | `7` | CLI invariant violated (e.g. run outside a valid context). |
-| `8` | Configuration missing, unparseable, or failing validation. |
+| `8` | Configuration or credentials missing, unparseable, or failing validation (including "not logged in"). |
 
 ## AI Agent Skills
 

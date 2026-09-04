@@ -103,6 +103,9 @@ enum Dispatch {
 /// it. Add new entries here when porting a command; the matching
 /// `clap` `Subcommands` variant is what actually wires it up.
 const NATIVE_COMMANDS: &[(&str, &str)] = &[
+    ("auth", "login"),
+    ("auth", "logout"),
+    ("auth", "status"),
     ("config", "validate"),
     ("config", "simulate"),
     ("ci", "scopes"),
@@ -157,6 +160,16 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
 /// Native commands the Rust binary handles without delegating to
 /// the Python shim.
 enum NativeCommand {
+    /// `mergify auth login [--api-url URL]` — run the device grant
+    /// and store the credential it mints.
+    AuthLogin(AuthOpts),
+    /// `mergify auth logout [--api-url URL]` — revoke the stored
+    /// credential and forget it.
+    AuthLogout(AuthOpts),
+    /// `mergify auth status [--api-url URL]` — report whether there
+    /// is a credential, whose it is, and whether the API still
+    /// accepts it.
+    AuthStatus(AuthOpts),
     ConfigValidate {
         config_file: Option<PathBuf>,
     },
@@ -320,6 +333,13 @@ enum StackMovePosition {
     Last,
     Before,
     After,
+}
+
+/// The whole surface of every `auth` subcommand: which deployment
+/// to talk to. There is deliberately no `--token` — `auth login`
+/// mints one, and the other two act on what it stored.
+struct AuthOpts {
+    api_url: Option<String>,
 }
 
 struct StackSquashOpts {
@@ -688,7 +708,7 @@ fn init_tracing(verbose: u8, debug: bool) {
     let directives = format!(
         "warn,mergify_cli={level},mergify_core={level},mergify_stack={level},\
          mergify_ci={level},mergify_queue={level},mergify_freeze={level},\
-         mergify_config={level},mergify_tui={level}"
+         mergify_config={level},mergify_tui={level},mergify_auth={level}"
     );
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(directives));
     let _ = tracing_subscriber::fmt()
@@ -901,6 +921,14 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             test_exit_code,
             files,
         })),
+        Subcommands::Auth(AuthArgs { api_url, command }) => {
+            let opts = AuthOpts { api_url };
+            Dispatch::Native(match command {
+                AuthSubcommand::Login => NativeCommand::AuthLogin(opts),
+                AuthSubcommand::Logout => NativeCommand::AuthLogout(opts),
+                AuthSubcommand::Status => NativeCommand::AuthStatus(opts),
+            })
+        }
         Subcommands::Config(ConfigArgs {
             config_file,
             command: ConfigSubcommand::Validate(_),
@@ -1524,6 +1552,42 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             | NativeCommand::Completions(_)
             | NativeCommand::InternalManPage => {
                 unreachable!("introspection commands are handled before the runtime starts")
+            }
+            NativeCommand::AuthLogin(opts) => {
+                let store = mergify_core::CredentialStore::discover();
+                mergify_auth::login::run(
+                    mergify_auth::login::LoginOptions {
+                        api_url: opts.api_url.as_deref(),
+                        store: &store,
+                    },
+                    &mut output,
+                )
+                .await
+                .map(|()| mergify_core::ExitCode::Success)
+            }
+            NativeCommand::AuthLogout(opts) => {
+                let store = mergify_core::CredentialStore::discover();
+                mergify_auth::logout::run(
+                    mergify_auth::logout::LogoutOptions {
+                        api_url: opts.api_url.as_deref(),
+                        store: &store,
+                    },
+                    &mut output,
+                )
+                .await
+                .map(|()| mergify_core::ExitCode::Success)
+            }
+            NativeCommand::AuthStatus(opts) => {
+                let store = mergify_core::CredentialStore::discover();
+                mergify_auth::status::run(
+                    mergify_auth::status::StatusOptions {
+                        api_url: opts.api_url.as_deref(),
+                        store: &store,
+                    },
+                    &mut output,
+                )
+                .await
+                .map(|()| mergify_core::ExitCode::Success)
             }
             NativeCommand::ConfigValidate { config_file } => {
                 mergify_config::validate::run(config_file.as_deref(), &mut output)
@@ -2739,6 +2803,13 @@ impl From<ColorArg> for mergify_tui::ColorChoice {
 
 #[derive(Subcommand)]
 enum Subcommands {
+    /// Sign in to Mergify, and manage the stored credential.
+    ///
+    /// `mergify auth login` runs an OAuth device flow against the
+    /// Mergify API and stores the per-user token it mints, so the
+    /// commands that talk to Mergify need no token in your
+    /// environment.
+    Auth(AuthArgs),
     /// Validate and simulate your Mergify configuration.
     ///
     /// Check your `.mergify.yml` against the schema before pushing it,
@@ -4360,6 +4431,40 @@ struct EventsCliArgs {
 }
 
 #[derive(clap::Args)]
+struct AuthArgs {
+    /// Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var,
+    /// then to the default.
+    #[arg(long = "api-url", short = 'u', global = true)]
+    api_url: Option<String>,
+
+    #[command(subcommand)]
+    command: AuthSubcommand,
+}
+
+#[derive(Subcommand)]
+enum AuthSubcommand {
+    /// Sign in to Mergify and store the credential.
+    ///
+    /// Prints a URL and a code: open the one, enter the other, and
+    /// approve. The credential lands in your OS keychain, or in a
+    /// `0600` file when the machine has no keychain to offer.
+    Login,
+    /// Revoke the stored credential and forget it.
+    ///
+    /// Tells the Mergify API to revoke the token as well as deleting
+    /// the local copy, so a machine you are handing back stops being
+    /// signed in everywhere.
+    Logout,
+    /// Show whether this machine is signed in to Mergify.
+    ///
+    /// Names the account, where the credential is stored, and when it
+    /// runs out. Checks the credential against the API rather than
+    /// trusting the local copy, so one revoked from the dashboard is
+    /// reported as invalid.
+    Status,
+}
+
+#[derive(clap::Args)]
 struct FreezeArgs {
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
     /// then ``GITHUB_TOKEN`` env vars.
@@ -4527,6 +4632,7 @@ mod tests {
         assert_eq!(
             groups,
             [
+                "auth",
                 "config",
                 "ci",
                 "tests",
