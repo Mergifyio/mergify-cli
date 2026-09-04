@@ -37,11 +37,12 @@ jobs:
           #   junit-process). ci git-refs / queue-info are
           #   locally evaluated and need no token at all.
           # - _ADMIN exercises every endpoint under /merge-queue/
-          #   (status, show, pause, unpause) and the
+          #   (status, show, pause, unpause), the
           #   /scheduled_freeze endpoints (list, create, update,
-          #   delete). The CI token is rejected with 403 on these,
-          #   so they all share the queue-management-scoped admin
-          #   token.
+          #   delete) and the test search behind `tests show`. The
+          #   CI token is rejected with 403 on all of them — the
+          #   `ci` application key is scoped to what an unattended
+          #   job needs, so they share the admin token.
           # Tests early-return with `SKIP:` when their token is
           # unset rather than failing — local runs without secrets
           # still produce a useful subset.

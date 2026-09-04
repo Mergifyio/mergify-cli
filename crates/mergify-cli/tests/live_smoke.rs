@@ -199,10 +199,12 @@ fn live_token() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// Token for queue-admin endpoints (pause/unpause, freeze CRUD,
-/// queue status/show). Separated from [`live_token`] because the
-/// CI-scoped token is rejected with 403 by the queue-management
-/// family — keeping the CI token narrow is intentional.
+/// Token for every endpoint the CI-scoped key deliberately cannot
+/// reach: the queue-admin family (pause/unpause, freeze CRUD,
+/// queue status/show) and the interactive test-search endpoint
+/// behind `tests show`. Separated from [`live_token`] because the
+/// CI token is rejected with 403 on all of them — keeping it
+/// narrow is intentional, so a 403 here is the product working.
 fn live_admin_token() -> Option<String> {
     let token = std::env::var("LIVE_TEST_MERGIFY_TOKEN_ADMIN")
         .unwrap_or_default()
@@ -770,7 +772,14 @@ fn tests_show_no_match() {
     // routing, and JSON deserialization for the search endpoint
     // — the empty-match path returns exit 0 with a
     // `{"tests": []}` payload on stdout.
-    let token = skip_if_unset!(live_token());
+    //
+    // Admin token, not the CI one: `tests show` is an interactive
+    // developer command, and cutting the `ci` application key down
+    // to what an unattended job needs dropped this endpoint from
+    // its scope (Mergifyio/monorepo#39768). The endpoint now takes
+    // an admin key or a user token only, so the CI token gets a
+    // 403 here by design.
+    let token = skip_if_unset!(live_admin_token());
 
     let result = cli(&[
         "tests",
