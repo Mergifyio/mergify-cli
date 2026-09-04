@@ -11,13 +11,18 @@ publish = false
 
 [dependencies]
 mergify-core = { path = "../mergify-core" }
+mergify-tui = { path = "../mergify-tui" }
+chrono = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+mergify-test-support = { path = "../mergify-test-support" }
 serde_json = { workspace = true }
+temp-env = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 wiremock = { workspace = true }
 
