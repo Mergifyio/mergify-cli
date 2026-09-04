@@ -77,8 +77,8 @@ pub async fn quarantine(
 ) -> Result<ExitCode, CliError> {
     let repository = resolve_repository(opts.repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_mergify_token(opts.token, &api_url, auth::Audience::User)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
 
     let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");
@@ -108,8 +108,8 @@ pub async fn unquarantine(
 ) -> Result<ExitCode, CliError> {
     let repository = resolve_repository(opts.repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_mergify_token(opts.token, &api_url, auth::Audience::User)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
 
     let target = resolve_target(&client, owner, repo, opts.name_or_id).await?;
@@ -183,8 +183,8 @@ async fn fetch_quarantines(
 ) -> Result<Vec<QuarantinedTest>, CliError> {
     let repository = resolve_repository(repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_mergify_token(token)?;
     let api_url = auth::resolve_api_url(api_url)?;
+    let token = auth::resolve_mergify_token(token, &api_url, auth::Audience::User)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
 
     let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");

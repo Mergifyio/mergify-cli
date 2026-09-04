@@ -62,7 +62,7 @@ mergify config simulate https://github.com/owner/repo/pull/123
 - `PULL_REQUEST_URL` -- Full GitHub URL of the pull request to simulate against
 
 **Options:**
-- `--token` / `-t` (env: `MERGIFY_TOKEN` or `GITHUB_TOKEN`) -- Authentication token
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 
 **Output:** Shows a title and detailed Markdown summary of what actions Mergify would take on the PR with the local configuration.

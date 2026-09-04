@@ -61,15 +61,53 @@ Verify against `SHA256SUMS` from the same release if you care.
 
 ## Authentication
 
-Most commands talk to the Mergify and GitHub APIs and need a token. The CLI
-resolves credentials and target repository in this order, so an authenticated
-`gh` is usually all you need:
+Sign in once:
+
+```shell
+mergify auth login
+```
+
+It prints a URL and a code, you approve them in your browser, and the
+credential lands in your OS keychain — or, on a machine with none (a
+container, an unattended agent, a headless box with no D-Bus session), in a
+restricted file under your configuration directory. `mergify auth status` says
+which account you are signed in as, and `mergify auth logout` asks the Mergify
+API to revoke the credential rather than only deleting the local copy.
+
+The commands that talk to the **Mergify API** resolve a credential in this
+order:
+
+| # | Credential | |
+| --- | --- | --- |
+| 1 | `--token` / `-t` | |
+| 2 | `MERGIFY_TOKEN` | |
+| 3 | the credential stored by `mergify auth login` | keyed by API URL |
+| 4 | `GITHUB_TOKEN` | **deprecated** |
+| 5 | `gh auth token` | **deprecated** |
+
+A GitHub token still authenticates against the Mergify API and prints a
+deprecation warning once per run. It will stop working in a future release;
+run `mergify auth login` instead. In CI, set `MERGIFY_TOKEN` — nothing about
+that changes.
+
+`mergify ci` skips step 3. Those endpoints require an organization
+application key, which is what `MERGIFY_TOKEN` holds in a CI job; the
+per-user credential `mergify auth login` mints is refused there by design.
+
+`mergify stack` also calls the **GitHub API** directly, and resolves that
+token separately (`--token`, `MERGIFY_TOKEN`, `GITHUB_TOKEN`, `gh auth
+token`). It is unaffected by the deprecation above: `stack` needs a GitHub
+credential and Mergify never issues one.
+
+The repository and API URL resolve as before:
 
 | What | `--flag` | then env | then |
 | --- | --- | --- | --- |
-| **Token** | `--token` / `-t` | `MERGIFY_TOKEN`, `GITHUB_TOKEN` | `gh auth token` |
 | **Repository** | `--repository` / `-r` | `GITHUB_REPOSITORY` | `git remote` (`origin`) |
 | **API URL** | `--api-url` / `-u` | `MERGIFY_API_URL` | `https://api.mergify.com` |
+
+Credentials are stored per API URL, so one machine can hold a credential for
+the hosted service and one for an on-premise install.
 
 See the [authentication guide](https://docs.mergify.com/cli/usage) for details.
 
@@ -153,7 +191,8 @@ These are accepted on every command:
 
 | Variable | Effect |
 | --- | --- |
-| `MERGIFY_TOKEN`, `GITHUB_TOKEN` | API token (falls back to `gh auth token`). |
+| `MERGIFY_TOKEN` | API token. Takes precedence over a stored `mergify auth login` credential. |
+| `GITHUB_TOKEN` | **Deprecated** as a Mergify API credential (falls back to `gh auth token`); still the GitHub token `mergify stack` uses. |
 | `GITHUB_REPOSITORY` | Default `owner/repo` when `--repository` is omitted. |
 | `MERGIFY_API_URL` | API base URL (default `https://api.mergify.com`). |
 | `RUST_LOG` | Fine-grained log filtering; overrides `--verbose`. |

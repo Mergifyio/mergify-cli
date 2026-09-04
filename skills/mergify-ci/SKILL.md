@@ -183,7 +183,7 @@ mergify tests show -r owner/repo \
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--pipeline-name`, `--pipeline-name-exclude` -- Restrict / exclude by pipeline.
 - `--job-name`, `--job-name-exclude` -- Restrict / exclude by job.
@@ -217,7 +217,7 @@ mergify tests quarantines add -r owner/repo \
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--reason` -- Reason recorded for the quarantine; required.
 - `--branch` / `-b` -- Branch name or pattern to scope to. Omit for all branches.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"id", "test_name", "reason", "branch"}` to stdout.
 
@@ -242,7 +242,7 @@ mergify tests quarantines remove -r owner/repo 12345678-1234-5678-1234-567812345
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"id", "test_name"}` to stdout (`test_name` is null when
   addressed by id).
@@ -268,7 +268,7 @@ mergify tests quarantines get -r owner/repo --json \
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit the record (`id`, `test_name`, `reason`, `branch`, `created_at`,
   `source`, `is_recovered`) to stdout.
@@ -300,7 +300,7 @@ A null `branch` renders as `*` (the quarantine applies to all branches).
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"quarantined_tests": [...]}` to stdout, each record carrying
   `id`, `test_name`, `reason`, `branch`, `created_at`, `source`, `is_recovered`.

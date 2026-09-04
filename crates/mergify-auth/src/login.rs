@@ -29,6 +29,9 @@ struct LoginResult {
     api_url: String,
     login: Option<String>,
     stored_in: String,
+    /// The environment variable that will be used *instead of* the
+    /// credential just stored, if one is set.
+    overridden_by: Option<String>,
 }
 
 /// Run the `auth login` command.
@@ -82,7 +85,19 @@ pub async fn run(opts: LoginOptions<'_>, output: &mut dyn Output) -> Result<(), 
     // trade worth making.
     let login = identity::login_name(api_url.clone(), &credential.token).await;
 
-    emit(output, &api_url, login.as_deref(), &location)
+    // `login` is the moment the user is actually watching. Telling
+    // them here that something in their shell outranks what they
+    // just approved is the difference between a puzzling 403 an hour
+    // later and one line now — and `auth status`, which says the
+    // same thing, is a command they have no reason to run after a
+    // login that appeared to succeed.
+    emit(
+        output,
+        &api_url,
+        login.as_deref(),
+        &location,
+        auth::overriding_env_var(),
+    )
 }
 
 /// Ask the server to revoke `token`, and say nothing if it will not.
@@ -129,11 +144,13 @@ fn emit(
     api_url: &Url,
     login: Option<&str>,
     location: &Location,
+    overriding: Option<&'static str>,
 ) -> Result<(), CliError> {
     let result = LoginResult {
         api_url: api_url.to_string(),
         login: login.map(str::to_owned),
         stored_in: location.to_string(),
+        overridden_by: overriding.map(str::to_owned),
     };
     let theme = mergify_tui::Theme::detect();
     output.emit(&result, &mut |w: &mut dyn Write| {
@@ -147,7 +164,17 @@ fn emit(
             green = theme.green.render(),
             reset = theme.reset,
         )?;
-        writeln!(w, "Credential stored in {location}.")
+        writeln!(w, "Credential stored in {location}.")?;
+        if let Some(name) = overriding {
+            writeln!(
+                w,
+                "\n{warn}Note:{reset} {name} is set, so Mergify commands use it instead of \
+                 the credential you just stored. Unset it to use this login.",
+                warn = theme.warn.render(),
+                reset = theme.reset,
+            )?;
+        }
+        Ok(())
     })?;
     Ok(())
 }
@@ -285,6 +312,37 @@ mod tests {
             );
             drop(dir);
         });
+    }
+
+    // The note has to reach the user from `run`, not merely be
+    // printable by the renderer: a `MERGIFY_TOKEN` in the shell
+    // makes every command ignore the credential this one just
+    // stored, and `login` is the last moment anybody is watching.
+    #[test]
+    fn login_reports_an_overriding_env_var() {
+        let (dir, store) = file_store();
+        let mut captured = Captured::human();
+        let stdout = with_mergify_token(Some("env-token"), async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+            captured.stdout()
+        });
+
+        assert!(stdout.contains("Logged in to"), "got {stdout:?}");
+        assert!(
+            stdout.contains("MERGIFY_TOKEN is set, so Mergify commands use it"),
+            "got {stdout:?}",
+        );
+        drop(dir);
     }
 
     // A deployment too old to serve `/v1/user` still logs in; it just
