@@ -10,9 +10,13 @@ description = "Shared foundations for mergify-cli: HTTP, auth, errors, output, g
 publish = false
 
 [dependencies]
+chrono = { workspace = true }
+dirs = { workspace = true }
+keyring = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
