@@ -338,7 +338,7 @@ struct StackCheckoutOpts {
     /// `Some((remote, branch))` from `--trunk REMOTE/BRANCH`;
     /// `None` falls back to `trunk::get_trunk` at runtime.
     trunk: Option<(String, String)>,
-    /// GitHub token; resolved via `mergify_core::auth::resolve_token`
+    /// GitHub token; resolved via `mergify_core::auth::resolve_github_token`
     /// when None.
     token: Option<String>,
 }
@@ -1177,7 +1177,7 @@ async fn resolve_stack_context(
     trunk: Option<(String, String)>,
     branch_prefix: Option<String>,
 ) -> Result<StackContext, mergify_core::CliError> {
-    let token = mergify_core::auth::resolve_token(token)?;
+    let token = mergify_core::auth::resolve_github_token(token)?;
     let github_server = mergify_stack::stack_context::resolve_github_server(None)?;
     let client = mergify_stack::remote_changes::default_client(github_server, &token)?;
     let trunk = if let Some((remote, branch)) = trunk {
@@ -2088,7 +2088,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::StackCheckout(opts) => {
-                let token = mergify_core::auth::resolve_token(opts.token.as_deref())?;
+                let token = mergify_core::auth::resolve_github_token(opts.token.as_deref())?;
                 let github_server =
                     mergify_stack::stack_context::resolve_github_server(None)?;
                 let client = mergify_stack::remote_changes::default_client(
@@ -2191,7 +2191,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 }
             }
             NativeCommand::StackSync(opts) => {
-                let token = mergify_core::auth::resolve_token(opts.token.as_deref())?;
+                let token = mergify_core::auth::resolve_github_token(opts.token.as_deref())?;
                 let github_server = mergify_stack::stack_context::resolve_github_server(None)?;
                 let client =
                     mergify_stack::remote_changes::default_client(github_server, &token)?;
@@ -2631,17 +2631,17 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             }
             NativeCommand::InternalStackRemoteChanges(opts) => {
                 // Search GitHub for PRs belonging to the stack and
-                // group them by Change-Id. The Python `stack/changes.py`
-                // consumer deserializes the JSON array back into the
-                // `RemoteChanges` dict it always built itself.
+                // group them by Change-Id, printed as a JSON array of
+                // `{change_id, pull}` records for whoever invoked this
+                // hidden command.
                 //
                 // Token comes from `--token` when supplied; otherwise
-                // `auth::resolve_token` reads `MERGIFY_TOKEN` /
-                // `GITHUB_TOKEN` / `gh auth token` so the Python
-                // caller can pass it via the subprocess env and keep
+                // `auth::resolve_github_token` reads `MERGIFY_TOKEN` /
+                // `GITHUB_TOKEN` / `gh auth token`, so a caller can
+                // pass it through the subprocess environment and keep
                 // it out of `ps`/process listings.
                 let token =
-                    mergify_core::auth::resolve_token(opts.token.as_deref())?;
+                    mergify_core::auth::resolve_github_token(opts.token.as_deref())?;
                 let client = mergify_stack::remote_changes::default_client(
                     opts.github_server,
                     &token,
@@ -3671,11 +3671,11 @@ struct InternalStackRemoteChangesArgs {
     #[arg(long = "github-server")]
     github_server: url::Url,
     /// Bearer token. Optional — when omitted the binary falls
-    /// back to `mergify_core::auth::resolve_token` (which reads
-    /// `MERGIFY_TOKEN` / `GITHUB_TOKEN` / `gh auth token`). The
-    /// Python caller should prefer setting `MERGIFY_TOKEN` in
-    /// the subprocess env over passing `--token` so the value
-    /// doesn't surface in `ps`/process listings.
+    /// back to `mergify_core::auth::resolve_github_token` (which reads
+    /// `MERGIFY_TOKEN` / `GITHUB_TOKEN` / `gh auth token`). Prefer
+    /// setting `MERGIFY_TOKEN` in the subprocess environment over
+    /// passing `--token`, so the value doesn't surface in
+    /// `ps`/process listings.
     #[arg(long)]
     token: Option<String>,
     /// Repository owner.

@@ -77,7 +77,7 @@ pub async fn quarantine(
 ) -> Result<ExitCode, CliError> {
     let repository = resolve_repository(opts.repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_token(opts.token)?;
+    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
 
@@ -108,7 +108,7 @@ pub async fn unquarantine(
 ) -> Result<ExitCode, CliError> {
     let repository = resolve_repository(opts.repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_token(opts.token)?;
+    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
 
@@ -183,7 +183,7 @@ async fn fetch_quarantines(
 ) -> Result<Vec<QuarantinedTest>, CliError> {
     let repository = resolve_repository(repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_token(token)?;
+    let token = auth::resolve_mergify_token(token)?;
     let api_url = auth::resolve_api_url(api_url)?;
     let client = HttpClient::new(api_url, token, ApiFlavor::Mergify)?;
 

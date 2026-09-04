@@ -52,7 +52,7 @@ impl CommandContext {
     ) -> Result<Self, CliError> {
         Ok(Self {
             repository: auth::resolve_repository(repository)?,
-            token: auth::resolve_token(token)?,
+            token: auth::resolve_mergify_token(token)?,
             api_url: auth::resolve_api_url(api_url)?,
         })
     }
