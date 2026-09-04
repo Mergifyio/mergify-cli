@@ -4058,7 +4058,8 @@ struct TestsShowCliArgs {
     repository: Option<String>,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// then ``GITHUB_TOKEN`` env vars. Needs an `admin` application
+    /// key or a GitHub PAT: a `ci` key is answered with 403.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4118,7 +4119,8 @@ struct TestsQuarantineCliArgs {
     branch: Option<String>,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// then ``GITHUB_TOKEN`` env vars. Needs an `admin` application
+    /// key or a GitHub PAT: a `ci` key is answered with 403.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4149,7 +4151,8 @@ struct TestsUnquarantineCliArgs {
     repository: Option<String>,
 
     /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// then ``GITHUB_TOKEN`` env vars. Needs an `admin` application
+    /// key or a GitHub PAT: a `ci` key is answered with 403.
     #[arg(long, short = 't')]
     token: Option<String>,
 
