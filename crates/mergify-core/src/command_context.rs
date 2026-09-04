@@ -50,10 +50,17 @@ impl CommandContext {
         token: Option<&str>,
         api_url: Option<&str>,
     ) -> Result<Self, CliError> {
+        // The API URL is resolved before the token because the
+        // token chain now consults the credential stored *for that
+        // URL*: one machine can hold a credential for the hosted
+        // service and one for an on-premise install.
+        let repository = auth::resolve_repository(repository)?;
+        let api_url = auth::resolve_api_url(api_url)?;
+        let token = auth::resolve_mergify_token(token, &api_url, auth::Audience::User)?;
         Ok(Self {
-            repository: auth::resolve_repository(repository)?,
-            token: auth::resolve_mergify_token(token)?,
-            api_url: auth::resolve_api_url(api_url)?,
+            repository,
+            token,
+            api_url,
         })
     }
 

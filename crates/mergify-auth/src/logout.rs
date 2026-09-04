@@ -28,11 +28,16 @@ struct LogoutResult {
     /// answer 200 for any string, so this says the server took the
     /// request, never that it found something to delete.
     revoked: bool,
+    /// The environment variable that still authenticates every
+    /// Mergify command after this logout, if one is set.
+    overridden_by: Option<String>,
 }
 
 /// Run the `auth logout` command.
 pub async fn run(opts: LogoutOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
     let api_url = auth::resolve_api_url(opts.api_url)?;
+    let overriding = auth::overriding_env_var();
+
     let stored = opts.store.get(&api_url)?;
     let Some(stored) = stored else {
         // Still ask the store to forget: a keychain that refused to
@@ -53,7 +58,7 @@ pub async fn run(opts: LogoutOptions<'_>, output: &mut dyn Output) -> Result<(),
                 e,
             )
         })?;
-        return emit(output, &api_url, removed, false);
+        return emit(output, &api_url, removed, false, overriding);
     };
 
     // Revoke first, then forget: the server is the copy that matters,
@@ -84,7 +89,25 @@ pub async fn run(opts: LogoutOptions<'_>, output: &mut dyn Output) -> Result<(),
         }
     };
 
-    emit(output, &api_url, true, revoked)
+    // The note `emit` prints tells the user that `MERGIFY_TOKEN`
+    // keeps them authenticated. That is the opposite of true when
+    // the variable holds the token this command just revoked —
+    // which is the configuration this feature itself invites, since
+    // exporting the credential `auth login` mints is the obvious
+    // thing to do with it.
+    let overriding = if auth::overriding_env_var_holds(&stored.credential.token) {
+        if revoked {
+            output.status(
+                "Warning: MERGIFY_TOKEN holds the credential that was just revoked. Unset \
+                 it, or Mergify commands will keep sending a dead token.",
+            )?;
+        }
+        None
+    } else {
+        overriding
+    };
+
+    emit(output, &api_url, true, revoked, overriding)
 }
 
 fn emit(
@@ -92,12 +115,15 @@ fn emit(
     api_url: &Url,
     was_logged_in: bool,
     revoked: bool,
+    overriding: Option<&'static str>,
 ) -> Result<(), CliError> {
     let result = LogoutResult {
         api_url: api_url.to_string(),
         was_logged_in,
         revoked,
+        overridden_by: overriding.map(str::to_owned),
     };
+    let theme = mergify_tui::Theme::detect();
     output.emit(&result, &mut |w: &mut dyn Write| {
         if was_logged_in {
             // Says only what is true. The revocation endpoint
@@ -107,6 +133,17 @@ fn emit(
             writeln!(w, "Logged out of {api_url}.")?;
         } else {
             writeln!(w, "No credential stored for {api_url}.")?;
+        }
+        // The more dangerous direction of the same omission `login`
+        // and `status` cover: the user believes access is gone.
+        if let Some(name) = overriding {
+            writeln!(
+                w,
+                "\n{warn}Note:{reset} {name} is still set, so Mergify commands remain \
+                 authenticated with it.",
+                warn = theme.warn.render(),
+                reset = theme.reset,
+            )?;
         }
         Ok(())
     })?;
@@ -195,6 +232,42 @@ mod tests {
         });
     }
 
+    // The dangerous direction of the omission: the user believes
+    // access is gone, and every Mergify command still authenticates.
+    #[test]
+    fn logout_says_when_an_environment_credential_still_authenticates() {
+        let (dir, store) = file_store();
+        let mut captured = Captured::human();
+        let stdout = with_mergify_token(Some("mut_from_the_environment"), async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/oauth/revoke"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+            store
+                .set(&Url::parse(&server.uri()).unwrap(), &credential())
+                .unwrap();
+            run(
+                LogoutOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+            captured.stdout()
+        });
+
+        assert!(stdout.contains("Logged out of"), "got {stdout:?}");
+        assert!(
+            stdout.contains("MERGIFY_TOKEN is still set"),
+            "got {stdout:?}",
+        );
+        drop(dir);
+    }
+
     // A failed revocation still clears the machine, says so, and does
     // not fail the command: the postcondition the user asked for
     // holds, and `auth logout` belongs in teardown scripts.
@@ -228,6 +301,50 @@ mod tests {
                 "there was no token to revoke, so nothing may be sent",
             );
         });
+    }
+
+    // `MERGIFY_TOKEN` holding the token that was just revoked makes
+    // the standing note exactly backwards. Exporting the credential
+    // `auth login` mints is the configuration this feature invites,
+    // so this is not a corner case.
+    #[test]
+    fn logout_says_to_unset_an_env_var_holding_the_revoked_credential() {
+        let (dir, store) = file_store();
+        with_mergify_token(Some("mut_secret"), async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/oauth/revoke"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+            store
+                .set(&Url::parse(&server.uri()).unwrap(), &credential())
+                .unwrap();
+            let mut captured = Captured::human();
+
+            run(
+                LogoutOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let stderr = captured.stderr();
+            assert!(
+                stderr.contains("holds the credential that was just revoked"),
+                "got {stderr:?}",
+            );
+            let stdout = captured.stdout();
+            assert!(
+                !stdout.contains("remain authenticated"),
+                "the standing note is the opposite of true here: got {stdout:?}",
+            );
+        });
+        drop(dir);
     }
 
     #[test]

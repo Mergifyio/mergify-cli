@@ -55,8 +55,8 @@ pub async fn run(opts: SimulateOptions<'_>, output: &mut dyn Output) -> Result<(
         CliError::Configuration(format!("cannot read {}: {e}", config_path.display()))
     })?;
 
-    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_mergify_token(opts.token, &api_url, auth::Audience::User)?;
 
     output.status(&format!("Simulating against {api_url}…"))?;
 

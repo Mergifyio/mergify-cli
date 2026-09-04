@@ -29,6 +29,9 @@ struct LoginResult {
     api_url: String,
     login: Option<String>,
     stored_in: String,
+    /// The environment variable that will be used *instead of* the
+    /// credential just stored, if one is set.
+    overridden_by: Option<String>,
 }
 
 /// Run the `auth login` command.
@@ -78,7 +81,7 @@ pub async fn run(opts: LoginOptions<'_>, output: &mut dyn Output) -> Result<(), 
     // working, or on a reprovisioned box — would otherwise leak one
     // per login until they hit the cap and only the dashboard could
     // clear it.
-    if let Some(previous) = previous
+    if let Some(previous) = &previous
         && let Err(e) = device::revoke(&client, &previous.credential.token).await
     {
         // Out loud, not a debug line. This is the leak the block
@@ -98,7 +101,30 @@ pub async fn run(opts: LoginOptions<'_>, output: &mut dyn Output) -> Result<(), 
     // trade worth making.
     let login = identity::login_name(api_url.clone(), &credential.token).await;
 
-    emit(output, &api_url, login.as_deref(), &location)
+    // `login` is the moment the user is actually watching. Telling
+    // them here that something in their shell outranks what they
+    // just approved is the difference between a puzzling 403 an hour
+    // later and one line now — and `auth status`, which says the
+    // same thing, is a command they have no reason to run after a
+    // login that appeared to succeed.
+    //
+    // With one correction: when the variable holds the credential
+    // this login just replaced and revoked, "commands use it
+    // instead" is worse than no note at all. Re-logging in with the
+    // token exported is the obvious way to reach this.
+    let overriding = auth::overriding_env_var();
+    let overriding = match &previous {
+        Some(previous) if auth::overriding_env_var_holds(&previous.credential.token) => {
+            output.status(
+                "Warning: MERGIFY_TOKEN holds the credential this login replaced, which has \
+                 been revoked. Unset it so Mergify commands use the new one.",
+            )?;
+            None
+        }
+        _ => overriding,
+    };
+
+    emit(output, &api_url, login.as_deref(), &location, overriding)
 }
 
 /// Ask the server to revoke a token this machine could not store,
@@ -146,11 +172,13 @@ fn emit(
     api_url: &Url,
     login: Option<&str>,
     location: &Location,
+    overriding: Option<&'static str>,
 ) -> Result<(), CliError> {
     let result = LoginResult {
         api_url: api_url.to_string(),
         login: login.map(str::to_owned),
         stored_in: location.to_string(),
+        overridden_by: overriding.map(str::to_owned),
     };
     let theme = mergify_tui::Theme::detect();
     output.emit(&result, &mut |w: &mut dyn Write| {
@@ -164,7 +192,17 @@ fn emit(
             green = theme.green.render(),
             reset = theme.reset,
         )?;
-        writeln!(w, "Credential stored in {location}.")
+        writeln!(w, "Credential stored in {location}.")?;
+        if let Some(name) = overriding {
+            writeln!(
+                w,
+                "\n{warn}Note:{reset} {name} is set, so Mergify commands use it instead of \
+                 the credential you just stored. Unset it to use this login.",
+                warn = theme.warn.render(),
+                reset = theme.reset,
+            )?;
+        }
+        Ok(())
     })?;
     Ok(())
 }
@@ -302,6 +340,37 @@ mod tests {
             );
             drop(dir);
         });
+    }
+
+    // The note has to reach the user from `run`, not merely be
+    // printable by the renderer: a `MERGIFY_TOKEN` in the shell
+    // makes every command ignore the credential this one just
+    // stored, and `login` is the last moment anybody is watching.
+    #[test]
+    fn login_reports_an_overriding_env_var() {
+        let (dir, store) = file_store();
+        let mut captured = Captured::human();
+        let stdout = with_mergify_token(Some("env-token"), async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+            captured.stdout()
+        });
+
+        assert!(stdout.contains("Logged in to"), "got {stdout:?}");
+        assert!(
+            stdout.contains("MERGIFY_TOKEN is set, so Mergify commands use it"),
+            "got {stdout:?}",
+        );
+        drop(dir);
     }
 
     // A deployment too old to serve `/v1/user` still logs in; it just
@@ -460,6 +529,54 @@ mod tests {
             let stderr = captured.stderr();
             assert!(stderr.contains("could not be revoked"), "got {stderr:?}");
             assert!(stderr.contains("CLI Tokens"), "got {stderr:?}");
+        });
+        drop(dir);
+    }
+
+    // Re-logging in with the old credential exported: the variable
+    // now holds a revoked token, so "commands use it instead" would
+    // send the user off with a dead one.
+    #[test]
+    fn login_says_to_unset_an_env_var_holding_the_replaced_credential() {
+        let (dir, store) = file_store();
+        with_mergify_token(Some("mut_previous"), async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            Mock::given(method("POST"))
+                .and(path("/v1/oauth/revoke"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let api_url = Url::parse(&server.uri()).unwrap();
+            store
+                .set(
+                    &api_url,
+                    &Credential {
+                        token: "mut_previous".to_string(),
+                        expires_at: None,
+                    },
+                )
+                .unwrap();
+            let mut captured = Captured::human();
+
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let stderr = captured.stderr();
+            assert!(
+                stderr.contains("holds the credential this login replaced"),
+                "got {stderr:?}",
+            );
+            let stdout = captured.stdout();
+            assert!(!stdout.contains("Note:"), "got {stdout:?}");
         });
         drop(dir);
     }

@@ -73,8 +73,8 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
     };
 
     let repository = detector::resolve_repository(opts.repository)?;
-    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
+    let token = auth::resolve_mergify_token(opts.token, &api_url, auth::Audience::ApplicationKey)?;
 
     // Whenever the deprecated `--file` flag is supplied, surface
     // the deprecation warning — even when `--scopes-json` is also
