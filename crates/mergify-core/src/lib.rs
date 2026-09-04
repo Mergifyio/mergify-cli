@@ -32,7 +32,7 @@ pub use command_context::CommandContext;
 pub use credentials::{Credential, CredentialStore};
 pub use error::CliError;
 pub use exit_code::ExitCode;
-pub use http::{ApiFlavor, Client as HttpClient, DeleteOutcome, Page, RetryPolicy};
+pub use http::{ApiFlavor, ApiOutcome, Client as HttpClient, DeleteOutcome, Page, RetryPolicy};
 pub use output::{Output, OutputMode, StdioOutput};
 
 /// Compile-time version string taken from the crate package metadata
