@@ -25,8 +25,11 @@ use crate::exit_code::ExitCode;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CliError {
-    /// Configuration file missing, unparseable, or failing schema
-    /// validation. Maps to [`ExitCode::ConfigurationError`].
+    /// Configuration or credentials missing, unparseable, or failing
+    /// validation — the config file the user pointed at, and equally
+    /// the credential a Mergify command could not find anywhere in
+    /// its resolution chain. Maps to
+    /// [`ExitCode::ConfigurationError`].
     #[error("{0}")]
     Configuration(String),
 
