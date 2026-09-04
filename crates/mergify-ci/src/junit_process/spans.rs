@@ -47,6 +47,22 @@ pub struct UploadMetadata {
     pub quarantined: BTreeSet<String>,
 }
 
+/// The widest test name this client will upload, in bytes.
+///
+/// Not a storage limit. The engine keys every table an oversized name can
+/// reach on `uuid_generate_v5` of the name rather than the name itself, so
+/// the name is stored whole and no btree tuple limit is tripped (MRGFY-8902).
+/// What this bounds is what a wire payload and a UI can usefully carry: a
+/// name at this size is 65 kB of generated text — INC-2436 was a Vitest title
+/// interpolating stringified React source — that no one reads and that costs
+/// every downstream reader who has to render it.
+///
+/// Skipped rather than truncated, and reported rather than dropped quietly.
+/// Truncating would mint a second identity for the same test, which is the
+/// one outcome worse than not having the result: the test would split into
+/// two histories and its flakiness and quarantine state with it.
+pub(crate) const MAX_TEST_NAME_BYTES: usize = 65_536;
+
 /// Result of converting a [`ParseResult`] (one or more `JUnit`
 /// files) into a wire-ready OTLP request.
 #[derive(Debug, Clone)]
@@ -55,6 +71,10 @@ pub struct BuiltTraces {
     /// Same value populates the `test.run.id` resource attribute.
     pub run_id: String,
     pub request: ExportTraceServiceRequest,
+    /// Names of cases left out because they exceed
+    /// [`MAX_TEST_NAME_BYTES`]. Reported to the user by the caller;
+    /// empty for every ordinary report.
+    pub oversized_case_names: Vec<String>,
 }
 
 /// Convert a [`ParseResult`] (the union of every parsed `JUnit`
@@ -87,6 +107,7 @@ fn build_traces_with(
     let common_attrs = common_attributes(metadata);
 
     let mut spans: Vec<Span> = Vec::new();
+    let mut oversized_case_names: Vec<String> = Vec::new();
 
     // Suite spans are appended after we know each suite's earliest
     // case start (so the suite's start_time covers all its cases).
@@ -101,7 +122,17 @@ fn build_traces_with(
         let suite_span_id = rng.bytes8();
         let mut suite_start_time_unix_nanos = now_unix_nanos;
 
+        let mut suite_case_count = 0_usize;
+
         for case in suite_cases {
+            // `len()` on a Rust `String` is already bytes, which is the unit
+            // the limit is stated in.
+            if case.name.len() > MAX_TEST_NAME_BYTES {
+                oversized_case_names.push(case.name.clone());
+                continue;
+            }
+            suite_case_count += 1;
+
             let case_span_id = rng.bytes8();
             let start_time_unix_nanos = case_start_time(now_unix_nanos, case.duration);
             suite_start_time_unix_nanos = suite_start_time_unix_nanos.min(start_time_unix_nanos);
@@ -162,6 +193,13 @@ fn build_traces_with(
                     code: status_code.into(),
                 }),
             });
+        }
+
+        // A suite that kept nothing emits nothing: a suite span with no
+        // children is a test suite the backend would show as having run zero
+        // cases, which is a different lie from the one being fixed.
+        if suite_case_count == 0 {
+            continue;
         }
 
         session_start_time_unix_nanos =
@@ -234,6 +272,7 @@ fn build_traces_with(
         request: ExportTraceServiceRequest {
             resource_spans: vec![resource_spans],
         },
+        oversized_case_names,
     }
 }
 
@@ -468,6 +507,98 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// A name past the cap costs its own result and nothing else.
+    #[test]
+    fn an_oversized_name_is_skipped_and_its_suite_mates_still_upload() {
+        let mut parsed = sample_parsed();
+        // One byte over, so the assertion is about the boundary and not about
+        // some comfortably-huge number that a wrong `>=` would also pass.
+        let oversized = "x".repeat(MAX_TEST_NAME_BYTES + 1);
+        parsed.cases.push(TestCase {
+            name: oversized.clone(),
+            suite_name: "pytest".to_string(),
+            duration: Some(Duration::from_secs_f64(0.003)),
+            file: None,
+            line: None,
+            status: TestStatus::Passed,
+            failure: Failure::default(),
+        });
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(16 + 4 * 8);
+        bytes.extend(std::iter::repeat_n(0xAA, 16));
+        bytes.extend(std::iter::repeat_n(0x11, 8));
+        bytes.extend(std::iter::repeat_n(0x22, 8));
+        bytes.extend(std::iter::repeat_n(0x33, 8));
+        bytes.extend(std::iter::repeat_n(0x44, 8));
+        let mut rng = FixedRng::new(bytes);
+
+        let now: u64 = 1_700_000_000_000_000_000;
+        let metadata = UploadMetadata::default();
+        let built = with_ci_env(&[], || build_traces_with(&parsed, &metadata, now, &mut rng));
+
+        assert_eq!(built.oversized_case_names, vec![oversized.clone()]);
+
+        let spans = &built.request.resource_spans[0].scope_spans[0].spans;
+        // Reported, not uploaded -- in no span name and no attribute value.
+        assert!(!spans.iter().any(|s| s.name == oversized));
+        assert!(!spans.iter().any(|s| s.attributes.iter().any(|a| {
+            matches!(
+                &a.value.as_ref().and_then(|v| v.value.as_ref()),
+                Some(AnyValueOneof::StringValue(v)) if v == &oversized
+            )
+        })));
+        // The two well-named cases in the same suite are untouched.
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.name == "tests.test_func.test_success")
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.name == "tests.test_func.test_failed")
+        );
+    }
+
+    /// A name exactly at the cap is uploaded: the limit is inclusive, and a
+    /// test sitting on it must not silently lose its history.
+    #[test]
+    fn a_name_exactly_at_the_cap_is_still_uploaded() {
+        let mut parsed = sample_parsed();
+        let at_cap = "y".repeat(MAX_TEST_NAME_BYTES);
+        parsed.cases.push(TestCase {
+            name: at_cap.clone(),
+            suite_name: "pytest".to_string(),
+            duration: Some(Duration::from_secs_f64(0.003)),
+            file: None,
+            line: None,
+            status: TestStatus::Passed,
+            failure: Failure::default(),
+        });
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(16 + 5 * 8);
+        bytes.extend(std::iter::repeat_n(0xAA, 16));
+        bytes.extend(std::iter::repeat_n(0x11, 8));
+        bytes.extend(std::iter::repeat_n(0x22, 8));
+        bytes.extend(std::iter::repeat_n(0x33, 8));
+        bytes.extend(std::iter::repeat_n(0x44, 8));
+        bytes.extend(std::iter::repeat_n(0x55, 8));
+        let mut rng = FixedRng::new(bytes);
+
+        let built = with_ci_env(&[], || {
+            build_traces_with(
+                &parsed,
+                &UploadMetadata::default(),
+                1_700_000_000_000_000_000,
+                &mut rng,
+            )
+        });
+
+        assert!(built.oversized_case_names.is_empty());
+        let spans = &built.request.resource_spans[0].scope_spans[0].spans;
+        assert!(spans.iter().any(|s| s.name == at_cap));
     }
 
     #[test]
