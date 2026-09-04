@@ -1,1 +1,6 @@
-review (copilot): spell `LIVE_TEST_MERGIFY_TOKEN_ADMIN` out in the header instead of abbreviating to `_ADMIN`, so a grep for either secret finds this file; and finish the sentence the removed 'Mirrors Python conftest.py::cli' lead-in left dangling on a semicolon.
+Revision history for #1799:
+
+rev 2 (content) 2026-09-04 15:38 UTC — review (copilot): spell `LIVE_TEST_MERGIFY_TOKEN_ADMIN` out in the header instead of abbreviating to `_ADMIN`, so a grep for either secret finds this file; and finish the sentence the removed 'Mirrors Python conftest.py::cli' lead-in left dangling on a semicolon.
+rev 1 (initial) 2026-09-04 15:38 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":1799,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"55241824dfe6b914d7fa9ef1ce564ac6dfc3d53a","timestamp_iso":"2026-09-04T15:38:09Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"content","old_sha":"55241824dfe6b914d7fa9ef1ce564ac6dfc3d53a","new_sha":"9b118fc4db12624dd6faa1d63597559346834c91","timestamp_iso":"2026-09-04T15:38:09Z","reason":"review (copilot): spell `LIVE_TEST_MERGIFY_TOKEN_ADMIN` out in the header instead of abbreviating to `_ADMIN`, so a grep for either secret finds this file; and finish the sentence the removed 'Mirrors Python conftest.py::cli' lead-in left dangling on a semicolon.","replay_sha":null,"compare_url":"https://github.com/Mergifyio/mergify-cli/compare/55241824dfe6b914d7fa9ef1ce564ac6dfc3d53a...9b118fc4db12624dd6faa1d63597559346834c91"}]} -->
