@@ -1,1 +1,6 @@
-Rebased onto the live-tests token fix below it, so this PR's own live-tests run goes green. Diff unchanged.
+Revision history for #1795:
+
+rev 2 (rebase) 2026-09-04 12:59 UTC — Rebased onto the live-tests token fix below it, so this PR's own live-tests run goes green. Diff unchanged.
+rev 1 (initial) 2026-09-04 12:59 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":1795,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"7805be8dc686fa979f894308ba0285d731035a45","timestamp_iso":"2026-09-04T12:59:08Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"rebase","old_sha":"7805be8dc686fa979f894308ba0285d731035a45","new_sha":"7e8ce1661537eb49bb81a7e97b9d891b019fca9e","timestamp_iso":"2026-09-04T12:59:08Z","reason":"Rebased onto the live-tests token fix below it, so this PR's own live-tests run goes green. Diff unchanged.","replay_sha":null,"compare_url":"https://github.com/Mergifyio/mergify-cli/compare/7805be8dc686fa979f894308ba0285d731035a45...7e8ce1661537eb49bb81a7e97b9d891b019fca9e"}]} -->
