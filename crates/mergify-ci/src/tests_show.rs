@@ -47,7 +47,7 @@ pub async fn run(
 ) -> Result<ExitCode, CliError> {
     let repository = resolve_repository(opts.repository)?;
     let (owner, repo) = split_owner_repo(&repository)?;
-    let token = auth::resolve_token(opts.token)?;
+    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
     let client = Arc::new(HttpClient::new(api_url, token, ApiFlavor::Mergify)?);
 
