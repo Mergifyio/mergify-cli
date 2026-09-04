@@ -235,6 +235,7 @@ pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> 
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(value.to_string());
     }
+    let mut skipped_mergify_token = false;
     for env_name in ["MERGIFY_TOKEN", "GITHUB_TOKEN"] {
         let Some(value) = var_non_empty(env_name) else {
             continue;
@@ -252,6 +253,7 @@ pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> 
                 "holds a Mergify user token, which GitHub cannot accept; trying the next \
                  credential"
             );
+            skipped_mergify_token = true;
             continue;
         }
         return Ok(value);
@@ -260,6 +262,17 @@ pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> 
         && !token.is_empty()
     {
         return Ok(token);
+    }
+    // Telling someone to set `MERGIFY_TOKEN` when they have set it,
+    // and it was skipped two lines above, is the worst version of
+    // this message: the reason is real and only visible at `-vv`.
+    if skipped_mergify_token {
+        return Err(CliError::Configuration(
+            "MERGIFY_TOKEN holds a Mergify-issued token, which GitHub does not accept, and \
+             `mergify stack` talks to GitHub. Set 'GITHUB_TOKEN', or make sure that the gh \
+             client is installed and you are authenticated."
+                .to_string(),
+        ));
     }
     Err(CliError::Configuration(
         "please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, \
@@ -650,6 +663,29 @@ mod tests {
             ],
             || {
                 assert_eq!(resolve_github_token(None).unwrap(), "env-github");
+            },
+        );
+    }
+
+    // Being skipped has to reach the failure, not only `-vv`:
+    // otherwise `stack push` tells a user to set the variable they
+    // set, for a reason they cannot see.
+    #[test]
+    fn resolve_github_token_says_why_it_skipped_the_mergify_token() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", Some("mut_from_auth_login")),
+                ("GITHUB_TOKEN", None),
+                ("PATH", Some("/nonexistent-directory-for-test")),
+            ],
+            || {
+                let err = resolve_github_token(None).unwrap_err();
+                let message = err.to_string();
+                assert!(
+                    message.contains("GitHub does not accept"),
+                    "got {message:?}",
+                );
+                assert!(message.contains("GITHUB_TOKEN"), "got {message:?}");
             },
         );
     }
