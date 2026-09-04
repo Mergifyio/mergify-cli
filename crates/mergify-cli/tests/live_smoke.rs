@@ -217,6 +217,24 @@ fn live_admin_token() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
+/// 8 random hex-ish chars, so concurrent or repeated runs never
+/// fight over the same row on the shared canary repository.
+/// `tempfile`'s name generation is already a dependency and draws
+/// from `getrandom`, so it saves pulling in a uuid crate for this.
+fn unique_suffix() -> String {
+    let dir = tempfile::tempdir().expect("tempdir for entropy");
+    let name = dir
+        .path()
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("00000000")
+        .to_string();
+    // tempdir names are like ".tmpXXXXXX" — take a tail slice so
+    // the literal prefix is not included.
+    let tail: String = name.chars().rev().take(8).collect();
+    tail.chars().rev().collect::<String>()
+}
+
 /// Helper for "early-return on missing token". Cargo's stock
 /// test harness doesn't have a "skip" outcome — early-returning
 /// counts as pass. Logging `SKIP:` to stderr makes the elided
@@ -509,25 +527,8 @@ fn freeze_create_update_delete_roundtrip() {
     let token = skip_if_unset!(live_admin_token());
 
     // Unique reason so concurrent or repeated runs don't fight
-    // over the same row. The Python suite uses
-    // `uuid.uuid4().hex[:8]`; reproduce that entropy with
-    // `tempfile`'s name-generation (32 hex chars from
-    // `getrandom`), truncated to 8.
-    let suffix = {
-        let dir = tempfile::tempdir().expect("tempdir for entropy");
-        let name = dir
-            .path()
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("00000000")
-            .to_string();
-        // tempdir names are like ".tmpXXXXXX" or "tmpXXXXXX" with
-        // ~6+ random chars after the prefix. Take a tail slice so
-        // we don't include the literal prefix.
-        let tail: String = name.chars().rev().take(8).collect();
-        tail.chars().rev().collect::<String>()
-    };
-    let reason = format!("func-tests-live-smoke-{suffix}");
+    // over the same row.
+    let reason = format!("func-tests-live-smoke-{}", unique_suffix());
 
     let create = cli(&[
         "freeze",
@@ -608,7 +609,7 @@ fn freeze_create_update_delete_roundtrip() {
 }
 
 // ---------------------------------------------------------------
-// CI-Insights test reads (admin token).
+// CI-Insights tests family (admin token).
 // ---------------------------------------------------------------
 
 #[test]
@@ -651,6 +652,127 @@ fn tests_show_no_match() {
         serde_json::json!({"tests": []}),
         "expected empty `tests` list for nonexistent test name, got:\n{}",
         result.stdout
+    );
+}
+
+/// RAII cleanup for `tests_quarantine_add_remove_roundtrip` —
+/// runs `quarantines remove` from `Drop` so a failed assertion
+/// mid-test still leaves the canary repository clean. Same
+/// warn-don't-panic posture as [`DeleteFreezeOnDrop`]: panicking
+/// in `Drop` during an unwind aborts the process and buries the
+/// real assertion message.
+struct RemoveQuarantineOnDrop<'a> {
+    token: &'a str,
+    test_name: &'a str,
+}
+impl Drop for RemoveQuarantineOnDrop<'_> {
+    fn drop(&mut self) {
+        let remove = cli(&[
+            "tests",
+            "quarantines",
+            "remove",
+            "--api-url",
+            API_URL,
+            "--token",
+            self.token,
+            "--repository",
+            REPOSITORY,
+            self.test_name,
+        ]);
+        // Exit 6 is the expected outcome of the happy path: the
+        // test body already removed it, so this second remove
+        // finds nothing. Only warn when cleanup failed with the
+        // entry still in place.
+        if remove.returncode != 0 && !remove.combined().contains("not quarantined") {
+            eprintln!("WARNING: quarantine cleanup failed{}", remove.context());
+        }
+    }
+}
+
+#[test]
+fn tests_quarantine_add_remove_roundtrip() {
+    // `POST` + `DELETE` round-trip on
+    // `/v1/ci/{owner}/repositories/{repo}/quarantines`.
+    //
+    // MRGFY-9001 dropped `ci_application_key` from both of these
+    // alongside `search/tests`, and nothing here noticed, because
+    // the quarantine mutations had no live coverage at all — the
+    // wiremock tests in `tests_quarantine.rs` cannot see a scope
+    // change, since a mock server never authenticates. This is
+    // that canary: it fires on an auth, URL or wire-format change
+    // to either endpoint.
+    //
+    // Quarantines a name no real suite reports, so the entry can
+    // never suppress a genuine failure on the canary repository
+    // even if cleanup is skipped entirely.
+    let token = skip_if_unset!(live_admin_token());
+
+    let test_name = format!("__mergify_cli_smoke_quarantine_{}__", unique_suffix());
+    let reason = "func-tests-live-smoke";
+
+    let add = cli(&[
+        "tests",
+        "quarantines",
+        "add",
+        "--api-url",
+        API_URL,
+        "--token",
+        &token,
+        "--repository",
+        REPOSITORY,
+        "--reason",
+        reason,
+        "--json",
+        &test_name,
+    ]);
+    assert_eq!(add.returncode, 0, "quarantines add failed{}", add.context());
+
+    // Registered before the payload is parsed: an unparseable
+    // body still means the row was created server-side.
+    let _cleanup = RemoveQuarantineOnDrop {
+        token: &token,
+        test_name: &test_name,
+    };
+
+    let added: Value = serde_json::from_str(&add.stdout).unwrap_or_else(|e| {
+        panic!(
+            "quarantines add --json emitted non-JSON output\nerror: {e}\nstdout:\n{}",
+            add.stdout
+        )
+    });
+    assert_eq!(
+        added["test_name"],
+        serde_json::json!(test_name),
+        "add echoed a different test name\nstdout:\n{}",
+        add.stdout
+    );
+    assert!(
+        added["id"].as_str().is_some_and(|id| !id.is_empty()),
+        "add emitted no quarantine id\nstdout:\n{}",
+        add.stdout
+    );
+
+    // Remove by name, which is the path that resolves the id via
+    // the list endpoint — so one run covers both the `ci`-allowed
+    // read and the admin-only delete.
+    let remove = cli(&[
+        "tests",
+        "quarantines",
+        "remove",
+        "--api-url",
+        API_URL,
+        "--token",
+        &token,
+        "--repository",
+        REPOSITORY,
+        "--json",
+        &test_name,
+    ]);
+    assert_eq!(
+        remove.returncode,
+        0,
+        "quarantines remove failed{}",
+        remove.context()
     );
 }
 
