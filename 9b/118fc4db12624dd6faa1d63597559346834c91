@@ -1,0 +1,1 @@
+review (copilot): spell `LIVE_TEST_MERGIFY_TOKEN_ADMIN` out in the header instead of abbreviating to `_ADMIN`, so a grep for either secret finds this file; and finish the sentence the removed 'Mirrors Python conftest.py::cli' lead-in left dangling on a semicolon.
