@@ -11,12 +11,16 @@
 //!   and typed error mapping for the Mergify and GitHub APIs.
 //! - [`auth`] — resolve `--repository` / `--token` / `--api-url`
 //!   from the same flag → env → fallback chain the Python CLI uses.
+//! - [`credentials::CredentialStore`] — the OS keychain (or a
+//!   `0600` file) holding the token `mergify auth login` mints,
+//!   keyed by API URL.
 //! - [`command_context::CommandContext`] — bundle the resolved
 //!   trio + a pre-configured Mergify HTTP client for the
 //!   queue/freeze command preludes.
 
 pub mod auth;
 pub mod command_context;
+pub mod credentials;
 pub mod env;
 pub mod error;
 pub mod exit_code;
@@ -25,6 +29,7 @@ pub mod output;
 pub mod pull_request;
 
 pub use command_context::CommandContext;
+pub use credentials::{Credential, CredentialStore};
 pub use error::CliError;
 pub use exit_code::ExitCode;
 pub use http::{ApiFlavor, Client as HttpClient, DeleteOutcome, Page, RetryPolicy};
