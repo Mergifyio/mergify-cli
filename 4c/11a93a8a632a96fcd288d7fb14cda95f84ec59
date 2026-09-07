@@ -1,0 +1,1 @@
+review (copilot): the cleanup guard tolerated any non-zero exit whose output contained "not quarantined", which would swallow an unrelated failure carrying that phrase and did not pin the documented exit code. It now requires both `MergifyApiError` (read off `mergify_core::ExitCode`, not a literal 6) and the full `is not quarantined` fragment.
