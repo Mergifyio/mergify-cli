@@ -1,16 +1,15 @@
-//! Live smoke tests against the real Mergify API. Port of
-//! `func-tests/test_live_smoke.py` + `func-tests/conftest.py`.
+//! Live smoke tests against the real Mergify API.
 //!
 //! Each test fires when the real API's URL, auth, or wire format
 //! diverges from what the CLI expects. API-hitting tests skip
 //! (early-return with a `SKIP:` line) unless their token
-//! (`LIVE_TEST_MERGIFY_TOKEN_CI` or `_ADMIN`) is set in the env;
-//! locally-evaluated tests run unconditionally. Driven by
-//! `.github/workflows/func-tests-live.yaml` on every PR.
+//! (`LIVE_TEST_MERGIFY_TOKEN_CI` or `LIVE_TEST_MERGIFY_TOKEN_ADMIN`)
+//! is set in the env. Locally-evaluated tests run unconditionally.
+//! Driven by `.github/workflows/func-tests-live.yaml` on every PR.
 //!
-//! Implementation deliberately mirrors the Python version 1:1 —
-//! same scrubbed env list, same assertion messages, same fixture
-//! shape — so the port can't drift the contract by accident.
+//! Tests are grouped by the credential they need, under a banner
+//! per group — a test's banner is the index of which secret it
+//! consumes, so keep a test under the one matching its helper.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,13 +22,13 @@ const API_URL: &str = "https://api.mergify.com";
 const REPOSITORY: &str = "mergify-clients-testing/mergify-cli-repo";
 const PULL_REQUEST: &str = "1";
 
-/// CLI invocation timeout. Mirrors Python `subprocess.run(timeout=30)`.
+/// CLI invocation timeout.
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Env vars the CLI auto-detects from the surrounding CI runner.
 /// Scrub them so a developer running tests inside GitHub Actions
 /// or Buildkite doesn't get different behavior than a clean
-/// laptop run. Mirrors `conftest.py::_CI_ENV_VARS`.
+/// laptop run.
 const CI_ENV_VARS: &[&str] = &[
     "CI",
     "GITHUB_ACTIONS",
@@ -63,7 +62,7 @@ struct CliResult {
 impl CliResult {
     /// Combined stream for grep-style assertions where the message
     /// could land on either stdout or stderr depending on the
-    /// command. Matches Python `result.stdout + result.stderr`.
+    /// command.
     fn combined(&self) -> String {
         format!("{}{}", self.stdout, self.stderr)
     }
@@ -84,10 +83,9 @@ fn mergify_binary() -> &'static Path {
 
 /// Run `mergify <args>` with a scrubbed env and a fresh tmp cwd.
 ///
-/// Mirrors Python `conftest.py::cli` exactly: closes stdin so an
-/// accidental interactive prompt fails fast instead of blocking;
-/// caps wall-clock at [`CLI_TIMEOUT`] so a pathological hang
-/// doesn't drag the CI matrix down with it.
+/// Closes stdin so an accidental interactive prompt fails fast
+/// instead of blocking. Caps wall-clock at [`CLI_TIMEOUT`] so a
+/// pathological hang doesn't drag the CI matrix down with it.
 ///
 /// **Concurrency.** Cargo's stock test harness runs every
 /// `#[test]` in this binary in a single process across a thread
@@ -187,10 +185,10 @@ fn wait_timeout(
     }
 }
 
-/// Look up `LIVE_TEST_MERGIFY_TOKEN_CI`. Mirrors Python
-/// `live_token` fixture — empty / unset = skip the test (early
-/// return with `SKIP:` printed to stderr so the cargo test log
-/// shows what was skipped).
+/// Look up `LIVE_TEST_MERGIFY_TOKEN_CI`, the key scoped to what a
+/// CI job does. Empty / unset = skip the test (early return with
+/// `SKIP:` printed to stderr so the cargo test log shows what was
+/// skipped).
 fn live_token() -> Option<String> {
     let token = std::env::var("LIVE_TEST_MERGIFY_TOKEN_CI")
         .unwrap_or_default()
