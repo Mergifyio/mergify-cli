@@ -171,12 +171,12 @@ async fn run_with_cap(
             .map(|c| c.name.clone())
             .collect(),
     };
-    let built = spans::build_traces(&parsed, &metadata);
+    let mut built = spans::build_traces(&parsed, &metadata);
 
     // Cap each gzipped upload at MAX_GZIPPED_UPLOAD_BYTES. A normal
     // report is one chunk (byte-identical to before); only an
     // oversized payload fans out into several uploads.
-    let (chunks, oversized_cases, mut upload_error) =
+    let (chunks, mut oversized_cases, mut upload_error) =
         match split::split_request(&built.request, upload_cap) {
             Ok(outcome) => (outcome.chunks, outcome.oversized_cases, None),
             // gzip is an in-memory write and effectively never fails,
@@ -191,6 +191,16 @@ async fn run_with_cap(
                 }),
             ),
         };
+
+    // Cases the span builder refused on name length join the ones the split
+    // refused on payload size: from the user's side both are "this result was
+    // not uploaded", and one list is what they need to act on.
+    //
+    // Moved, not cloned. Every string in here is over MAX_TEST_NAME_BYTES --
+    // that is why it was refused -- so copying them would allocate another
+    // 65 kB apiece on the one path guaranteed to be holding the biggest names
+    // in the run. `built` is not read for this field again.
+    oversized_cases.append(&mut built.oversized_case_names);
 
     let client = upload::default_client();
     // Nothing reached the backend when the split produced no chunks
@@ -603,10 +613,16 @@ fn gha_oversized_annotation(names: &[String]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "::warning title=Mergify Test Insights::{n} test result(s) exceeded the upload size \
-         limit and were skipped: {names}. The rest of the run was uploaded.",
+        "::warning title=Mergify Test Insights::{n} test result(s) were too large to upload \
+         and were skipped: {names}. The rest of the run was uploaded.",
         n = names.len(),
-        names = gha_escape_data(&names.join(", ")),
+        names = gha_escape_data(
+            &names
+                .iter()
+                .map(|n| display_name(n))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
     ))
 }
 
@@ -640,14 +656,33 @@ fn write_upload_error_block(out: &mut String, error: &str, rejected: bool) {
 /// is no upload it can fit into. The CI verdict is unaffected (it's
 /// computed from the parsed cases, not the upload), so this is a
 /// best-effort data-loss notice, not a failure.
+/// How much of a skipped test's name the report prints. A name can be the
+/// reason it was skipped, so printing it whole would bury the report under
+/// the same 65 kB that caused the problem.
+const SKIPPED_NAME_DISPLAY_BYTES: usize = 120;
+
+/// `name` cut to [`SKIPPED_NAME_DISPLAY_BYTES`] on a character boundary,
+/// marked when it was cut so nobody copies the prefix as the real name.
+fn display_name(name: &str) -> String {
+    if name.len() <= SKIPPED_NAME_DISPLAY_BYTES {
+        return name.to_string();
+    }
+    let mut end = SKIPPED_NAME_DISPLAY_BYTES;
+    while end > 0 && !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… ({} bytes total)", &name[..end], name.len())
+}
+
 fn write_oversized_cases(out: &mut String, names: &[String]) {
-    out.push_str("\n  ⚠️ Some test results were too large to upload\n");
-    out.push_str("    A single test's output exceeded the upload size limit and was skipped.\n");
+    out.push_str("\n  ⚠️ Some test results were skipped\n");
+    out.push_str("    A test whose name or output is too large to upload is skipped; the rest\n");
+    out.push_str("    of the run was uploaded. Rename the test to get its history back.\n");
     out.push_str("    Quarantine status and CI outcome are unaffected.\n");
     out.push('\n');
     out.push_str("      ┌ Skipped\n");
     for name in names {
-        out.push_str(&format!("      │  {name}\n"));
+        out.push_str(&format!("      │  {}\n", display_name(name)));
     }
     out.push_str("      └─\n");
 }
@@ -1025,7 +1060,44 @@ mod tests {
         .unwrap();
         assert!(ann.starts_with("::warning"), "{ann}");
         assert!(ann.contains("a.big, b.huge"), "{ann}");
-        assert!(ann.contains("exceeded the upload size limit"), "{ann}");
+        assert!(ann.contains("too large to upload"), "{ann}");
+    }
+
+    /// A name can itself be the reason a case was skipped, so neither the
+    /// report nor the annotation may print it whole -- 65 kB of generated
+    /// title would bury the very message telling you which test to rename.
+    #[test]
+    fn a_skipped_name_is_truncated_for_display() {
+        let long = "z".repeat(super::SKIPPED_NAME_DISPLAY_BYTES + 500);
+
+        let shown = display_name(&long);
+        assert!(shown.len() < long.len(), "{shown}");
+        // Marked as cut, and carrying the real size, so nobody copies the
+        // prefix believing it is the test's name.
+        assert!(shown.contains('…'), "{shown}");
+        assert!(
+            shown.contains(&format!("{} bytes total", long.len())),
+            "{shown}"
+        );
+
+        let mut report = String::new();
+        write_oversized_cases(&mut report, std::slice::from_ref(&long));
+        assert!(!report.contains(&long), "the report printed the whole name");
+
+        let ann = temp_env::with_var("GITHUB_ACTIONS", Some("true"), || {
+            gha_oversized_annotation(std::slice::from_ref(&long))
+        })
+        .unwrap();
+        assert!(
+            !ann.contains(&long),
+            "the annotation printed the whole name"
+        );
+    }
+
+    /// A short name is printed exactly, with no truncation marker.
+    #[test]
+    fn a_short_name_is_printed_verbatim() {
+        assert_eq!(display_name("tests.test_a"), "tests.test_a");
     }
 
     // ── End-to-end orchestrator tests. Drive the full `run()`
