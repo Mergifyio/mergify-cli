@@ -25,6 +25,34 @@ mergify tests quarantines get NAME        # Print a single quarantine by test na
 mergify tests quarantines list            # List the tests currently in the CI Insights quarantine
 ```
 
+## Authentication
+
+Two classes of Mergify application key, both minted in the dashboard:
+
+| Key | Reaches |
+| --- | --- |
+| `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
+| `admin` | Everything a `ci` key reaches, plus reading test health and mutating the quarantine. |
+
+Every endpoint below that refuses a `ci` key accepts a GitHub PAT instead.
+`GITHUB_TOKEN` inside GitHub Actions is *not* a PAT — it is the ephemeral
+installation token — so do not reach for it to clear one of these `403`s.
+
+The split follows the endpoint each command calls: reads of test health and
+writes to the quarantine are a person inspecting or overriding a repository,
+not something a pipeline does, so they are outside what a `ci` key carries.
+Per command:
+
+| Command | `ci` key |
+| --- | --- |
+| `ci junit-process`, `ci junit-upload`, `ci scopes-send` | yes |
+| `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list |
+| `tests show` | **no** — `403` |
+| `tests quarantines add`, `tests quarantines remove` | **no** — `403` |
+
+`ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
+no token at all.
+
 ## JUnit Processing (`junit-process`)
 
 The primary CI command. Parses JUnit XML reports, checks quarantine status for failing tests, uploads results to Mergify CI Insights, and determines the final CI exit code.
@@ -167,7 +195,11 @@ mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 Looks up tests by name on the repository's default branch and prints their
 health, success/failure ratios, and last failure context. The search is a
 batch API: pass one or more names (globs supported) and one block per match
-is rendered. Exit code reflects the worst health observed.
+is rendered. It is read-only: it exits `0` once it has rendered the matches,
+whatever their health. Gate on health by consuming `--json`, not the exit code.
+
+Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
+[Authentication](#authentication).
 
 ```bash
 # Single test.
@@ -191,15 +223,17 @@ mergify tests show -r owner/repo \
 - `--json` -- Emit a single JSON document `{"tests": [...]}` to stdout.
 
 **Exit codes:**
-- `0` -- All matched tests are `healthy` or unknown (or no match at all).
-- `1` -- At least one test is `flaky`.
-- `6` -- At least one test is `broken` (consistently failing).
+- `0` -- Tests rendered, or no match at all. Health does **not** affect it.
+- `6` -- Mergify API error, including the `403` a `ci` key gets here.
 
 ## Tests Quarantines Add (`tests quarantines add`)
 
 Adds a test to the repository's CI Insights quarantine, so its failures stop
 blocking the CI verdict. Takes a single fully qualified test name; a `--reason`
 is required.
+
+Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
+[Authentication](#authentication).
 
 ```bash
 # Quarantine on all branches.
@@ -231,6 +265,9 @@ Removes a test from the quarantine. Accepts either the fully qualified test
 name (resolved to its quarantine id via the list endpoint) or the quarantine
 id directly (as printed by `tests quarantines add`). A UUID-shaped argument
 is treated as the id and deleted without a lookup.
+
+Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
+[Authentication](#authentication).
 
 ```bash
 # By test name.
