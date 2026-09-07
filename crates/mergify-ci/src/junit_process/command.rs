@@ -85,7 +85,7 @@ async fn run_with_cap(
     // surfacing as exit code 2 when a required flag is missing,
     // before the command body runs.
     let api_url = auth::resolve_api_url(opts.api_url)?;
-    let token = auth::resolve_token(opts.token)?;
+    let token = auth::resolve_mergify_token(opts.token)?;
     let repository = detector::resolve_repository(opts.repository)?;
     let tests_target_branch = resolve_tests_target_branch(opts.tests_target_branch)?;
     let test_exit_code = resolve_test_exit_code(opts.test_exit_code)?;

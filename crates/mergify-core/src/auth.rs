@@ -5,6 +5,16 @@
 //! env → `gh auth token` (the GitHub CLI). Mirrors Python's
 //! `utils.get_default_token`.
 //!
+//! That one chain feeds two unrelated services: the Mergify API
+//! ([`resolve_mergify_token`]) and, for the `stack` command group,
+//! the GitHub REST API ([`resolve_github_token`]). They resolve
+//! identically today and are still two functions, because only one
+//! of them is going to grow — the Mergify side gains the credential
+//! `mergify auth login` stores and deprecates the two GitHub
+//! fallbacks, while `stack` keeps sending GitHub exactly what it
+//! sends it now. A single resolver could not do one without doing
+//! the other.
+//!
 //! Repository: `--repository` flag → `GITHUB_REPOSITORY` env →
 //! `git config --get remote.origin.url` parsed into `<owner>/<repo>`.
 //! Mirrors Python's `utils.get_default_repository` + `utils.get_slug`.
@@ -27,12 +37,29 @@ use crate::env::var_non_empty;
 
 const DEFAULT_API_URL: &str = "https://api.mergify.com";
 
-/// Resolve the Mergify API bearer token.
+/// Resolve the bearer token for **Mergify API** calls.
 ///
 /// Precedence: explicit `--token`, then `MERGIFY_TOKEN`, then
 /// `GITHUB_TOKEN`, then the output of `gh auth token`. Errors when
 /// none of those produce a non-empty value.
-pub fn resolve_token(explicit: Option<&str>) -> Result<String, CliError> {
+pub fn resolve_mergify_token(explicit: Option<&str>) -> Result<String, CliError> {
+    resolve_token_chain(explicit)
+}
+
+/// Resolve the bearer token for **GitHub REST** calls — the
+/// `ApiFlavor::GitHub` client the `stack` command group talks to
+/// `api.github.com` with.
+///
+/// Same precedence as [`resolve_mergify_token`]: explicit
+/// `--token`, then `MERGIFY_TOKEN`, then `GITHUB_TOKEN`, then the
+/// output of `gh auth token`.
+pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> {
+    resolve_token_chain(explicit)
+}
+
+/// The shared `--token` → `MERGIFY_TOKEN` → `GITHUB_TOKEN` →
+/// `gh auth token` chain both resolvers currently answer with.
+fn resolve_token_chain(explicit: Option<&str>) -> Result<String, CliError> {
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(value.to_string());
     }
@@ -168,7 +195,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_token_prefers_explicit_over_env() {
+    fn resolve_mergify_token_prefers_explicit_over_env() {
         temp_env::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
@@ -176,7 +203,7 @@ mod tests {
             ],
             || {
                 assert_eq!(
-                    resolve_token(Some("explicit-token")).unwrap(),
+                    resolve_mergify_token(Some("explicit-token")).unwrap(),
                     "explicit-token",
                 );
             },
@@ -184,33 +211,33 @@ mod tests {
     }
 
     #[test]
-    fn resolve_token_falls_back_to_mergify_env() {
+    fn resolve_mergify_token_falls_back_to_mergify_env() {
         temp_env::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
                 ("GITHUB_TOKEN", Some("env-github")),
             ],
             || {
-                assert_eq!(resolve_token(None).unwrap(), "env-mergify");
+                assert_eq!(resolve_mergify_token(None).unwrap(), "env-mergify");
             },
         );
     }
 
     #[test]
-    fn resolve_token_falls_back_to_github_env_when_mergify_unset() {
+    fn resolve_mergify_token_falls_back_to_github_env_when_mergify_unset() {
         temp_env::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("env-github")),
             ],
             || {
-                assert_eq!(resolve_token(None).unwrap(), "env-github");
+                assert_eq!(resolve_mergify_token(None).unwrap(), "env-github");
             },
         );
     }
 
     #[test]
-    fn resolve_token_error_message_mentions_gh() {
+    fn resolve_mergify_token_error_message_mentions_gh() {
         // When env vars are unset and `gh auth token` is unavailable
         // (or fails), the user-facing error must mention the gh
         // fallback so the user knows there's a third option.
@@ -223,10 +250,57 @@ mod tests {
                 ("PATH", Some("/nonexistent-directory-for-test")),
             ],
             || {
-                let err = resolve_token(None).unwrap_err();
+                let err = resolve_mergify_token(None).unwrap_err();
                 let msg = err.to_string();
                 assert!(msg.contains("MERGIFY_TOKEN"), "got {msg:?}");
                 assert!(msg.contains("gh client"), "got {msg:?}");
+            },
+        );
+    }
+
+    // The GitHub resolver is what `stack` sends to `api.github.com`.
+    // Pinning its whole chain here — rather than asserting it equals
+    // whatever the Mergify one returns — is the point: the two
+    // diverge on the Mergify side, and this test has to keep failing
+    // if that divergence ever reaches the GitHub side.
+    #[test]
+    fn resolve_github_token_prefers_explicit_over_env() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", Some("env-mergify")),
+                ("GITHUB_TOKEN", Some("env-github")),
+            ],
+            || {
+                assert_eq!(
+                    resolve_github_token(Some("explicit-token")).unwrap(),
+                    "explicit-token",
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_github_token_falls_back_to_mergify_env() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", Some("env-mergify")),
+                ("GITHUB_TOKEN", Some("env-github")),
+            ],
+            || {
+                assert_eq!(resolve_github_token(None).unwrap(), "env-mergify");
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_github_token_falls_back_to_github_env_when_mergify_unset() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", None),
+                ("GITHUB_TOKEN", Some("env-github")),
+            ],
+            || {
+                assert_eq!(resolve_github_token(None).unwrap(), "env-github");
             },
         );
     }

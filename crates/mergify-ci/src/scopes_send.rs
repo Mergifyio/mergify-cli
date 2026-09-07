@@ -73,7 +73,7 @@ pub async fn run(opts: ScopesSendOptions<'_>, output: &mut dyn Output) -> Result
     };
 
     let repository = detector::resolve_repository(opts.repository)?;
-    let token = auth::resolve_token(opts.token)?;
+    let token = auth::resolve_mergify_token(opts.token)?;
     let api_url = auth::resolve_api_url(opts.api_url)?;
 
     // Whenever the deprecated `--file` flag is supplied, surface
