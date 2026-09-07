@@ -71,6 +71,15 @@ resolves credentials and target repository in this order, so an authenticated
 | **Repository** | `--repository` / `-r` | `GITHUB_REPOSITORY` | `git remote` (`origin`) |
 | **API URL** | `--api-url` / `-u` | `MERGIFY_API_URL` | `https://api.mergify.com` |
 
+Mergify application keys come in two classes, and a few commands will not
+accept the narrower one. A `ci` key is scoped to what a CI job does — trace
+upload, `ci scopes-send`, quarantine evaluation and the quarantine list.
+Reading test health (`mergify tests show`) and changing the quarantine
+(`mergify tests quarantines add` / `remove`) need an `admin` key or a GitHub
+PAT, and answer a `ci` key with `403 Forbidden`. Note that `GITHUB_TOKEN`
+inside GitHub Actions is the ephemeral installation token, not a PAT, and
+does not reach the Mergify API.
+
 See the [authentication guide](https://docs.mergify.com/cli/usage) for details.
 
 ## Quick start

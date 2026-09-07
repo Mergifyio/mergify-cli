@@ -199,10 +199,18 @@ fn live_token() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// Token for queue-admin endpoints (pause/unpause, freeze CRUD,
-/// queue status/show). Separated from [`live_token`] because the
-/// CI-scoped token is rejected with 403 by the queue-management
-/// family — keeping the CI token narrow is intentional.
+/// Token for endpoints the CI-scoped key cannot reach: the
+/// queue-management family (pause/unpause, freeze CRUD, queue
+/// status/show) and CI-Insights test reads. Separated from
+/// [`live_token`] because the CI-scoped token is answered with 403
+/// by both — the narrow CI key is the intended design, so a 403
+/// here is a test on the wrong token, never a key to widen.
+///
+/// Covers `search/tests` only. `tests/{test_id}` is narrowed the
+/// same way but no live test reaches it: the one `tests show` case
+/// queries a name that cannot match, which returns before the
+/// details fetch. A rename or wire-format drift on that route
+/// still ships green.
 fn live_admin_token() -> Option<String> {
     let token = std::env::var("LIVE_TEST_MERGIFY_TOKEN_ADMIN")
         .unwrap_or_default()
@@ -602,6 +610,53 @@ fn freeze_create_update_delete_roundtrip() {
 }
 
 // ---------------------------------------------------------------
+// CI-Insights test reads (admin token).
+// ---------------------------------------------------------------
+
+#[test]
+fn tests_show_no_match() {
+    // `GET /v1/ci/{owner}/repositories/{repo}/search/tests`
+    // round-trip. Queries a guaranteed-nonexistent name so the
+    // test is independent of whatever live test data the canary
+    // repository currently holds. A green run proves auth, URL
+    // routing, and JSON deserialization for the search endpoint
+    // — the empty-match path returns exit 0 with a
+    // `{"tests": []}` payload on stdout.
+    let token = skip_if_unset!(live_admin_token());
+
+    let result = cli(&[
+        "tests",
+        "show",
+        "--api-url",
+        API_URL,
+        "--token",
+        &token,
+        "--repository",
+        REPOSITORY,
+        "--json",
+        "__mergify_cli_smoke_no_such_test__",
+    ]);
+    assert_eq!(
+        result.returncode,
+        0,
+        "tests show failed{}",
+        result.context()
+    );
+    let payload: Value = serde_json::from_str(&result.stdout).unwrap_or_else(|e| {
+        panic!(
+            "tests show --json emitted non-JSON output\nerror: {e}\nstdout:\n{}",
+            result.stdout
+        )
+    });
+    assert_eq!(
+        payload,
+        serde_json::json!({"tests": []}),
+        "expected empty `tests` list for nonexistent test name, got:\n{}",
+        result.stdout
+    );
+}
+
+// ---------------------------------------------------------------
 // CI commands — locally evaluated, no token needed.
 // ---------------------------------------------------------------
 
@@ -758,49 +813,6 @@ fn scopes_send() {
         0,
         "scopes-send failed{}",
         result.context()
-    );
-}
-
-#[test]
-fn tests_show_no_match() {
-    // `GET /v1/ci/{owner}/repositories/{repo}/search/tests`
-    // round-trip. Queries a guaranteed-nonexistent name so the
-    // test is independent of whatever live test data the canary
-    // repository currently holds. A green run proves auth, URL
-    // routing, and JSON deserialization for the search endpoint
-    // — the empty-match path returns exit 0 with a
-    // `{"tests": []}` payload on stdout.
-    let token = skip_if_unset!(live_token());
-
-    let result = cli(&[
-        "tests",
-        "show",
-        "--api-url",
-        API_URL,
-        "--token",
-        &token,
-        "--repository",
-        REPOSITORY,
-        "--json",
-        "__mergify_cli_smoke_no_such_test__",
-    ]);
-    assert_eq!(
-        result.returncode,
-        0,
-        "tests show failed{}",
-        result.context()
-    );
-    let payload: Value = serde_json::from_str(&result.stdout).unwrap_or_else(|e| {
-        panic!(
-            "tests show --json emitted non-JSON output\nerror: {e}\nstdout:\n{}",
-            result.stdout
-        )
-    });
-    assert_eq!(
-        payload,
-        serde_json::json!({"tests": []}),
-        "expected empty `tests` list for nonexistent test name, got:\n{}",
-        result.stdout
     );
 }
 
