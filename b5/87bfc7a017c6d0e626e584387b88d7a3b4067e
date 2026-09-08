@@ -1,0 +1,1 @@
+delete production mergify_cli/stack/slug.py and tests/stack/test_slug.py — move the Python algorithm to a test-only oracle (tests/_slug_oracle.py) so GitMock keeps producing matching slugs without paying a subprocess per commit, and the Rust slug unit tests are now the sole source of truth

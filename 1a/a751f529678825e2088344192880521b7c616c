@@ -1,0 +1,1 @@
+test fix: extend cli_schema_is_well_formed top-level groups list with 'self-update' — the test enumerates every top-level subcommand and the new one was missed

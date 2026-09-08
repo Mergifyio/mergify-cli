@@ -1,0 +1,1 @@
+Pass ruff check --fix over test_upload.py to add the COM812 trailing commas ruff format collapsed; the CI workflow runs check after format and treats COM812 as a hard error even though the formatter warns about the conflict.

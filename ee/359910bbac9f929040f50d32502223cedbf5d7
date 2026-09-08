@@ -1,0 +1,1 @@
+Update parse_all in command.rs to build ParseResult with the new suite_names field, introduced in the Phase A swap.

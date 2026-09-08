@@ -1,0 +1,1 @@
+clippy: use is_ok_and/map_or in resolvers (newer clippy flags map().unwrap_or() on Result)

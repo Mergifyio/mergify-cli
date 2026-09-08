@@ -1,0 +1,1 @@
+copilot review: align actions/checkout to v6.0.3 (matches rest of repo); add set -o pipefail + swallow grep no-match exit in tag compute; add workflow-level concurrency group to serialize racing auto-tag dispatches

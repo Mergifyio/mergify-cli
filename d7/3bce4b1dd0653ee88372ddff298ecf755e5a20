@@ -1,0 +1,1 @@
+review: also reject present-but-empty new_sha in entries_from_marker

@@ -1,0 +1,1 @@
+Wrap the three scopes_detect tests that call run() in with_ci_env(&[], ...) so they pick up the GITHUB_OUTPUT scrub from the consolidated CI_ENV_VARS list. Without the wrapper, on a GHA runner the run() call's maybe_write_github_outputs reads the runner's real $GITHUB_OUTPUT and appends a colliding heredoc, breaking the step with 'Matching delimiter not found'.

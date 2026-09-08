@@ -1,0 +1,1 @@
+drop trailing comma in println! (clippy::trailing_empty_array on stable rust)

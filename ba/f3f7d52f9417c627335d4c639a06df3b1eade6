@@ -1,0 +1,1 @@
+address copilot review: align timeout wording exactly with python ("The request was aborted — please retry.") and switch connect test to a guaranteed-closed ephemeral port instead of hardcoded :1

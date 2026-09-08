@@ -1,0 +1,1 @@
+Copilot review: correct the notes_rewrite_config doc (setup persists only notes.rewriteRef), narrow it to pub(crate), and document notes.rewriteRef on InstallOutcome.

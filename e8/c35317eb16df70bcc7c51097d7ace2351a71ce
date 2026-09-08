@@ -1,0 +1,1 @@
+address Copilot review: enforce 'exactly one pick line per target' invariant in rewrite_replace_verb and update docstring to mention the new ambiguity check

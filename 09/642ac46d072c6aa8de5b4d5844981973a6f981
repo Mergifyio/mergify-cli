@@ -1,0 +1,1 @@
+tweak comment wording: '/tmp' → 'system temp directory' (tempfile.mkstemp honours $TMPDIR; matches the same wording fix in #1386 squash.py)

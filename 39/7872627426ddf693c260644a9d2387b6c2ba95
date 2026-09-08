@@ -1,0 +1,1 @@
+address review: fix mergify-<version>-<target> archive name in RELEASING stage-1 prose; make the asset assertion fixed-string (grep -qxF) so dotted tags can't match as regex

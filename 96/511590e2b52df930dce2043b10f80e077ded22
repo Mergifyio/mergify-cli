@@ -1,0 +1,1 @@
+rebase onto main after #1466 merged: keep both _internal junit-upload (from #1466) and _internal stack-local-commits (this PR) as siblings of junit-parse — three textual conflicts in main.rs were 'keep both edits' resolutions

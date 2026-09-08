@@ -1,0 +1,1 @@
+copilot review: disable help subcommand on StackProbeCli + drop PENDING_PYTHON_STACK from cli_schema (every command is native now)

@@ -1,0 +1,1 @@
+address review (copilot): constrain the staged archive filename to Path::file_name() so an untrusted asset name with path separators can't escape the temp dir

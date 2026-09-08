@@ -1,0 +1,1 @@
+feedback: restore git-config defaults for --draft/--keep-pull-request-title-and-body/--no-revision-history; reject --skip-rebase+--force-rebase; correct docstrings on stack-comment skip and SkipMerged anchoring; detect corrupted revision-history marker so the upserter recovers

@@ -1,0 +1,1 @@
+Regenerate the CLI schema snapshot: the local --verbose entries on stack list and queue show were dropped when unified onto the global flag.

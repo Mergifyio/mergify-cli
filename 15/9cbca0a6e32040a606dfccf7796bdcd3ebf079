@@ -1,0 +1,1 @@
+address Copilot review on #1515: treat empty GIT_EDITOR as unset, fix Windows tempfile-with-spaces quoting in invoke_editor, add 3 regression tests covering Action::FromEditor (strip comments, reject empty result, empty-env fall-through). Also adds isolated_git test helper to fix parallel-execution flake on the new editor tests.

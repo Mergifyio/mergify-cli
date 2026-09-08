@@ -1,0 +1,1 @@
+Switch to release-asset generation (Option D): schema is no longer committed in-repo — avoids churn and stack conflicts on every CLI change. release.yml now generates it from the tagged source and attaches it as a GitHub release asset; a structural smoke test replaces the golden file.

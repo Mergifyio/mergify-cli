@@ -1,0 +1,1 @@
+fix smoke-test-binary: build the wheel locally with maturin instead of downloading wheels-job artifacts, which only exist in release mode

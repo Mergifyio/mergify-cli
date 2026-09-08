@@ -1,0 +1,1 @@
+fmt: collapse multi-line assert + drop trailing commas in attribute lists (CI rustfmt is stricter than local 1.96)

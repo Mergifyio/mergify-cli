@@ -1,0 +1,1 @@
+doc-only: spell command names in full in the module doc; scope the empty-list `Success` note and add the error-propagation caveat (Copilot review threads)

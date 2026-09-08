@@ -1,0 +1,1 @@
+reword: drop inaccurate 'subcommand tree'/'subcommands' claims — the README and AGENTS.md rule deliberately keep per-subcommand detail in --help and docs.mergify.com

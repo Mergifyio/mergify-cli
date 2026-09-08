@@ -1,0 +1,1 @@
+amend: rewrite removed_flat_quarantine_commands_are_not_native test to use clap::try_parse_from after looks_native was deleted in this commit (the test landed on main during the rebase via PR #1528 and referenced the helper we'd just removed)

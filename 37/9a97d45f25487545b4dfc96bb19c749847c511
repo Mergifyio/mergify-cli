@@ -1,0 +1,1 @@
+address Copilot review: empty stderr fallback + wrap JSONDecodeError with stderr context (mergify_cli/stack/changes.py)

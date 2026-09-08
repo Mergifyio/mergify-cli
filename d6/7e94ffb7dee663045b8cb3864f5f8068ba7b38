@@ -1,0 +1,1 @@
+Address review: missing html_url now falls back to <unknown> instead of an empty string (trailing-space/empty-URL).

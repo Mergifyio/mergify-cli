@@ -1,0 +1,1 @@
+copilot review + CI fixes: build.rs normalises empty-string MERGIFY_RELEASE_VERSION same as unset; main.rs reads MERGIFY_CLI_VERSION (a guaranteed-non-empty rustc-env); tests updated to use err() over expect_err (CliRoot is !Debug) and the new empty-as-fallback contract

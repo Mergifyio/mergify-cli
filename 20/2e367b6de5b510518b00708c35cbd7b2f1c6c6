@@ -1,0 +1,1 @@
+address Copilot review: qualify env::var as std::env::var in the module-level docstring since this crate now exposes its own env module, so the example doesn't read ambiguously

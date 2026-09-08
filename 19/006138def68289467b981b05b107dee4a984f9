@@ -1,0 +1,1 @@
+copilot security: pass workflow_dispatch inputs via env block + build gh args as bash array — direct ${{ inputs }} interpolation would let a tag/target_commitish with shell metacharacters inject commands

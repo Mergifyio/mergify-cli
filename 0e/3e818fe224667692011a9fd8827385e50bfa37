@@ -1,0 +1,1 @@
+Update sample_parsed in spans tests to construct ParseResult with the new suite_names field, introduced in the Phase A swap to track suite document-order for the Python bridge.

@@ -1,0 +1,1 @@
+port #1559: add neutralize_stale_bases — repoint moving PR bases to trunk before force-push so a reorder doesn't make a head briefly an ancestor of its stale base (which GitHub would auto-close as merged)

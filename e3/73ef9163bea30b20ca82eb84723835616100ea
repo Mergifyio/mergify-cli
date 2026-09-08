@@ -1,0 +1,1 @@
+address jd's review: revert unintentional python-version downgrade from 3.14 to 3.13 in func-tests-live.yaml (was copy-pasted from ci.yaml's smoke-test-binary job; no reason to change here)

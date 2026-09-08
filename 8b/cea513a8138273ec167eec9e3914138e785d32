@@ -1,0 +1,1 @@
+fix description: flaky/quarantine ships under Test Insights (separate product on mergify.com), not CI Insights. Replace 'CI Insights (flaky tests, quarantine)' with 'Test Insights (flaky tests, quarantine)' and the keyword too.

@@ -1,0 +1,1 @@
+rework per review: never fail CI on upload errors (infra trouble must not break customer CI) — report via GHA ::error::/::warning:: annotations and a test_results_upload step output instead

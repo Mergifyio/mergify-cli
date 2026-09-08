@@ -1,0 +1,11 @@
+address Copilot review: the --config doc comment was leaking into Give the list of scopes impacted by changed files
+
+Usage: mergify ci scopes [OPTIONS]
+
+Options:
+      --config <CONFIG>  Path to YAML config file. Falls back to ``MERGIFY_CONFIG_PATH`` env var, then auto-detects `.mergify.yml`, `.mergify/config.yml`, or `.github/mergify.yml` [env: MERGIFY_CONFIG_PATH=]
+      --debug            Enable verbose debug logging. Mirrors the Python CLI's top-level `--debug` flag so the same invocations work against either binary; native commands accept it as a no-op today (no native code path consults it yet), shimmed ones re-inject it into the forwarded argv so the Python side can honor it
+      --base <BASE>      Base git reference to use to look for changed files
+      --head <HEAD>      Head git reference to use to look for changed files
+  -w, --write <WRITE>    Write the detected scopes to a file (JSON, consumed by `ci scopes-send --scopes-json`)
+  -h, --help             Print help with rustdoc-style emphasis, a [[link]] to a Rust path, and a reference to a non-existent test name; rewrite as a concise summary on /// (backticked identifiers consistent with the rest of the CLI) and move the implementation rationale + actual test names to // comments invisible to clap
