@@ -1,0 +1,1 @@
+correct a false claim in the body and the attribute docs: the name-length refusal (d393fe7) is on main and in no release, so only the chunk markers have a deployed-client blind spot; and qualify the 55k measurement as a floor
