@@ -396,7 +396,9 @@ fn kv_bool(key: &str, value: bool) -> KeyValue {
     kv(key, AnyValueOneof::BoolValue(value))
 }
 
-fn kv_int(key: &str, value: i64) -> KeyValue {
+/// Shared with [`crate::junit_process::split`], which stamps the
+/// per-chunk completeness markers onto an already-built resource.
+pub(super) fn kv_int(key: &str, value: i64) -> KeyValue {
     kv(key, AnyValueOneof::IntValue(value))
 }
 

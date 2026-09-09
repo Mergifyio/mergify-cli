@@ -173,11 +173,18 @@ async fn run_with_cap(
     };
     let mut built = spans::build_traces(&parsed, &metadata);
 
-    // Cap each gzipped upload at MAX_GZIPPED_UPLOAD_BYTES. A normal
-    // report is one chunk (byte-identical to before); only an
-    // oversized payload fans out into several uploads.
+    // Size each gzipped upload against MAX_GZIPPED_UPLOAD_BYTES. A
+    // normal report is one chunk, and byte-identical to before as
+    // long as it lost nothing; only an oversized payload fans out
+    // into several uploads.
+    //
+    // The cases already refused on name length go in as well: the
+    // split is what declares a session amputated, and that count has
+    // to cover every result missing from the upload, not only the
+    // ones this step drops. Counted before the two lists are merged
+    // below, which is the same total by construction.
     let (chunks, mut oversized_cases, mut upload_error) =
-        match split::split_request(&built.request, upload_cap) {
+        match split::split_request(&built.request, upload_cap, built.oversized_case_names.len()) {
             Ok(outcome) => (outcome.chunks, outcome.oversized_cases, None),
             // gzip is an in-memory write and effectively never fails,
             // but if it does we surface it as an upload error rather
@@ -208,6 +215,14 @@ async fn run_with_cap(
     // before the loop consumes `chunks`. That must not be reported as
     // a successful upload.
     let nothing_uploaded = chunks.is_empty();
+    // Since a fanned-out upload declares its own total (see `split`),
+    // "4 of 5 chunks sent" is no longer a transient hiccup: it leaves
+    // a session a backend can see is unfinished — once it reads the
+    // declaration, which is MRGFY-9121 and not yet deployed. This
+    // process is the only place that ever knew the total, so the line
+    // is worth printing before that lands.
+    let chunks_produced = chunks.len();
+    let mut chunks_accepted = 0usize;
 
     // Post each chunk. Stop early only on a permanent rejection (bad
     // token / no ingest access) — it would fail every remaining chunk
@@ -232,6 +247,8 @@ async fn run_with_cap(
             if permanent {
                 break;
             }
+        } else {
+            chunks_accepted += 1;
         }
     }
 
@@ -250,6 +267,7 @@ async fn run_with_cap(
         nb_failures,
         upload_failed,
     );
+    write_chunked_delivery(&mut report, chunks_produced, chunks_accepted);
 
     if let Some(err) = &upload_error {
         write_upload_error_block(&mut report, &err.to_string(), err.is_rejection());
@@ -525,6 +543,38 @@ fn write_upload_summary(
         out.push_str(&format!("      ☁️ {reports_label} uploaded\n"));
     }
     out.push_str(&format!("      🧪 {tests} tests ({failures_label})\n"));
+}
+
+/// Report how a fanned-out session was delivered. "Chunk" is the
+/// wire's own word for one upload of a split session
+/// (`mergify.test.session.chunk.count`); using it here too means an
+/// operator reading this line and someone grepping the backend look
+/// for the same term.
+///
+/// Silent for the ordinary single-upload run, which must keep reading
+/// exactly as it does today. Counts only, never a line per chunk: a
+/// report large enough to split can produce arbitrarily many, and no
+/// individual one is worth a line in a CI log.
+///
+/// The incompleteness wording is claimed only where it is true — some
+/// chunks landed and the rest did not, so what ingest holds is a
+/// session that will never reach its declared total (readable as such
+/// once MRGFY-9121 ships). When nothing landed there is no such
+/// session, only a failed upload, which
+/// [`write_upload_error_block`] already explains.
+fn write_chunked_delivery(out: &mut String, produced: usize, accepted: usize) {
+    if produced <= 1 {
+        return;
+    }
+    if accepted == produced {
+        out.push_str(&format!("      ☁️ sent in {produced} chunks\n"));
+    } else if accepted == 0 {
+        out.push_str(&format!("      ☁️ none of the {produced} chunks sent\n"));
+    } else {
+        out.push_str(&format!(
+            "      ☁️ only {accepted} of {produced} chunks sent — this test session is incomplete\n"
+        ));
+    }
 }
 
 /// `$GITHUB_OUTPUT` key reporting the upload outcome:
@@ -1273,6 +1323,463 @@ mod tests {
                     req.body.len()
                 );
             }
+        }
+
+        /// The `(index, count)` completeness markers carried by every
+        /// traces upload the server received, in arrival order, each
+        /// read independently — a chunk carrying one without the
+        /// other is a half-marked state a reader would misinterpret
+        /// as a declared total, and collapsing the pair would hide it.
+        /// Decodes the real wire body (gzip → protobuf), so this
+        /// asserts what the backend will read, not what the splitter
+        /// intended.
+        async fn uploaded_chunk_markers(server: &MockServer) -> Vec<(Option<i64>, Option<i64>)> {
+            use crate::junit_process::split::{CHUNK_COUNT_ATTRIBUTE, CHUNK_INDEX_ATTRIBUTE};
+            use flate2::read::GzDecoder;
+            use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+            use opentelemetry_proto::tonic::common::v1::any_value::Value;
+            use prost::Message as _;
+            use std::io::Read as _;
+
+            let mut markers = Vec::new();
+            for req in server.received_requests().await.unwrap() {
+                if req.url.path() != "/v1/repos/owner/repo/ci/traces" {
+                    continue;
+                }
+                let mut unzipped = Vec::new();
+                GzDecoder::new(req.body.as_slice())
+                    .read_to_end(&mut unzipped)
+                    .expect("upload body decompresses");
+                let decoded =
+                    ExportTraceServiceRequest::decode(unzipped.as_slice()).expect("body decodes");
+                let attributes = &decoded.resource_spans[0]
+                    .resource
+                    .as_ref()
+                    .expect("uploads carry a resource")
+                    .attributes;
+                let read = |key: &str| {
+                    attributes.iter().find(|kv| kv.key == key).and_then(|kv| {
+                        match kv.value.as_ref()?.value.as_ref()? {
+                            Value::IntValue(v) => Some(*v),
+                            _ => None,
+                        }
+                    })
+                };
+                markers.push((read(CHUNK_INDEX_ATTRIBUTE), read(CHUNK_COUNT_ATTRIBUTE)));
+            }
+            markers
+        }
+
+        /// The set of resource attribute keys on every traces upload
+        /// the server received, decoded from the real wire body.
+        async fn uploaded_resource_keys(server: &MockServer) -> Vec<Vec<String>> {
+            use flate2::read::GzDecoder;
+            use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+            use prost::Message as _;
+            use std::io::Read as _;
+
+            let mut per_upload = Vec::new();
+            for req in server.received_requests().await.unwrap() {
+                if req.url.path() != "/v1/repos/owner/repo/ci/traces" {
+                    continue;
+                }
+                let mut unzipped = Vec::new();
+                GzDecoder::new(req.body.as_slice())
+                    .read_to_end(&mut unzipped)
+                    .expect("upload body decompresses");
+                let decoded =
+                    ExportTraceServiceRequest::decode(unzipped.as_slice()).expect("body decodes");
+                per_upload.push(
+                    decoded.resource_spans[0]
+                        .resource
+                        .as_ref()
+                        .expect("uploads carry a resource")
+                        .attributes
+                        .iter()
+                        .map(|kv| kv.key.clone())
+                        .collect(),
+                );
+            }
+            per_upload
+        }
+
+        // Every upload of a fanned-out session must tell the backend
+        // that it is one piece of `n`, so a consumer answering "did
+        // this session report a failing test?" can tell a
+        // half-delivered session from a finished one instead of
+        // answering from the first piece to land.
+        #[tokio::test]
+        async fn fanned_out_uploads_declare_their_position_in_the_session() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(30, 2048));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            // A populated CI environment, so `build_resource` emits
+            // the routing and attribution attributes this test then
+            // checks survive stamping. With the environment scrubbed
+            // it would only ever emit `test.run.id`, and the check
+            // would pass on an empty resource.
+            with_ci_env_async(
+                &[
+                    ("GITHUB_ACTIONS", Some("true")),
+                    ("GITHUB_REPOSITORY", Some("owner/repo")),
+                    (
+                        "GITHUB_SHA",
+                        Some("cafe1234cafe1234cafe1234cafe1234cafe1234"),
+                    ),
+                    ("GITHUB_RUN_ID", Some("42")),
+                ],
+                async {
+                    let opts = JunitProcessOptions {
+                        api_url: Some(&api_url),
+                        token: Some("secret"),
+                        repository: Some("owner/repo"),
+                        test_framework: None,
+                        test_language: None,
+                        tests_target_branch: Some("main"),
+                        test_exit_code: None,
+                        files: &[file],
+                    };
+                    run_with_cap(opts, &mut cap.output, 4 * 1024).await.unwrap()
+                },
+            )
+            .await;
+
+            let markers = uploaded_chunk_markers(&server).await;
+            let total = i64::try_from(markers.len()).unwrap();
+            assert!(total > 1, "expected a fan-out, got {total} upload(s)");
+            let expected: Vec<(Option<i64>, Option<i64>)> = (1..=total)
+                .map(|index| (Some(index), Some(total)))
+                .collect();
+            assert_eq!(
+                markers, expected,
+                "the delivered sequence must be 1..=n, each declaring n"
+            );
+
+            // This run lost nothing, so no upload declares a loss.
+            // Absence is the convention; a `0` stamped here instead
+            // would ride on the most ordinary fan-out there is.
+            assert!(
+                uploaded_dropped_counts(&server)
+                    .await
+                    .iter()
+                    .all(Option::is_none),
+                "an upload declared a loss that never happened"
+            );
+
+            // Stamping extends the resource; it must not replace it.
+            // The markers are the only thing this code adds, so every
+            // routing and attribution attribute `build_resource` put
+            // there has to still be on every chunk — a resource
+            // rebuilt from scratch would lose them silently, and only
+            // on the split path.
+            for keys in uploaded_resource_keys(&server).await {
+                for required in [
+                    "test.run.id",
+                    "vcs.repository.name",
+                    "vcs.ref.head.revision",
+                    "cicd.pipeline.run.id",
+                ] {
+                    assert!(
+                        keys.contains(&required.to_string()),
+                        "a fanned-out chunk lost `{required}`; it carries {keys:?}"
+                    );
+                }
+            }
+        }
+
+        // A fan-out where the backend takes the first chunk and
+        // refuses the rest leaves a session it can see is incomplete.
+        // Nothing else in the report says so, and this process is the
+        // only place that ever knew the total.
+        #[tokio::test]
+        async fn partial_fan_out_reports_the_session_as_incomplete() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/ci/owner/repositories/repo/quarantines/check"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "quarantined_tests_names": [],
+                    "non_quarantined_tests_names": [],
+                })))
+                .mount(&server)
+                .await;
+            // First chunk accepted, every later one transiently
+            // refused — a 503 keeps the loop going, so the run really
+            // does attempt them all and end up short.
+            Mock::given(method("POST"))
+                .and(path("/v1/repos/owner/repo/ci/traces"))
+                .respond_with(ResponseTemplate::new(200))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/v1/repos/owner/repo/ci/traces"))
+                .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
+                .mount(&server)
+                .await;
+
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(30, 2048));
+            let api_url = server.uri();
+            let mut cap = captured();
+            with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run_with_cap(opts, &mut cap.output, 4 * 1024).await.unwrap()
+            })
+            .await;
+
+            let produced = traces_requests(&server).await;
+            assert!(produced > 1, "expected a fan-out, got {produced} upload(s)");
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            assert!(
+                stdout.contains(&format!(
+                    "only 1 of {produced} chunks sent — this test session is incomplete"
+                )),
+                "{stdout}"
+            );
+        }
+
+        // A fan-out whose very first chunk is permanently rejected
+        // never declares anything: the loop breaks, nothing reached
+        // ingest, and there is no session for the backend to hold. So
+        // the counts are stated without claiming an incomplete
+        // session — that claim belongs to a delivery that partly
+        // landed, and asserting it here would be false.
+        #[tokio::test]
+        async fn a_fan_out_rejected_outright_claims_no_incomplete_session() {
+            let server = MockServer::start().await;
+            mount_mocks_with_upload_status(&server, 403).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(30, 2048));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run_with_cap(opts, &mut cap.output, 4 * 1024).await.unwrap()
+            })
+            .await;
+
+            // A permanent rejection stops the loop after one attempt,
+            // so the request count is 1 while the split produced many.
+            assert_eq!(traces_requests(&server).await, 1);
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            assert!(stdout.contains("none of the"), "{stdout}");
+            assert!(stdout.contains("chunks sent"), "{stdout}");
+            assert!(
+                !stdout.contains("this test session is incomplete"),
+                "nothing reached ingest, so no session is incomplete: {stdout}"
+            );
+        }
+
+        // The same fan-out, fully delivered: the counts are stated
+        // without the incompleteness wording.
+        #[tokio::test]
+        async fn fully_delivered_fan_out_reports_its_part_count() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(30, 2048));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run_with_cap(opts, &mut cap.output, 4 * 1024).await.unwrap()
+            })
+            .await;
+
+            let produced = traces_requests(&server).await;
+            assert!(produced > 1, "expected a fan-out, got {produced} upload(s)");
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            assert!(
+                stdout.contains(&format!("sent in {produced} chunks")),
+                "{stdout}"
+            );
+            assert!(!stdout.contains("incomplete"), "{stdout}");
+        }
+
+        // The ordinary run must keep reading exactly as it does
+        // today: no chunking language at all.
+        #[tokio::test]
+        async fn single_upload_reports_no_chunk_count() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", ONE_PASSING_TEST_XML);
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run(opts, &mut cap.output).await.unwrap()
+            })
+            .await;
+
+            assert_eq!(traces_requests(&server).await, 1);
+            let stdout = String::from_utf8(cap.stdout.lock().unwrap().clone()).unwrap();
+            assert!(!stdout.contains("chunks"), "{stdout}");
+        }
+
+        // The compatibility hinge, asserted at the wire: a report
+        // that fits in one upload sends neither attribute. Each is
+        // read separately — half a marker is worse than none, since a
+        // lone count reads as a declared total.
+        async fn uploaded_dropped_counts(server: &MockServer) -> Vec<Option<i64>> {
+            use crate::junit_process::split::DROPPED_CASES_ATTRIBUTE;
+            use flate2::read::GzDecoder;
+            use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+            use opentelemetry_proto::tonic::common::v1::any_value::Value;
+            use prost::Message as _;
+            use std::io::Read as _;
+
+            let mut counts = Vec::new();
+            for req in server.received_requests().await.unwrap() {
+                if req.url.path() != "/v1/repos/owner/repo/ci/traces" {
+                    continue;
+                }
+                let mut unzipped = Vec::new();
+                GzDecoder::new(req.body.as_slice())
+                    .read_to_end(&mut unzipped)
+                    .expect("upload body decompresses");
+                let decoded =
+                    ExportTraceServiceRequest::decode(unzipped.as_slice()).expect("body decodes");
+                counts.push(
+                    decoded.resource_spans[0]
+                        .resource
+                        .as_ref()
+                        .expect("uploads carry a resource")
+                        .attributes
+                        .iter()
+                        .find(|kv| kv.key == DROPPED_CASES_ATTRIBUTE)
+                        .and_then(|kv| match kv.value.as_ref()?.value.as_ref()? {
+                            Value::IntValue(v) => Some(*v),
+                            _ => None,
+                        }),
+                );
+            }
+            counts
+        }
+
+        // A run that fits in one upload and lost a case to the name
+        // limit: complete as far as the sequence goes, and still
+        // missing a result. The count has to reach the wire, or the
+        // session reads as whole.
+        #[tokio::test]
+        async fn a_single_upload_missing_a_case_declares_the_loss() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            // Two refused names, not one: this is the only test
+            // covering the whole name-limit → wire path, so it has to
+            // pin that the count says *how many* results are missing
+            // and not merely that some are.
+            let too_long = "x".repeat(spans::MAX_TEST_NAME_BYTES + 1);
+            let also_too_long = "y".repeat(spans::MAX_TEST_NAME_BYTES + 1);
+            let file = write_xml(
+                &tmp,
+                "report.xml",
+                &format!(
+                    r#"<?xml version="1.0"?>
+<testsuites>
+  <testsuite name="pytest" tests="3" failures="0">
+    <testcase classname="tests" name="test_kept"/>
+    <testcase classname="tests" name="{too_long}"/>
+    <testcase classname="tests" name="{also_too_long}"/>
+  </testsuite>
+</testsuites>"#
+                ),
+            );
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run(opts, &mut cap.output).await.unwrap()
+            })
+            .await;
+
+            assert_eq!(uploaded_dropped_counts(&server).await, vec![Some(2)]);
+            // One upload: no sequence to declare.
+            assert_eq!(uploaded_chunk_markers(&server).await, vec![(None, None)]);
+        }
+
+        #[tokio::test]
+        async fn a_single_upload_declares_no_chunk_markers() {
+            let server = MockServer::start().await;
+            mount_mocks(&server).await;
+            let tmp = tempfile::tempdir().unwrap();
+            let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(3, 64));
+
+            let api_url = server.uri();
+            let mut cap = captured();
+            with_ci_env_async(&[], async {
+                let opts = JunitProcessOptions {
+                    api_url: Some(&api_url),
+                    token: Some("secret"),
+                    repository: Some("owner/repo"),
+                    test_framework: None,
+                    test_language: None,
+                    tests_target_branch: Some("main"),
+                    test_exit_code: None,
+                    files: &[file],
+                };
+                run(opts, &mut cap.output).await.unwrap()
+            })
+            .await;
+
+            assert_eq!(uploaded_chunk_markers(&server).await, vec![(None, None)]);
+            // Nothing lost either: an ordinary run declares none of
+            // the three markers.
+            assert_eq!(uploaded_dropped_counts(&server).await, vec![None]);
         }
 
         // A JUnit report of `n` failing cases, each with a
