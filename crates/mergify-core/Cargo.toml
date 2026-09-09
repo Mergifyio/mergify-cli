@@ -9,10 +9,20 @@ authors.workspace = true
 description = "Shared foundations for mergify-cli: HTTP, auth, errors, output, git, config, prompts."
 publish = false
 
+[features]
+# Credential stores that model one specific keychain failure, for a
+# caller whose own error paths are otherwise unreachable. Turned on
+# by a dev-dependency only.
+test-support = []
+
 [dependencies]
+chrono = { workspace = true }
+dirs = { workspace = true }
+keyring = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
