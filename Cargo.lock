@@ -1735,6 +1735,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mergify-auth"
+version = "0.0.0"
+dependencies = [
+ "mergify-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "mergify-ci"
 version = "0.0.0"
 dependencies = [
