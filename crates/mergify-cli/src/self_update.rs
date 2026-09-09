@@ -35,6 +35,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use mergify_core::CliError;
+use mergify_core::env;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -58,7 +59,7 @@ const BASE_URL_ENV: &str = "MERGIFY_BASE_URL";
 /// read from the response, never reconstructed, so we only need to
 /// know where the metadata lives.
 fn latest_release_url() -> String {
-    if let Ok(base) = std::env::var(BASE_URL_ENV) {
+    if let Some(base) = env::var_non_empty(BASE_URL_ENV) {
         format!("{base}/latest-release.json")
     } else {
         format!("{DEFAULT_API_BASE}/repos/{REPO}/releases/latest")
@@ -441,6 +442,40 @@ mod tests {
             name: name.to_string(),
             browser_download_url: format!("https://example.test/{name}"),
         }
+    }
+
+    #[test]
+    fn latest_release_url_falls_back_when_the_base_url_is_empty() {
+        // `gha-mergify-ci` exports unset variables as `""`, so an
+        // empty `MERGIFY_BASE_URL` must mean "no fixture" and not
+        // "fetch from `/latest-release.json`". This is the
+        // `var_non_empty` half of the empty-string rule; the
+        // overlay is what lets the case be written at all, since
+        // nothing may mutate the process environment.
+        let url = env::testing::with_var(BASE_URL_ENV, Some(""), latest_release_url);
+        assert_eq!(
+            url,
+            format!("{DEFAULT_API_BASE}/repos/{REPO}/releases/latest")
+        );
+    }
+
+    #[test]
+    fn latest_release_url_uses_a_non_empty_base_url() {
+        let url = env::testing::with_var(
+            BASE_URL_ENV,
+            Some("https://example.test"),
+            latest_release_url,
+        );
+        assert_eq!(url, "https://example.test/latest-release.json");
+    }
+
+    #[test]
+    fn latest_release_url_defaults_when_the_base_url_is_unset() {
+        let url = env::testing::with_no_vars(latest_release_url);
+        assert_eq!(
+            url,
+            format!("{DEFAULT_API_BASE}/repos/{REPO}/releases/latest")
+        );
     }
 
     #[test]
