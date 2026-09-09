@@ -11,8 +11,10 @@
 //! Modules:
 //!
 //! - [`theme`]: [`Theme`] struct that wraps `anstyle::Style` with
-//!   TTY-and-`NO_COLOR`-aware enable/disable, plus a named-color
-//!   palette. The same closure-based emit code paths produce
+//!   choice-and-TTY-aware enable/disable, plus a named-color
+//!   palette. This crate reads no environment variables; the
+//!   `NO_COLOR` family reaches it folded into the recorded
+//!   [`ColorChoice`]. The same closure-based emit code paths produce
 //!   styled output on a TTY and plain text everywhere else with no
 //!   conditional branching at every write.
 //! - [`glyph`]: [`StyledGlyph`] — pairs a Unicode icon with the

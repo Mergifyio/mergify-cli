@@ -213,7 +213,8 @@ These are accepted on every command:
 | `GITHUB_REPOSITORY` | Default `owner/repo` when `--repository` is omitted. |
 | `MERGIFY_API_URL` | API base URL (default `https://api.mergify.com`). |
 | `RUST_LOG` | Fine-grained log filtering; overrides `--verbose`. |
-| `NO_COLOR` | Disable colored output. |
+| `NO_COLOR` | Disable colored output. Must be set to a non-empty value; exported-but-empty counts as unset. |
+| `FORCE_COLOR`, `CLICOLOR_FORCE` | Force colored output when it would otherwise be off. Same non-empty rule, and `NO_COLOR` wins over both. All three apply to `--color auto` only. |
 | `MERGIFY_INSTALL_DIR`, `MERGIFY_VERSION` | Install-script target directory / pinned version. |
 
 ## Exit codes

@@ -122,10 +122,13 @@ allowed — use an exhaustive `enum` match.
 - Commands emit results through `&mut dyn mergify_core::output::Output`, not
   `println!`. Call `emit` / `emit_json_value` once.
 - **Color goes through `mergify_tui::theme`**, never hardcoded SGR escapes. The
-  theme honors `--color <auto|always|never>` (resolved once via
-  `set_color_choice`), then `NO_COLOR`, then `FORCE_COLOR`/`CLICOLOR_FORCE`, then
-  the TTY. Cursor-movement / erase escapes in the progress renderer are not color
-  and are fine.
+  precedence is `--color <auto|always|never>`, then `NO_COLOR`, then
+  `FORCE_COLOR`/`CLICOLOR_FORCE`, then the TTY, and it is resolved once at the
+  CLI entry point: `resolve_color_choice` in `main.rs` folds the three variables
+  into the `ColorChoice` it hands `set_color_choice`. `mergify-tui` itself reads
+  no environment variable, which is why a consumer crate's tests no longer touch
+  the environment just by rendering a themed line. Cursor-movement / erase
+  escapes in the progress renderer are not color and are fine.
 
 ```rust
 // GOOD
