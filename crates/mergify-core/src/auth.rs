@@ -127,7 +127,8 @@ pub fn resolve_mergify_token(
     audience: Audience,
 ) -> Result<String, CliError> {
     let store = CredentialStore::discover();
-    let resolved = resolve_mergify_token_with(explicit, api_url, audience, &store)?;
+    let resolved =
+        resolve_mergify_token_with(explicit, api_url, audience, &store, || gh_auth_token().ok())?;
     if let Some(notice) = deprecation_notice(resolved.source, audience) {
         warn_once(&notice);
     }
@@ -149,6 +150,7 @@ fn resolve_mergify_token_with(
     api_url: &Url,
     audience: Audience,
     store: &CredentialStore,
+    gh_token: impl FnOnce() -> Option<String>,
 ) -> Result<ResolvedToken, CliError> {
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(ResolvedToken {
@@ -185,9 +187,7 @@ fn resolve_mergify_token_with(
             source: TokenSource::GitHubTokenEnv,
         });
     }
-    if let Ok(token) = gh_auth_token()
-        && !token.is_empty()
-    {
+    if let Some(token) = gh_token().filter(|t| !t.is_empty()) {
         return Ok(ResolvedToken {
             token,
             source: TokenSource::GhCli,
@@ -258,6 +258,22 @@ fn warn_once(message: &str) {
 /// next source tried. If nothing is left, the failure names the
 /// sources it skipped rather than the ones the user should have set.
 pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> {
+    resolve_github_token_with(explicit, || gh_auth_token().ok())
+}
+
+/// [`resolve_github_token`] with its `gh auth token` leg supplied by
+/// the caller.
+///
+/// The tests drive it with a closure rather than putting a fake `gh`
+/// on `PATH`: `PATH` only reaches a child process by mutating this
+/// one's environment, which nothing in this workspace does. It also
+/// makes the cases that matter here — `gh` absent, `gh` echoing the
+/// `mut_` value it was handed — expressible without a shell script,
+/// a temp directory, or a `cfg(unix)` gate.
+fn resolve_github_token_with(
+    explicit: Option<&str>,
+    gh_token: impl FnOnce() -> Option<String>,
+) -> Result<String, CliError> {
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(value.to_string());
     }
@@ -294,9 +310,7 @@ pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> 
     // the value out of the request: a GitHub Actions job exporting a
     // `mut_` token gets it handed straight back here. Check what
     // came out, not where it came from.
-    if let Ok(token) = gh_auth_token()
-        && !token.is_empty()
-    {
+    if let Some(token) = gh_token().filter(|t| !t.is_empty()) {
         if token.starts_with(MERGIFY_USER_TOKEN_PREFIX) {
             tracing::debug!(
                 "`gh auth token` returned a Mergify user token, which GitHub cannot accept; \
@@ -457,6 +471,7 @@ fn parse_slug(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env;
 
     /// A store that cannot reach the developer's real keychain,
     /// optionally holding a credential for [`api_url`].
@@ -481,20 +496,36 @@ mod tests {
         Url::parse("https://api.mergify.com").unwrap()
     }
 
-    /// The chain, with no keychain anywhere near it. `None` for the
-    /// store means "this machine has no credential store at all".
+    /// The chain, with no keychain anywhere near it and no `gh`.
+    ///
+    /// A machine with an authenticated `gh` used to answer the last
+    /// step and make these tests assert on the wrong thing, which is
+    /// why so many of them pointed `PATH` at a nonexistent
+    /// directory. Injecting the step says the same thing without
+    /// needing the process environment to change.
     fn resolve(
         explicit: Option<&str>,
         audience: Audience,
         store: &CredentialStore,
     ) -> Result<ResolvedToken, CliError> {
-        resolve_mergify_token_with(explicit, &api_url(), audience, store)
+        resolve_with_gh(explicit, audience, store, || None)
+    }
+
+    /// [`resolve`] for a case that is about what `gh auth token`
+    /// answered.
+    fn resolve_with_gh(
+        explicit: Option<&str>,
+        audience: Audience,
+        store: &CredentialStore,
+        gh_token: impl FnOnce() -> Option<String>,
+    ) -> Result<ResolvedToken, CliError> {
+        resolve_mergify_token_with(explicit, &api_url(), audience, store, gh_token)
     }
 
     #[test]
     fn resolve_mergify_token_prefers_explicit_over_everything() {
         let (_dir, store) = store_with(Some("stored"));
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
                 ("GITHUB_TOKEN", Some("env-github")),
@@ -512,7 +543,7 @@ mod tests {
     #[test]
     fn resolve_mergify_token_prefers_the_mergify_env_var_over_the_store() {
         let (_dir, store) = store_with(Some("stored"));
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
                 ("GITHUB_TOKEN", Some("env-github")),
@@ -531,7 +562,7 @@ mod tests {
     #[test]
     fn the_stored_credential_beats_github_token() {
         let (_dir, store) = store_with(Some("mut_stored"));
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("env-github")),
@@ -550,7 +581,7 @@ mod tests {
     #[test]
     fn the_ci_audience_never_uses_the_stored_credential() {
         let (_dir, store) = store_with(Some("mut_stored"));
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("env-github")),
@@ -566,7 +597,7 @@ mod tests {
     #[test]
     fn resolve_mergify_token_falls_back_to_github_env_when_nothing_is_stored() {
         let (_dir, store) = store_with(None);
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("env-github")),
@@ -584,45 +615,26 @@ mod tests {
     #[test]
     fn a_credential_stored_for_another_deployment_is_not_used() {
         let (_dir, store) = store_with(Some("mut_stored"));
-        // `PATH` too: without it a developer machine with an
-        // authenticated `gh` answers the last step of the chain and
-        // the test asserts on the wrong thing.
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", None),
-                ("GITHUB_TOKEN", None),
-                ("PATH", Some("/nonexistent-directory-for-test")),
-            ],
-            || {
-                let other = Url::parse("https://mergify.internal.example/api").unwrap();
-                let err =
-                    resolve_mergify_token_with(None, &other, Audience::User, &store).unwrap_err();
-                assert!(
-                    err.to_string().contains("no Mergify credential"),
-                    "got {err}"
-                );
-            },
-        );
+        env::testing::with_no_vars(|| {
+            let other = Url::parse("https://mergify.internal.example/api").unwrap();
+            let err = resolve_mergify_token_with(None, &other, Audience::User, &store, || None)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("no Mergify credential"),
+                "got {err}"
+            );
+        });
     }
 
     #[test]
     fn resolve_mergify_token_error_names_the_command_that_fixes_it() {
-        // Forcing PATH to a directory with no `gh` keeps the test
-        // hermetic on machines that do have the GitHub CLI installed.
         let (_dir, store) = store_with(None);
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", None),
-                ("GITHUB_TOKEN", None),
-                ("PATH", Some("/nonexistent-directory-for-test")),
-            ],
-            || {
-                let err = resolve(None, Audience::User, &store).unwrap_err();
-                let msg = err.to_string();
-                assert!(msg.contains("mergify auth login"), "got {msg:?}");
-                assert!(msg.contains("MERGIFY_TOKEN"), "got {msg:?}");
-            },
-        );
+        env::testing::with_no_vars(|| {
+            let err = resolve(None, Audience::User, &store).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("mergify auth login"), "got {msg:?}");
+            assert!(msg.contains("MERGIFY_TOKEN"), "got {msg:?}");
+        });
     }
 
     // A `ci` command cannot be fixed by `auth login`; the message it
@@ -630,19 +642,12 @@ mod tests {
     #[test]
     fn the_ci_audience_is_not_told_to_run_auth_login() {
         let (_dir, store) = store_with(None);
-        temp_env::with_vars(
-            [
-                ("MERGIFY_TOKEN", None),
-                ("GITHUB_TOKEN", None),
-                ("PATH", Some("/nonexistent-directory-for-test")),
-            ],
-            || {
-                let err = resolve(None, Audience::ApplicationKey, &store).unwrap_err();
-                let msg = err.to_string();
-                assert!(!msg.contains("auth login"), "got {msg:?}");
-                assert!(msg.contains("application key"), "got {msg:?}");
-            },
-        );
+        env::testing::with_no_vars(|| {
+            let err = resolve(None, Audience::ApplicationKey, &store).unwrap_err();
+            let msg = err.to_string();
+            assert!(!msg.contains("auth login"), "got {msg:?}");
+            assert!(msg.contains("application key"), "got {msg:?}");
+        });
     }
 
     #[test]
@@ -689,7 +694,7 @@ mod tests {
     // wrapper itself must at least be wired to the chain.
     #[test]
     fn the_public_resolver_answers_the_chain() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
                 ("GITHUB_TOKEN", None),
@@ -705,10 +710,10 @@ mod tests {
 
     #[test]
     fn overriding_env_var_reports_what_outranks_the_stored_credential() {
-        temp_env::with_var("MERGIFY_TOKEN", Some("env-mergify"), || {
+        env::testing::with_var("MERGIFY_TOKEN", Some("env-mergify"), || {
             assert_eq!(overriding_env_var(), Some("MERGIFY_TOKEN"));
         });
-        temp_env::with_var("MERGIFY_TOKEN", None::<&str>, || {
+        env::testing::with_var("MERGIFY_TOKEN", None::<&str>, || {
             assert_eq!(overriding_env_var(), None);
         });
     }
@@ -719,13 +724,16 @@ mod tests {
     // about why.
     #[test]
     fn resolve_github_token_skips_a_mergify_user_token() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("mut_from_auth_login")),
                 ("GITHUB_TOKEN", Some("env-github")),
             ],
             || {
-                assert_eq!(resolve_github_token(None).unwrap(), "env-github");
+                assert_eq!(
+                    resolve_github_token_with(None, || None).unwrap(),
+                    "env-github"
+                );
             },
         );
     }
@@ -735,14 +743,13 @@ mod tests {
     // set, for a reason they cannot see.
     #[test]
     fn resolve_github_token_says_why_it_skipped_the_mergify_token() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("mut_from_auth_login")),
                 ("GITHUB_TOKEN", None),
-                ("PATH", Some("/nonexistent-directory-for-test")),
             ],
             || {
-                let err = resolve_github_token(None).unwrap_err();
+                let err = resolve_github_token_with(None, || None).unwrap_err();
                 let message = err.to_string();
                 assert!(
                     message.contains("GitHub does not accept"),
@@ -764,14 +771,15 @@ mod tests {
     // the broken one.
     #[test]
     fn resolve_github_token_names_the_variable_it_actually_skipped() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("mut_from_auth_login")),
-                ("PATH", Some("/nonexistent-directory-for-test")),
             ],
             || {
-                let message = resolve_github_token(None).unwrap_err().to_string();
+                let message = resolve_github_token_with(None, || None)
+                    .unwrap_err()
+                    .to_string();
                 assert!(message.starts_with("GITHUB_TOKEN holds"), "got {message:?}");
                 assert!(
                     !message.contains("MERGIFY_TOKEN"),
@@ -787,14 +795,15 @@ mod tests {
 
     #[test]
     fn resolve_github_token_names_both_variables_when_both_were_skipped() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("mut_one")),
                 ("GITHUB_TOKEN", Some("mut_two")),
-                ("PATH", Some("/nonexistent-directory-for-test")),
             ],
             || {
-                let message = resolve_github_token(None).unwrap_err().to_string();
+                let message = resolve_github_token_with(None, || None)
+                    .unwrap_err()
+                    .to_string();
                 assert!(
                     message.starts_with("MERGIFY_TOKEN and GITHUB_TOKEN hold a"),
                     "got {message:?}",
@@ -803,35 +812,24 @@ mod tests {
         );
     }
 
-    // A `gh` on `PATH` answering `auth token` with whatever the body
-    // prints. The real one echoes `$GITHUB_TOKEN` when that is set,
-    // which is the case worth reproducing.
-    #[cfg(unix)]
-    fn fake_gh(body: &str) -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gh");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        dir
-    }
-
     // Skipping the variable is not enough on its own: `gh auth token`
     // prints `$GITHUB_TOKEN`, so a GitHub Actions job exporting a
     // `mut_` value gets the same token back through the fallback and
     // sends it to GitHub anyway.
-    #[cfg(unix)]
     #[test]
     fn resolve_github_token_does_not_let_gh_hand_back_the_skipped_variable() {
-        let gh = fake_gh("printf '%s' \"$GITHUB_TOKEN\"");
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("mut_from_auth_login")),
-                ("PATH", Some(gh.path().to_str().unwrap())),
             ],
             || {
-                let message = resolve_github_token(None).unwrap_err().to_string();
+                // What the real `gh auth token` prints when
+                // `GITHUB_TOKEN` is set: the variable, straight back.
+                let message =
+                    resolve_github_token_with(None, || Some("mut_from_auth_login".to_string()))
+                        .unwrap_err()
+                        .to_string();
                 assert!(
                     message.starts_with("GITHUB_TOKEN and `gh auth token` hold a"),
                     "got {message:?}",
@@ -848,19 +846,17 @@ mod tests {
     // The filter is on the value, not on the source: a GitHub token
     // from `gh` is still the answer when the variables hold nothing
     // usable.
-    #[cfg(unix)]
     #[test]
     fn resolve_github_token_still_takes_a_real_gh_token() {
-        let gh = fake_gh("printf 'ghp_from_gh_auth_login'");
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("mut_from_auth_login")),
                 ("GITHUB_TOKEN", None),
-                ("PATH", Some(gh.path().to_str().unwrap())),
             ],
             || {
                 assert_eq!(
-                    resolve_github_token(None).unwrap(),
+                    resolve_github_token_with(None, || Some("ghp_from_gh_auth_login".to_string()))
+                        .unwrap(),
                     "ghp_from_gh_auth_login"
                 );
             },
@@ -872,7 +868,7 @@ mod tests {
     // the more surprising failure.
     #[test]
     fn resolve_github_token_still_honours_an_explicit_mergify_token() {
-        temp_env::with_var("GITHUB_TOKEN", Some("env-github"), || {
+        env::testing::with_var("GITHUB_TOKEN", Some("env-github"), || {
             assert_eq!(
                 resolve_github_token(Some("mut_explicit")).unwrap(),
                 "mut_explicit",
@@ -887,7 +883,7 @@ mod tests {
     // if that divergence ever reaches the GitHub side.
     #[test]
     fn resolve_github_token_prefers_explicit_over_env() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
                 ("GITHUB_TOKEN", Some("env-github")),
@@ -903,33 +899,39 @@ mod tests {
 
     #[test]
     fn resolve_github_token_falls_back_to_mergify_env() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", Some("env-mergify")),
                 ("GITHUB_TOKEN", Some("env-github")),
             ],
             || {
-                assert_eq!(resolve_github_token(None).unwrap(), "env-mergify");
+                assert_eq!(
+                    resolve_github_token_with(None, || None).unwrap(),
+                    "env-mergify"
+                );
             },
         );
     }
 
     #[test]
     fn resolve_github_token_falls_back_to_github_env_when_mergify_unset() {
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("MERGIFY_TOKEN", None),
                 ("GITHUB_TOKEN", Some("env-github")),
             ],
             || {
-                assert_eq!(resolve_github_token(None).unwrap(), "env-github");
+                assert_eq!(
+                    resolve_github_token_with(None, || None).unwrap(),
+                    "env-github"
+                );
             },
         );
     }
 
     #[test]
     fn resolve_api_url_default() {
-        temp_env::with_var("MERGIFY_API_URL", None::<&str>, || {
+        env::testing::with_var("MERGIFY_API_URL", None::<&str>, || {
             let url = resolve_api_url(None).unwrap();
             assert_eq!(url.as_str(), "https://api.mergify.com/");
         });
@@ -937,7 +939,7 @@ mod tests {
 
     #[test]
     fn resolve_api_url_prefers_explicit() {
-        temp_env::with_var("MERGIFY_API_URL", Some("https://from-env.example/"), || {
+        env::testing::with_var("MERGIFY_API_URL", Some("https://from-env.example/"), || {
             let url = resolve_api_url(Some("https://explicit.example/")).unwrap();
             assert_eq!(url.as_str(), "https://explicit.example/");
         });
@@ -945,7 +947,7 @@ mod tests {
 
     #[test]
     fn resolve_api_url_uses_env_var_when_explicit_empty() {
-        temp_env::with_var("MERGIFY_API_URL", Some("https://from-env.example/"), || {
+        env::testing::with_var("MERGIFY_API_URL", Some("https://from-env.example/"), || {
             let url = resolve_api_url(None).unwrap();
             assert_eq!(url.as_str(), "https://from-env.example/");
         });
@@ -953,7 +955,7 @@ mod tests {
 
     #[test]
     fn resolve_api_url_rejects_garbage() {
-        temp_env::with_var("MERGIFY_API_URL", None::<&str>, || {
+        env::testing::with_var("MERGIFY_API_URL", None::<&str>, || {
             let err = resolve_api_url(Some("not a url")).unwrap_err();
             assert!(err.to_string().contains("invalid --api-url"));
         });
@@ -961,7 +963,7 @@ mod tests {
 
     #[test]
     fn resolve_repository_prefers_explicit() {
-        temp_env::with_var("GITHUB_REPOSITORY", Some("owner-from-env/repo"), || {
+        env::testing::with_var("GITHUB_REPOSITORY", Some("owner-from-env/repo"), || {
             assert_eq!(
                 resolve_repository(Some("explicit/repo")).unwrap(),
                 "explicit/repo",
@@ -971,7 +973,7 @@ mod tests {
 
     #[test]
     fn resolve_repository_falls_back_to_env() {
-        temp_env::with_var("GITHUB_REPOSITORY", Some("owner/repo"), || {
+        env::testing::with_var("GITHUB_REPOSITORY", Some("owner/repo"), || {
             assert_eq!(resolve_repository(None).unwrap(), "owner/repo");
         });
     }
