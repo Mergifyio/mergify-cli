@@ -370,6 +370,7 @@ mod tests {
 
     use mergify_core::OutputMode;
     use mergify_core::StdioOutput;
+    use mergify_core::env;
     use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -378,7 +379,6 @@ mod tests {
     use wiremock::matchers::path as path_matcher;
 
     use super::*;
-    use crate::testing::with_ci_env_async;
 
     type SharedBytes = Arc<Mutex<Vec<u8>>>;
 
@@ -522,8 +522,8 @@ mod tests {
         // With no `--repository`, the command resolves the repository
         // from the CI environment — here GitHub Actions'
         // `GITHUB_REPOSITORY` — and queries that repository's endpoint.
-        with_ci_env_async(
-            &[
+        env::testing::with_vars_async(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_REPOSITORY", Some("owner/repo")),
             ],

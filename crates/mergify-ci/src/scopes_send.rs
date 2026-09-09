@@ -228,6 +228,7 @@ struct SendScopesRequest<'a> {
 mod tests {
     use std::fs;
 
+    use mergify_core::env;
     use mergify_test_support::Captured;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -238,13 +239,11 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-    use crate::testing::with_ci_env;
-    use crate::testing::with_ci_env_async;
     use crate::testing::write_github_event;
 
     #[test]
     fn resolve_pull_request_prefers_explicit() {
-        with_ci_env(&[], || {
+        env::testing::with_no_vars(|| {
             assert_eq!(resolve_pull_request(Some(7)).unwrap(), Some(7));
         });
     }
@@ -287,7 +286,7 @@ mod tests {
     #[tokio::test]
     async fn run_skips_when_no_pull_request_detected() {
         let mut cap = Captured::human();
-        with_ci_env_async(&[("GITHUB_REPOSITORY", Some("owner/repo"))], async {
+        env::testing::with_vars_async([("GITHUB_REPOSITORY", Some("owner/repo"))], async {
             run(
                 ScopesSendOptions {
                     repository: None,
@@ -331,8 +330,8 @@ mod tests {
         let api_url = server.uri();
         let direct = vec!["a".to_string()];
 
-        with_ci_env_async(
-            &[
+        env::testing::with_vars_async(
+            [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_REPO", Some("git@github.com:owner/repo.git")),
                 ("BUILDKITE_PULL_REQUEST", Some("99")),
@@ -554,8 +553,8 @@ mod tests {
         let api_url = server.uri();
         let direct = vec!["a".to_string()];
 
-        with_ci_env_async(
-            &[
+        env::testing::with_vars_async(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
@@ -620,8 +619,8 @@ mod tests {
         let api_url = server.uri();
         let direct = vec!["backend".to_string()];
 
-        with_ci_env_async(
-            &[
+        env::testing::with_vars_async(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),

@@ -5,7 +5,7 @@
 //! `deny_unknown_fields` on purpose) so the payload's superset of
 //! fields doesn't break us.
 
-use std::env;
+use mergify_core::env;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -65,12 +65,8 @@ pub const PULL_REQUEST_EVENTS: &[&str] = &[
 /// `GitHubEventNotFoundError` being converted to a fallback.
 #[must_use]
 pub fn load() -> Option<(String, GitHubEvent)> {
-    let event_name = env::var("GITHUB_EVENT_NAME")
-        .ok()
-        .filter(|s| !s.is_empty())?;
-    let event_path = env::var("GITHUB_EVENT_PATH")
-        .ok()
-        .filter(|s| !s.is_empty())?;
+    let event_name = env::var_non_empty("GITHUB_EVENT_NAME")?;
+    let event_path = env::var_non_empty("GITHUB_EVENT_PATH")?;
     let path = PathBuf::from(event_path);
     if !path.is_file() {
         return None;
