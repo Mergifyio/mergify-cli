@@ -66,10 +66,11 @@ const ENDPOINT_SUFFIX: &str = "/ci/traces";
 /// limit: the ingest endpoint hard-caps payloads at 25 MiB
 /// (MRGFY-8124), so sizing each chunk under 20 MiB leaves 5 MiB of
 /// headroom below the rejection threshold. [`crate::junit_process::split`]
-/// partitions an oversized trace into several uploads that each gzip
-/// under this cap. The cap is on the *compressed* body — the exact
-/// bytes we put on the wire — not the raw XML or the uncompressed
-/// protobuf.
+/// partitions an oversized trace into several uploads sized against
+/// this cap — two of its paths land a few dozen bytes over it on
+/// purpose, which is what the 5 MiB is for. The cap is on the
+/// *compressed* body — the exact bytes we put on the wire — not the
+/// raw XML or the uncompressed protobuf.
 pub const MAX_GZIPPED_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 
 // The soft cap is only safe if it stays under the ingest server's hard
@@ -126,10 +127,11 @@ pub async fn upload(
 }
 
 /// POST an already-gzipped OTLP payload. The splitting path
-/// ([`crate::junit_process::split`]) gzips each chunk once to size it
-/// against the cap and hands the compressed bytes straight here, so
-/// the payload is never gzipped twice. Callers guarantee `compressed`
-/// is a non-empty gzipped `ExportTraceServiceRequest`.
+/// ([`crate::junit_process::split`]) hands over the exact bytes it
+/// means to send — gzipped once when the chunk ships as it was sized,
+/// once more when it was stamped with its position in the session —
+/// so nothing is compressed again here. Callers guarantee
+/// `compressed` is a non-empty gzipped `ExportTraceServiceRequest`.
 pub async fn upload_compressed(
     client: &reqwest::Client,
     api_url: &str,
