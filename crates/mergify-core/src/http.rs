@@ -506,18 +506,55 @@ impl Client {
         self.execute_status(self.inner.delete(url)).await
     }
 
+    /// Resolve `path` against `base_url`.
+    ///
+    /// Every call site writes `path` with a leading `/`, but it is
+    /// meant as a *relative* reference: GitHub Enterprise's API base
+    /// carries an `/api/v3` prefix, and RFC 3986 resolves a reference
+    /// starting with `/` by replacing the base's whole path instead of
+    /// extending it. Resolved literally, `https://ghe/api/v3` + `/user`
+    /// is `https://ghe/user` — the web UI, which redirects to the login
+    /// page and surfaces as a JSON decode error against a `/login?…`
+    /// URL. So the leading `/` comes off and the base gets a trailing
+    /// one, which makes the join append.
+    ///
+    /// The resolution stays inside `Url::join` rather than
+    /// concatenating strings onto `base_url`'s path: `path` may carry
+    /// an embedded `?query` (`…/merge-queue/status?branch=main`), and
+    /// `set_path` percent-encodes the `?` into a literal path byte.
     fn join(&self, path: &str) -> Result<Url, CliError> {
         // `Url::join` accepts absolute URLs and protocol-relative
         // paths (`//host/...`), which would let a caller-supplied
         // `path` swap out `base_url`'s authority and leak the bearer
-        // token to an arbitrary host. Reject both up front.
-        if path.starts_with("//") || Url::parse(path).is_ok() {
+        // token to an arbitrary host.
+        //
+        // Both forms are checked before AND after the leading `/` comes
+        // off, because each strips past the other: `//evil.example/foo`
+        // is only protocol-relative while the slash is there, and
+        // `/https://evil.example/foo` is only an absolute URL once it is
+        // gone.
+        let relative = path.strip_prefix('/').unwrap_or(path);
+        if points_at_another_host(path) || points_at_another_host(relative) {
             return Err(self.api_error(format!(
                 "invalid path {path:?}: absolute URLs are not allowed"
             )));
         }
-        self.base_url
-            .join(path)
+
+        let mut base = self.base_url.clone();
+        if !base.path().ends_with('/') {
+            // `push("")` appends an empty segment — a trailing slash —
+            // without re-encoding the segments already there, which
+            // `set_path` on a percent-encoded path would risk.
+            base.path_segments_mut()
+                .map_err(|()| {
+                    self.api_error(format!(
+                        "invalid base URL {}: cannot be a base",
+                        self.base_url
+                    ))
+                })?
+                .push("");
+        }
+        base.join(relative)
             .map_err(|e| self.api_error(format!("invalid path {path:?}: {e}")))
     }
 
@@ -750,6 +787,13 @@ impl Client {
     }
 }
 
+/// Whether `reference` would resolve to a host of its own rather than
+/// against a base URL — an absolute URL (`https://evil.example/foo`)
+/// or a protocol-relative reference (`//evil.example/foo`).
+fn points_at_another_host(reference: &str) -> bool {
+    reference.starts_with("//") || Url::parse(reference).is_ok()
+}
+
 fn is_transient(e: &reqwest::Error) -> bool {
     e.is_timeout() || e.is_connect()
 }
@@ -918,6 +962,12 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    /// A client with no server behind it, for the URL-shaping tests:
+    /// `join` never leaves the process, so a base URL is all they need.
+    fn client_based_at(base: &str) -> Client {
+        Client::new(Url::parse(base).unwrap(), "test-token", ApiFlavor::GitHub).unwrap()
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -1637,6 +1687,110 @@ mod tests {
         let client = fast_client(&server, ApiFlavor::GitHub);
         let err = client.get::<Foo>("//evil.example/foo").await.unwrap_err();
         assert!(err.to_string().contains("absolute URLs are not allowed"));
+    }
+
+    /// The leading-slash strip that lets a GHE base survive must not
+    /// run before the authority guard: `//evil.example/foo` becomes
+    /// the innocuous-looking `/evil.example/foo` once the slash is
+    /// gone, so a guard placed after the strip would stop seeing the
+    /// thing it was written to catch.
+    #[test]
+    fn join_rejects_protocol_relative_path_before_stripping_its_slash() {
+        let client = client_based_at("https://ghe.example.com/api/v3");
+        let err = client.join("//evil.example/foo").unwrap_err();
+        assert!(err.to_string().contains("absolute URLs are not allowed"));
+    }
+
+    /// The mirror case: stripping the leading slash can *expose* an
+    /// absolute URL the pre-strip guard cannot see, since
+    /// `/https://evil.example/foo` parses as no URL at all while
+    /// `https://evil.example/foo` swaps the authority outright.
+    #[test]
+    fn join_rejects_an_absolute_url_hidden_behind_a_leading_slash() {
+        let client = client_based_at("https://ghe.example.com/api/v3");
+        let err = client.join("/https://evil.example/foo").unwrap_err();
+        assert!(
+            err.to_string().contains("absolute URLs are not allowed"),
+            "got {err}"
+        );
+    }
+
+    /// GitHub Enterprise Server serves its API under `/api/v3`, and
+    /// every call site passes an absolute path. Resolved by RFC 3986
+    /// that path replaces the base's, so requests landed on the web UI
+    /// and got redirected to the login page (mergify-cli#1818).
+    #[test]
+    fn join_keeps_the_ghe_api_v3_prefix() {
+        let client = client_based_at("https://ghe.example.com/api/v3");
+        assert_eq!(
+            client.join("/user").unwrap().as_str(),
+            "https://ghe.example.com/api/v3/user"
+        );
+        assert_eq!(
+            client.join("/repos/owner/repo/pulls/42").unwrap().as_str(),
+            "https://ghe.example.com/api/v3/repos/owner/repo/pulls/42"
+        );
+    }
+
+    /// The same thing end to end: a request built from a GHE-shaped
+    /// base has to arrive under `/api/v3`, not at the root.
+    #[tokio::test]
+    async fn get_against_a_ghe_base_requests_the_api_v3_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Foo { bar: 1 }))
+            .mount(&server)
+            .await;
+
+        let client = Client::new(
+            Url::parse(&format!("{}/api/v3", server.uri())).unwrap(),
+            "test-token",
+            ApiFlavor::GitHub,
+        )
+        .unwrap();
+        assert_eq!(client.get::<Foo>("/user").await.unwrap(), Foo { bar: 1 });
+    }
+
+    /// A base already carrying its trailing slash resolves the same
+    /// way — the normalisation must not double it.
+    #[test]
+    fn join_does_not_double_a_trailing_slash_on_the_base() {
+        let client = client_based_at("https://ghe.example.com/api/v3/");
+        assert_eq!(
+            client.join("/user").unwrap().as_str(),
+            "https://ghe.example.com/api/v3/user"
+        );
+    }
+
+    /// github.com's base has no path prefix, so the same handling has
+    /// to leave those URLs exactly where they were.
+    #[test]
+    fn join_leaves_dotcom_paths_at_the_root() {
+        let client = client_based_at("https://api.github.com");
+        assert_eq!(
+            client.join("/user").unwrap().as_str(),
+            "https://api.github.com/user"
+        );
+        assert_eq!(
+            client.join("/search/issues").unwrap().as_str(),
+            "https://api.github.com/search/issues"
+        );
+    }
+
+    /// Some call sites hand `join` a path with its query already
+    /// attached (`mergify-queue`'s merge-queue status). `Url::join`
+    /// parses that query as a query; building the URL by concatenating
+    /// onto the base's path instead would percent-encode the `?` into
+    /// a literal path byte and 404.
+    #[test]
+    fn join_keeps_an_embedded_query_a_query() {
+        let client = client_based_at("https://ghe.example.com/api/v3");
+        let url = client
+            .join("/v1/repos/owner/repo/merge-queue/status?branch=main")
+            .unwrap();
+        assert_eq!(url.path(), "/api/v3/v1/repos/owner/repo/merge-queue/status");
+        assert_eq!(url.query(), Some("branch=main"));
     }
 
     #[test]
