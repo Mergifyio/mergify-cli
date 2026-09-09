@@ -1906,7 +1906,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "temp-env",
  "tempfile",
  "terminal_size",
  "tokio",

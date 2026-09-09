@@ -173,9 +173,7 @@ pub fn resolve_repo(
 /// for local wiremock servers) without the coercion getting in
 /// the way.
 pub fn resolve_github_server(repo_dir: Option<&Path>) -> Result<Url, CliError> {
-    if let Ok(raw) = std::env::var("MERGIFY_GITHUB_SERVER")
-        && !raw.is_empty()
-    {
+    if let Some(raw) = mergify_core::env::var_non_empty("MERGIFY_GITHUB_SERVER") {
         return Url::parse(&raw).map_err(|e| {
             CliError::InvalidState(format!("invalid MERGIFY_GITHUB_SERVER '{raw}': {e}"))
         });
