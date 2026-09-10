@@ -38,7 +38,7 @@ impl CIProvider {
 
 #[must_use]
 pub fn get_ci_provider() -> Option<CIProvider> {
-    if env::var("JENKINS_URL").ok().is_some_and(|v| !v.is_empty()) {
+    if env::var("JENKINS_URL").is_ok_and(|v| !v.is_empty()) {
         return Some(CIProvider::Jenkins);
     }
     if env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
