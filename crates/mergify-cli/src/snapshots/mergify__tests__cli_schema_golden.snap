@@ -78,6 +78,89 @@ expression: schema
     ],
     "commands": [
       {
+        "about": "Sign in to Mergify, and manage the stored credential",
+        "aliases": [],
+        "args": [
+          {
+            "default": null,
+            "env": null,
+            "global": true,
+            "help": "Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var, then to the default",
+            "id": "api_url",
+            "kind": "option",
+            "long": "api-url",
+            "longHelp": "Mergify API URL. Falls back to ``MERGIFY_API_URL`` env var, then to the default",
+            "numArgs": "1",
+            "possibleValues": [],
+            "required": false,
+            "short": "u",
+            "valueHint": null,
+            "valueNames": [
+              "API_URL"
+            ]
+          }
+        ],
+        "commands": [
+          {
+            "about": "Sign in to Mergify and store the credential",
+            "aliases": [],
+            "args": [],
+            "commands": [],
+            "longAbout": "Sign in to Mergify and store the credential.\n\nPrints a URL and a code: open the one, enter the other, and approve. The credential lands in your OS keychain, or in a `0600` file when the machine has no keychain to offer.",
+            "name": "login",
+            "path": [
+              "mergify",
+              "auth",
+              "login"
+            ],
+            "source": "native",
+            "subcommandRequired": false,
+            "usage": "mergify auth login [OPTIONS]"
+          },
+          {
+            "about": "Revoke the stored credential and forget it",
+            "aliases": [],
+            "args": [],
+            "commands": [],
+            "longAbout": "Revoke the stored credential and forget it.\n\nTells the Mergify API to revoke the token as well as deleting the local copy, so a machine you are handing back stops being signed in everywhere.",
+            "name": "logout",
+            "path": [
+              "mergify",
+              "auth",
+              "logout"
+            ],
+            "source": "native",
+            "subcommandRequired": false,
+            "usage": "mergify auth logout [OPTIONS]"
+          },
+          {
+            "about": "Show whether this machine is signed in to Mergify",
+            "aliases": [],
+            "args": [],
+            "commands": [],
+            "longAbout": "Show whether this machine is signed in to Mergify.\n\nNames the account, where the credential is stored, and when it runs out. Checks the credential against the API rather than trusting the local copy, so one revoked from the dashboard is reported as invalid.",
+            "name": "status",
+            "path": [
+              "mergify",
+              "auth",
+              "status"
+            ],
+            "source": "native",
+            "subcommandRequired": false,
+            "usage": "mergify auth status [OPTIONS]"
+          }
+        ],
+        "longAbout": "Sign in to Mergify, and manage the stored credential.\n\n`mergify auth login` runs an OAuth device flow against the Mergify API and stores the per-user token it mints, so the commands that talk to Mergify need no token in your environment.",
+        "name": "auth",
+        "path": [
+          "mergify",
+          "auth"
+        ],
+        "source": "native",
+        "subcommandRequired": true,
+        "usage": "mergify auth [OPTIONS] <COMMAND>"
+      },
+      {
         "about": "Validate and simulate your Mergify configuration",
         "aliases": [],
         "args": [
@@ -3981,7 +4064,7 @@ expression: schema
     },
     {
       "code": 8,
-      "description": "Configuration file missing, unparseable, or failing validation.",
+      "description": "Configuration or credentials missing, unparseable, or failing validation.",
       "name": "ConfigurationError"
     }
   ],

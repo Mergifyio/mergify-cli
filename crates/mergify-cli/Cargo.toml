@@ -18,6 +18,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
+mergify-auth = { path = "../mergify-auth" }
 mergify-ci = { path = "../mergify-ci" }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
