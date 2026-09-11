@@ -404,12 +404,12 @@ fn restrict_to_owner(_path: &Path, _mode: u32) -> Result<(), CliError> {
 ///
 /// `Url::as_str` normalizes the scheme, the case, and the default
 /// port, but not a trailing slash on the path — and a trailing slash
-/// is not a different deployment. Every request the client makes
-/// joins an absolute path (`/v1/user`), which replaces the base
-/// path outright, so `https://host/api` and `https://host/api/`
-/// reach byte-identical endpoints. Two entries for them would tell a
-/// user who logged in with one spelling that they are not logged in
-/// with the other.
+/// is not a different deployment. The HTTP client gives its base URL
+/// a trailing slash and strips the request path's leading one before
+/// joining, so `https://host/api` and `https://host/api/` both send
+/// `/v1/user` to `https://host/api/v1/user`. Two entries for them
+/// would tell a user who logged in with one spelling that they are
+/// not logged in with the other.
 fn key_for(api_url: &Url) -> String {
     let raw = api_url.as_str();
     raw.strip_suffix('/').unwrap_or(raw).to_string()
