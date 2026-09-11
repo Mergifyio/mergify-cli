@@ -162,7 +162,10 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
 enum NativeCommand {
     /// `mergify auth login [--api-url URL]` — run the device grant
     /// and store the credential it mints.
-    AuthLogin(AuthOpts),
+    AuthLogin {
+        opts: AuthOpts,
+        no_browser: bool,
+    },
     /// `mergify auth logout [--api-url URL]` — revoke the stored
     /// credential and forget it.
     AuthLogout(AuthOpts),
@@ -924,7 +927,9 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
         Subcommands::Auth(AuthArgs { api_url, command }) => {
             let opts = AuthOpts { api_url };
             Dispatch::Native(match command {
-                AuthSubcommand::Login => NativeCommand::AuthLogin(opts),
+                AuthSubcommand::Login(AuthLoginArgs { no_browser }) => {
+                    NativeCommand::AuthLogin { opts, no_browser }
+                }
                 AuthSubcommand::Logout => NativeCommand::AuthLogout(opts),
                 AuthSubcommand::Status => NativeCommand::AuthStatus(opts),
             })
@@ -1553,12 +1558,16 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             | NativeCommand::InternalManPage => {
                 unreachable!("introspection commands are handled before the runtime starts")
             }
-            NativeCommand::AuthLogin(opts) => {
+            NativeCommand::AuthLogin { opts, no_browser } => {
                 let store = mergify_core::CredentialStore::discover();
+                let system_browser = mergify_auth::browser::SystemBrowser;
+                let browser: Option<&dyn mergify_auth::browser::Browser> =
+                    if no_browser { None } else { Some(&system_browser) };
                 mergify_auth::login::run(
                     mergify_auth::login::LoginOptions {
                         api_url: opts.api_url.as_deref(),
                         store: &store,
+                        browser,
                     },
                     &mut output,
                 )
@@ -4466,14 +4475,23 @@ struct AuthArgs {
     command: AuthSubcommand,
 }
 
+#[derive(clap::Args)]
+struct AuthLoginArgs {
+    /// Do not open a browser; only print the URL to open.
+    #[arg(long = "no-browser")]
+    no_browser: bool,
+}
+
 #[derive(Subcommand)]
 enum AuthSubcommand {
     /// Sign in to Mergify and store the credential.
     ///
-    /// Prints a URL and a code: open the one, enter the other, and
-    /// approve. The credential lands in your OS keychain, or in a
-    /// `0600` file when the machine has no keychain to offer.
-    Login,
+    /// Opens the approval page in your browser and prints the URL
+    /// and the code as well, so a machine with no browser can sign
+    /// in from the same command. The credential lands in your OS
+    /// keychain, or in a `0600` file when the machine has no
+    /// keychain to offer.
+    Login(AuthLoginArgs),
     /// Revoke the stored credential and forget it.
     ///
     /// Tells the Mergify API to revoke the token as well as deleting
@@ -4901,6 +4919,27 @@ mod tests {
         assert_eq!(opts.token.as_deref(), Some("tok"));
         assert_eq!(opts.tests_target_branch.as_deref(), Some("main"));
         assert_eq!(opts.files, vec!["report.xml"]);
+    }
+
+    // The flag has to reach `LoginOptions`, not merely parse: an
+    // inverted `if no_browser` in `run_native` opens a browser for
+    // the user who asked for none, and every other test in the
+    // suite passes `browser: None` directly and would stay green.
+    #[test]
+    fn auth_login_carries_no_browser_through_dispatch() {
+        let Dispatch::Native(NativeCommand::AuthLogin { no_browser, .. }) =
+            dispatch_from_parsed(parse(&["auth", "login", "--no-browser"]))
+        else {
+            panic!("auth login must dispatch to the native AuthLogin variant");
+        };
+        assert!(no_browser);
+
+        let Dispatch::Native(NativeCommand::AuthLogin { no_browser, .. }) =
+            dispatch_from_parsed(parse(&["auth", "login"]))
+        else {
+            panic!("auth login must dispatch to the native AuthLogin variant");
+        };
+        assert!(!no_browser, "a browser is the default");
     }
 
     #[test]
