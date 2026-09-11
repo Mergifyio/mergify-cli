@@ -113,12 +113,17 @@ Reading the activity log is **best-effort**: a token scoped to the merge queue c
 
 `GET /v1/repos/{owner}/{repo}/logs` returns the queue lifecycle events, newest first. `queue show` calls this for you, and `mergify events --pr <PR> --since 90d` (the `mergify-events` skill) browses the whole lifecycle from the CLI — including every event type, not just queue ones. Go direct with `curl` only when it degrades (403 above, with a token that can read the log) or from somewhere the CLI is not installed:
 
+`MERGIFY_TOKEN` must hold a Mergify token: a GitHub token still works
+against the Mergify API but is deprecated, and the credential `mergify
+auth login` stores lives in the OS keychain rather than the environment,
+so a raw `curl` cannot reach it.
+
 ```bash
 REPO=owner/repo
 PR=1234
 FROM=$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-90d +%Y-%m-%dT%H:%M:%SZ)
 
-curl -sS -H "Authorization: Bearer ${MERGIFY_TOKEN:-$(gh auth token)}" \
+curl -sS -H "Authorization: Bearer ${MERGIFY_TOKEN:?set a Mergify token}" \
   "https://api.mergify.com/v1/repos/$REPO/logs?pull_request=$PR&event_type=action.queue.leave&received_from=$FROM" \
 | jq 'if .events == [] then "no leave event in window — never queued (or aged out)"
       else .events[0].metadata

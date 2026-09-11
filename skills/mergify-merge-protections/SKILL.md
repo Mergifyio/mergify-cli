@@ -107,8 +107,8 @@ mergify freeze delete FREEZE_ID           # Delete a freeze
 
 ## Authentication
 
-All commands require a Mergify or GitHub token:
-- `--token` / `-t` (env: `MERGIFY_TOKEN` or `GITHUB_TOKEN`) -- defaults to `gh auth token`
+All commands require a Mergify credential. Run `mergify auth login` once, or:
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--repository` / `-r` -- Repository full name (auto-detected from git remote)
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 

@@ -3805,8 +3805,10 @@ struct SimulateCliArgs {
     #[arg(value_name = "PULL_REQUEST_URL", value_parser = mergify_core::pull_request::parse_pr_url)]
     pull_request: PullRequestRef,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -3952,8 +3954,11 @@ struct ScopesSendCliArgs {
     #[arg(long = "pull-request", short = 'p')]
     pull_request: Option<u64>,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify application key. Falls back to ``MERGIFY_TOKEN``, then
+    /// ``GITHUB_TOKEN`` and ``gh auth token`` — both deprecated for
+    /// the Mergify API. The CI endpoints require an application key,
+    /// so the credential ``mergify auth login`` stores is not used
+    /// here.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4128,9 +4133,12 @@ struct TestsShowCliArgs {
     )]
     repository: Option<String>,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars. Needs an `admin` application
-    /// key or a GitHub PAT: a `ci` key is answered with 403.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API. Needs an `admin`
+    /// application key or a user credential (`mergify auth login`
+    /// or a GitHub PAT): a `ci` key is answered with 403.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4189,9 +4197,12 @@ struct TestsQuarantineCliArgs {
     #[arg(long, short = 'b')]
     branch: Option<String>,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars. Needs an `admin` application
-    /// key or a GitHub PAT: a `ci` key is answered with 403.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API. Needs an `admin`
+    /// application key or a user credential (`mergify auth login`
+    /// or a GitHub PAT): a `ci` key is answered with 403.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4221,9 +4232,12 @@ struct TestsUnquarantineCliArgs {
     )]
     repository: Option<String>,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars. Needs an `admin` application
-    /// key or a GitHub PAT: a `ci` key is answered with 403.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API. Needs an `admin`
+    /// application key or a user credential (`mergify auth login`
+    /// or a GitHub PAT): a `ci` key is answered with 403.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4253,8 +4267,10 @@ struct TestsQuarantineGetCliArgs {
     )]
     repository: Option<String>,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4279,8 +4295,10 @@ struct TestsQuarantinedCliArgs {
     )]
     repository: Option<String>,
 
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4296,8 +4314,10 @@ struct TestsQuarantinedCliArgs {
 
 #[derive(clap::Args)]
 struct QueueArgs {
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API.
     #[arg(long, short = 't', global = true)]
     token: Option<String>,
 
@@ -4380,8 +4400,10 @@ struct ShowCliArgs {
 
 #[derive(clap::Args)]
 struct EventsCliArgs {
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API.
     #[arg(long, short = 't')]
     token: Option<String>,
 
@@ -4469,8 +4491,10 @@ enum AuthSubcommand {
 
 #[derive(clap::Args)]
 struct FreezeArgs {
-    /// Mergify or GitHub token. Falls back to ``MERGIFY_TOKEN`` and
-    /// then ``GITHUB_TOKEN`` env vars.
+    /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
+    /// credential ``mergify auth login`` stored for this API URL,
+    /// then ``GITHUB_TOKEN`` and ``gh auth token`` — the last two
+    /// are deprecated for the Mergify API.
     #[arg(long, short = 't', global = true)]
     token: Option<String>,
 

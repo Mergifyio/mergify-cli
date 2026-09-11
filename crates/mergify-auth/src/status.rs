@@ -33,38 +33,137 @@ struct StatusResult {
     login: Option<String>,
     stored_in: String,
     expires_at: Option<String>,
+    /// The environment variable Mergify commands would use instead
+    /// of the stored credential, if one is set.
+    overridden_by: Option<String>,
+    /// Whether the API still accepts the *stored* credential.
+    /// `None` on a deployment that cannot say.
+    credential_valid: Option<bool>,
+}
+
+/// What the API had to say about the stored credential, which is the
+/// first line of the report.
+#[derive(Copy, Clone)]
+enum Headline<'a> {
+    /// It named the account the credential belongs to.
+    Account(&'a str),
+    /// The deployment predates `GET /v1/user`: there is a credential
+    /// and no way to check it.
+    Unverifiable,
+    /// The API refuses it. Reachable only when the environment
+    /// authenticates instead — otherwise nothing works and `run`
+    /// errors rather than printing a report.
+    Refused,
 }
 
 /// Run the `auth status` command.
 pub async fn run(opts: StatusOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
     let api_url = auth::resolve_api_url(opts.api_url)?;
 
+    let overriding = auth::overriding_env_var();
+
     let Some(stored) = opts.store.get(&api_url)? else {
+        // "Not logged in" would be the same lie as "logged in" is
+        // when a credential is overridden, pointing the other way:
+        // with `MERGIFY_TOKEN` exported every Mergify command
+        // authenticates fine, and telling the user to log in would
+        // send them to fix something that is not broken.
+        if let Some(name) = overriding {
+            return emit_env_only(output, &api_url, name);
+        }
         return Err(CliError::Configuration(format!(
             "not logged in to {api_url}. Run `mergify auth login`.",
         )));
     };
 
+    // The same secret in both places is not an override worth a
+    // note: "commands use it instead of this credential" would be
+    // technically true and alarming about nothing.
+    let overriding =
+        overriding.filter(|_| !auth::overriding_env_var_holds(&stored.credential.token));
+
     match identity::whoami(api_url.clone(), &stored.credential.token).await? {
-        Identity::Known(user) => emit(output, &api_url, &stored, Some(&user.login), Utc::now()),
+        Identity::Known(user) => emit(
+            output,
+            &api_url,
+            &stored,
+            Headline::Account(&user.login),
+            overriding,
+            Utc::now(),
+        ),
         // The credential is real enough to be stored and useless
         // enough that every command will fail. Saying "logged in"
         // here would be the one answer a user cannot act on.
+        //
+        // Unless the environment outranks it, which it does for
+        // every command: then this is a stale credential sitting
+        // behind a working one, and exiting 8 with "run `mergify
+        // auth login`" would send the user to fix something while
+        // `queue status` and `tests show` succeed beside it.
+        Identity::Refused if overriding.is_some() => emit(
+            output,
+            &api_url,
+            &stored,
+            Headline::Refused,
+            overriding,
+            Utc::now(),
+        ),
         Identity::Refused => Err(CliError::Configuration(format!(
             "the credential stored for {api_url} is no longer valid — it may have been \
              revoked or have expired. Run `mergify auth login`.",
         ))),
         // A deployment older than `GET /v1/user`. There is a
         // credential and no way to check it; report both.
-        Identity::Unsupported => emit(output, &api_url, &stored, None, Utc::now()),
+        Identity::Unsupported => emit(
+            output,
+            &api_url,
+            &stored,
+            Headline::Unverifiable,
+            overriding,
+            Utc::now(),
+        ),
     }
+}
+
+/// What to print when there is no stored credential but the
+/// environment supplies one. Not a failure: every Mergify command
+/// authenticates, which is what the user asked about.
+fn emit_env_only(
+    output: &mut dyn Output,
+    api_url: &Url,
+    name: &'static str,
+) -> Result<(), CliError> {
+    let result = StatusResult {
+        api_url: api_url.to_string(),
+        login: None,
+        stored_in: name.to_string(),
+        expires_at: None,
+        overridden_by: Some(name.to_string()),
+        // There is no stored credential to have an opinion about.
+        credential_valid: None,
+    };
+    let theme = mergify_tui::Theme::detect();
+    output.emit(&result, &mut |w: &mut dyn Write| {
+        writeln!(
+            w,
+            "{green}✓{reset} Authenticated to {api_url} with {name} from the environment.",
+            green = theme.green.render(),
+            reset = theme.reset,
+        )?;
+        writeln!(
+            w,
+            "  No credential is stored on this machine. Run `mergify auth login` to store one."
+        )
+    })?;
+    Ok(())
 }
 
 fn emit(
     output: &mut dyn Output,
     api_url: &Url,
     stored: &StoredCredential,
-    login: Option<&str>,
+    headline: Headline<'_>,
+    overriding: Option<&'static str>,
     now: DateTime<Utc>,
 ) -> Result<(), CliError> {
     // Seconds, not the nanoseconds `Utc::now()` carries: this is a
@@ -77,25 +176,41 @@ fn emit(
     let expired = stored.credential.expires_at.is_some_and(|at| at <= now);
     let result = StatusResult {
         api_url: api_url.to_string(),
-        login: login.map(str::to_owned),
+        login: match headline {
+            Headline::Account(login) => Some(login.to_owned()),
+            Headline::Unverifiable | Headline::Refused => None,
+        },
         stored_in: stored.location.to_string(),
         expires_at: expires_at.clone(),
+        overridden_by: overriding.map(str::to_owned),
+        credential_valid: match headline {
+            Headline::Account(_) => Some(true),
+            Headline::Unverifiable => None,
+            Headline::Refused => Some(false),
+        },
     };
     let theme = mergify_tui::Theme::detect();
     let location = stored.location.to_string();
     output.emit(&result, &mut |w: &mut dyn Write| {
-        match login {
-            Some(login) => writeln!(
+        match headline {
+            Headline::Account(login) => writeln!(
                 w,
                 "{green}✓{reset} Logged in to {api_url} as {login}.",
                 green = theme.green.render(),
                 reset = theme.reset,
             )?,
-            None => writeln!(
+            Headline::Unverifiable => writeln!(
                 w,
                 "{green}✓{reset} Logged in to {api_url}. This deployment cannot confirm \
                  which account the credential belongs to.",
                 green = theme.green.render(),
+                reset = theme.reset,
+            )?,
+            Headline::Refused => writeln!(
+                w,
+                "{warn}!{reset} The credential stored for {api_url} is no longer valid — it \
+                 may have been revoked or have expired.",
+                warn = theme.warn.render(),
                 reset = theme.reset,
             )?,
         }
@@ -110,6 +225,25 @@ fn emit(
                 ("Expires:", mergify_tui::relative_time(at, now, true))
             };
             writeln!(w, "  {label:<11} {at} ({relative})")?;
+        }
+        // Without this line, "logged in" would be the answer to a
+        // question the user did not ask: what commands actually send
+        // is the environment variable, not the credential above.
+        if let Some(name) = overriding {
+            let remedy = match headline {
+                // The stored credential is dead and nothing depends
+                // on it, so the useful next step is replacing it —
+                // not unsetting the variable commands work with.
+                Headline::Refused => " Run `mergify auth login` to replace the stored one.",
+                Headline::Account(_) | Headline::Unverifiable => "",
+            };
+            writeln!(
+                w,
+                "\n{warn}Note:{reset} {name} is set, so Mergify commands use it instead of \
+                 this credential.{remedy}",
+                warn = theme.warn.render(),
+                reset = theme.reset,
+            )?;
         }
         Ok(())
     })?;
@@ -187,6 +321,74 @@ mod tests {
         });
     }
 
+    // The inverse of the lie the override note prevents: with
+    // `MERGIFY_TOKEN` exported every Mergify command authenticates,
+    // so "not logged in" would send the user to fix something that
+    // is not broken.
+    #[test]
+    fn status_reports_an_environment_credential_when_nothing_is_stored() {
+        let (dir, store) = file_store();
+        let mut captured = Captured::human();
+        let stdout = with_mergify_token(Some("mut_from_the_environment"), async {
+            let server = MockServer::start().await;
+            run(
+                StatusOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+            captured.stdout()
+        });
+
+        assert!(stdout.contains("Authenticated to"), "got {stdout:?}");
+        assert!(stdout.contains("MERGIFY_TOKEN"), "got {stdout:?}");
+        assert!(stdout.contains("No credential is stored"), "got {stdout:?}");
+        assert!(
+            !stdout.contains("mut_from_the_environment"),
+            "the token must never be printed, got {stdout:?}",
+        );
+        drop(dir);
+    }
+
+    // Same reason as in `login`: proving the renderer can print the
+    // note proves nothing about `run` asking it to.
+    #[test]
+    fn status_reads_the_overriding_env_var_from_the_environment() {
+        let (dir, store) = file_store();
+        let mut captured = Captured::human();
+        let stdout = with_mergify_token(Some("env-token"), async {
+            let server = MockServer::start().await;
+            mount_user(
+                &server,
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": 42, "login": "sileht"})),
+            )
+            .await;
+            store
+                .set(&Url::parse(&server.uri()).unwrap(), &credential())
+                .unwrap();
+            run(
+                StatusOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+            captured.stdout()
+        });
+
+        assert!(
+            stdout.contains("MERGIFY_TOKEN is set, so Mergify commands use it"),
+            "got {stdout:?}",
+        );
+        drop(dir);
+    }
+
     #[test]
     fn status_without_a_credential_says_so_and_fails() {
         with_mergify_token(None, async {
@@ -261,6 +463,126 @@ mod tests {
             .with_timezone(&Utc)
     }
 
+    // A stored credential the API refuses is fatal on its own — but
+    // not when the environment authenticates every command anyway.
+    // Exiting 8 there sends the user to fix something while
+    // `queue status` succeeds beside it.
+    #[test]
+    fn a_refused_credential_is_a_warning_when_the_environment_outranks_it() {
+        with_mergify_token(Some("mut_from_the_shell"), async {
+            let server = MockServer::start().await;
+            mount_user(&server, ResponseTemplate::new(403)).await;
+            let (dir, store) = file_store();
+            store
+                .set(&Url::parse(&server.uri()).unwrap(), &credential())
+                .unwrap();
+            let mut captured = Captured::human();
+
+            run(
+                StatusOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let stdout = captured.stdout();
+            assert!(stdout.contains("no longer valid"), "got {stdout:?}");
+            assert!(stdout.contains("MERGIFY_TOKEN is set"), "got {stdout:?}");
+            assert!(stdout.contains("auth login"), "got {stdout:?}");
+            drop(dir);
+        });
+    }
+
+    // And still fatal with nothing overriding it: every command will
+    // fail, so "logged in" is the one answer the user cannot act on.
+    #[test]
+    fn a_refused_credential_with_nothing_overriding_it_still_fails() {
+        with_mergify_token(None, async {
+            let server = MockServer::start().await;
+            mount_user(&server, ResponseTemplate::new(403)).await;
+            let (dir, store) = file_store();
+            store
+                .set(&Url::parse(&server.uri()).unwrap(), &credential())
+                .unwrap();
+            let mut captured = Captured::human();
+
+            let err = run(
+                StatusOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("no longer valid"), "got {err}");
+            drop(dir);
+        });
+    }
+
+    // `MERGIFY_TOKEN` holding the *same* secret as the store is not
+    // an override: saying commands use it "instead" would be
+    // alarming about nothing.
+    #[test]
+    fn the_same_credential_in_the_environment_is_not_reported_as_an_override() {
+        with_mergify_token(Some("mut_secret"), async {
+            let server = MockServer::start().await;
+            mount_user(
+                &server,
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": 42, "login": "sileht"})),
+            )
+            .await;
+            let (dir, store) = file_store();
+            store
+                .set(&Url::parse(&server.uri()).unwrap(), &credential())
+                .unwrap();
+            let mut captured = Captured::human();
+
+            run(
+                StatusOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let stdout = captured.stdout();
+            assert!(stdout.contains("as sileht."), "got {stdout:?}");
+            assert!(!stdout.contains("Note:"), "got {stdout:?}");
+            drop(dir);
+        });
+    }
+
+    // The note that keeps "logged in" from being the answer to a
+    // question the user did not ask: a `MERGIFY_TOKEN` in the shell
+    // is what commands actually send.
+    #[test]
+    fn an_overriding_env_var_is_reported() {
+        let mut captured = Captured::human();
+        emit(
+            &mut captured.output,
+            &Url::parse("https://api.mergify.com").unwrap(),
+            &stored(),
+            Headline::Account("sileht"),
+            Some("MERGIFY_TOKEN"),
+            now(),
+        )
+        .unwrap();
+
+        let stdout = captured.stdout();
+        assert!(stdout.contains("as sileht."), "got {stdout:?}");
+        assert!(
+            stdout.contains("MERGIFY_TOKEN is set, so Mergify commands use it"),
+            "got {stdout:?}",
+        );
+    }
+
     // `relative_time` works on an absolute delta, so a past moment
     // asked for a future rendering reads as "expires in a year".
     #[test]
@@ -276,6 +598,7 @@ mod tests {
             &mut captured.output,
             &Url::parse("https://api.mergify.com").unwrap(),
             &stored,
+            Headline::Unverifiable,
             None,
             now(),
         )
@@ -285,6 +608,24 @@ mod tests {
         assert!(stdout.contains("Expired:"), "got {stdout:?}");
         assert!(stdout.contains("ago"), "got {stdout:?}");
         assert!(!stdout.contains("(~"), "got {stdout:?}");
+    }
+
+    #[test]
+    fn no_note_when_nothing_overrides_the_credential() {
+        let mut captured = Captured::human();
+        emit(
+            &mut captured.output,
+            &Url::parse("https://api.mergify.com").unwrap(),
+            &stored(),
+            Headline::Account("sileht"),
+            None,
+            now(),
+        )
+        .unwrap();
+
+        let stdout = captured.stdout();
+        assert!(!stdout.contains("Note:"), "got {stdout:?}");
+        assert!(stdout.contains("the system keychain"), "got {stdout:?}");
     }
 
     #[test]
