@@ -98,7 +98,11 @@ per-user credential `mergify auth login` mints is refused there by design.
 `mergify stack` also calls the **GitHub API** directly, and resolves that
 token separately (`--token`, `MERGIFY_TOKEN`, `GITHUB_TOKEN`, `gh auth
 token`). It is unaffected by the deprecation above: `stack` needs a GitHub
-credential and Mergify never issues one.
+credential and Mergify never issues one. A Mergify-issued token (`mut_…`) is
+skipped there rather than sent to GitHub, which would only answer `401 Bad
+credentials` — in `MERGIFY_TOKEN`, in `GITHUB_TOKEN`, and in what `gh auth
+token` returns, since it echoes `GITHUB_TOKEN` when that is set. Only an
+explicit `--token` is sent as given.
 
 The repository and API URL resolve as before:
 

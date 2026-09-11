@@ -19,9 +19,13 @@
 //! neither of those warns.
 //!
 //! [`resolve_github_token`] answers for `api.github.com` — the
-//! `stack` command group — and is exactly the chain above this
-//! change: no stored credential, no warning, nothing new sent to
-//! GitHub.
+//! `stack` command group — and keeps the chain above it: no stored
+//! credential, no warning, nothing new sent to GitHub. One
+//! subtraction: a `mut_…` value is a Mergify user token, which
+//! GitHub can only answer `401` to, so it is skipped wherever it
+//! turns up — `MERGIFY_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`,
+//! which echoes `$GITHUB_TOKEN` — and the next source is tried. An
+//! explicit `--token` is sent as given.
 //!
 //! Repository: `--repository` flag → `GITHUB_REPOSITORY` env →
 //! `git config --get remote.origin.url` parsed into `<owner>/<repo>`.
@@ -51,6 +55,11 @@ const DEFAULT_API_URL: &str = "https://api.mergify.com";
 /// scanning as ours, so nothing shaped like this is a GitHub
 /// credential.
 const MERGIFY_USER_TOKEN_PREFIX: &str = "mut_";
+
+/// How the `gh auth token` fallback names itself in the failure that
+/// lists the credentials skipped for carrying that prefix. A command
+/// rather than a variable, so the remedy for it differs too.
+const GH_AUTH_TOKEN_SOURCE: &str = "`gh auth token`";
 
 /// Which Mergify credential a command's routes actually accept.
 ///
@@ -242,10 +251,22 @@ fn warn_once(message: &str) {
 /// untouched by the Mergify side's deprecation: `stack` legitimately
 /// needs a GitHub token, and warning it off the only credentials
 /// GitHub accepts would be nonsense.
+///
+/// Every source but `--token` is filtered for
+/// [`MERGIFY_USER_TOKEN_PREFIX`]: such a value is a Mergify user
+/// token that GitHub only answers `401` to, so it is skipped and the
+/// next source tried. If nothing is left, the failure names the
+/// sources it skipped rather than the ones the user should have set.
 pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> {
     if let Some(value) = explicit.filter(|s| !s.is_empty()) {
         return Ok(value.to_string());
     }
+    // Which variables were skipped, in the order they were tried, so
+    // the failure below can name them. Both can carry a `mut_`
+    // value: somebody who pastes their `auth login` token into
+    // `GITHUB_TOKEN` — the variable GitHub Actions already exports —
+    // gets the same skip.
+    let mut skipped: Vec<&'static str> = Vec::new();
     for env_name in ["MERGIFY_TOKEN", "GITHUB_TOKEN"] {
         let Some(value) = var_non_empty(env_name) else {
             continue;
@@ -263,14 +284,58 @@ pub fn resolve_github_token(explicit: Option<&str>) -> Result<String, CliError> 
                 "holds a Mergify user token, which GitHub cannot accept; trying the next \
                  credential"
             );
+            skipped.push(env_name);
             continue;
         }
         return Ok(value);
     }
+    // `gh auth token` prints `$GITHUB_TOKEN` when that variable is
+    // set, so skipping the variable above does not, on its own, keep
+    // the value out of the request: a GitHub Actions job exporting a
+    // `mut_` token gets it handed straight back here. Check what
+    // came out, not where it came from.
     if let Ok(token) = gh_auth_token()
         && !token.is_empty()
     {
-        return Ok(token);
+        if token.starts_with(MERGIFY_USER_TOKEN_PREFIX) {
+            tracing::debug!(
+                "`gh auth token` returned a Mergify user token, which GitHub cannot accept; \
+                 no credential left to try"
+            );
+            skipped.push(GH_AUTH_TOKEN_SOURCE);
+        } else {
+            return Ok(token);
+        }
+    }
+    // Telling someone to set a variable they have set, and that was
+    // skipped a few lines above, is the worst version of this
+    // message: the reason is real and only visible at `-vv`. So name
+    // the ones actually skipped, and prescribe a variable that is
+    // not among them — `GITHUB_TOKEN` holding a `mut_` value is the
+    // case where "set GITHUB_TOKEN" would name the broken variable
+    // as the remedy.
+    if !skipped.is_empty() {
+        let names = skipped.join(" and ");
+        let plural = if skipped.len() > 1 { "" } else { "s" };
+        let remedy = if skipped.contains(&"GITHUB_TOKEN") {
+            "Put a GitHub token in 'GITHUB_TOKEN' instead"
+        } else {
+            "Set 'GITHUB_TOKEN' to a GitHub token"
+        };
+        // When gh answered at all it is installed and authenticated;
+        // it just handed back a `mut_` value, usually the
+        // `GITHUB_TOKEN` skipped just above, which it echoes. Telling
+        // the user to install it would be the same mistake as
+        // prescribing a variable they already set.
+        let gh_advice = if skipped.contains(&GH_AUTH_TOKEN_SOURCE) {
+            "log the gh client in to a GitHub account"
+        } else {
+            "make sure that the gh client is installed and you are authenticated"
+        };
+        return Err(CliError::Configuration(format!(
+            "{names} hold{plural} a Mergify-issued token, which GitHub does not accept, and \
+             `mergify stack` talks to GitHub. {remedy}, or {gh_advice}.",
+        )));
     }
     Err(CliError::Configuration(
         "please set the 'MERGIFY_TOKEN' or 'GITHUB_TOKEN' environment variable, \
@@ -661,6 +726,143 @@ mod tests {
             ],
             || {
                 assert_eq!(resolve_github_token(None).unwrap(), "env-github");
+            },
+        );
+    }
+
+    // Being skipped has to reach the failure, not only `-vv`:
+    // otherwise `stack push` tells a user to set the variable they
+    // set, for a reason they cannot see.
+    #[test]
+    fn resolve_github_token_says_why_it_skipped_the_mergify_token() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", Some("mut_from_auth_login")),
+                ("GITHUB_TOKEN", None),
+                ("PATH", Some("/nonexistent-directory-for-test")),
+            ],
+            || {
+                let err = resolve_github_token(None).unwrap_err();
+                let message = err.to_string();
+                assert!(
+                    message.contains("GitHub does not accept"),
+                    "got {message:?}",
+                );
+                assert!(
+                    message.starts_with("MERGIFY_TOKEN holds"),
+                    "got {message:?}"
+                );
+                assert!(message.contains("Set 'GITHUB_TOKEN'"), "got {message:?}");
+            },
+        );
+    }
+
+    // `GITHUB_TOKEN` is the variable GitHub Actions already exports,
+    // so it is at least as likely to be where somebody pastes their
+    // `auth login` token. The message used to name `MERGIFY_TOKEN`,
+    // which is unset here, and prescribe `GITHUB_TOKEN`, which is
+    // the broken one.
+    #[test]
+    fn resolve_github_token_names_the_variable_it_actually_skipped() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", None),
+                ("GITHUB_TOKEN", Some("mut_from_auth_login")),
+                ("PATH", Some("/nonexistent-directory-for-test")),
+            ],
+            || {
+                let message = resolve_github_token(None).unwrap_err().to_string();
+                assert!(message.starts_with("GITHUB_TOKEN holds"), "got {message:?}");
+                assert!(
+                    !message.contains("MERGIFY_TOKEN"),
+                    "naming an unset variable is the bug: got {message:?}",
+                );
+                assert!(
+                    message.contains("Put a GitHub token in 'GITHUB_TOKEN' instead"),
+                    "the remedy must not be the variable that is broken: got {message:?}",
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_github_token_names_both_variables_when_both_were_skipped() {
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", Some("mut_one")),
+                ("GITHUB_TOKEN", Some("mut_two")),
+                ("PATH", Some("/nonexistent-directory-for-test")),
+            ],
+            || {
+                let message = resolve_github_token(None).unwrap_err().to_string();
+                assert!(
+                    message.starts_with("MERGIFY_TOKEN and GITHUB_TOKEN hold a"),
+                    "got {message:?}",
+                );
+            },
+        );
+    }
+
+    // A `gh` on `PATH` answering `auth token` with whatever the body
+    // prints. The real one echoes `$GITHUB_TOKEN` when that is set,
+    // which is the case worth reproducing.
+    #[cfg(unix)]
+    fn fake_gh(body: &str) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    // Skipping the variable is not enough on its own: `gh auth token`
+    // prints `$GITHUB_TOKEN`, so a GitHub Actions job exporting a
+    // `mut_` value gets the same token back through the fallback and
+    // sends it to GitHub anyway.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_github_token_does_not_let_gh_hand_back_the_skipped_variable() {
+        let gh = fake_gh("printf '%s' \"$GITHUB_TOKEN\"");
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", None),
+                ("GITHUB_TOKEN", Some("mut_from_auth_login")),
+                ("PATH", Some(gh.path().to_str().unwrap())),
+            ],
+            || {
+                let message = resolve_github_token(None).unwrap_err().to_string();
+                assert!(
+                    message.starts_with("GITHUB_TOKEN and `gh auth token` hold a"),
+                    "got {message:?}",
+                );
+                assert!(
+                    message.contains("log the gh client in"),
+                    "gh is installed and authenticated here, just to the wrong \
+                     credential: got {message:?}",
+                );
+            },
+        );
+    }
+
+    // The filter is on the value, not on the source: a GitHub token
+    // from `gh` is still the answer when the variables hold nothing
+    // usable.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_github_token_still_takes_a_real_gh_token() {
+        let gh = fake_gh("printf 'ghp_from_gh_auth_login'");
+        temp_env::with_vars(
+            [
+                ("MERGIFY_TOKEN", Some("mut_from_auth_login")),
+                ("GITHUB_TOKEN", None),
+                ("PATH", Some(gh.path().to_str().unwrap())),
+            ],
+            || {
+                assert_eq!(
+                    resolve_github_token(None).unwrap(),
+                    "ghp_from_gh_auth_login"
+                );
             },
         );
     }
