@@ -193,9 +193,34 @@ pub fn client(api_url: Url) -> Result<HttpClient, CliError> {
 
 /// Open a grant: ask the server for the code pair the user is about
 /// to approve.
-pub async fn authorize(client: &HttpClient) -> Result<Authorization, CliError> {
+///
+/// `device_name` names the machine asking, so the approval page can
+/// default the token's name to this one rather than to the client
+/// name every machine shares. **Send the bare hostname**: the server
+/// composes `<client name> on <device name>` itself, so a client
+/// that sent "Mergify CLI on host" would produce "Mergify CLI on
+/// Mergify CLI on host". It also sanitizes the value and caps the
+/// composed label, which is why nothing is trimmed on this side.
+///
+/// Optional on the wire: a grant without the field is what every
+/// client sent until it existed, and the server keeps its own
+/// default for one. It is additive against a deployment that
+/// predates it, too — that endpoint reads its form fields by name
+/// rather than as a strict model, so an unknown one is ignored and
+/// an older on-prem still logs in.
+pub async fn authorize(
+    client: &HttpClient,
+    device_name: Option<&str>,
+) -> Result<Authorization, CliError> {
+    let mut form = vec![("client_id", CLIENT_ID)];
+    // Omitted rather than sent empty when this machine cannot name
+    // itself: a grant without the field is the case every client had
+    // until now, and the server still has its own default for it.
+    if let Some(device_name) = device_name {
+        form.push(("device_name", device_name));
+    }
     match client
-        .post_form::<Authorization, OAuthError>(DEVICE_CODE_PATH, &[("client_id", CLIENT_ID)])
+        .post_form::<Authorization, OAuthError>(DEVICE_CODE_PATH, &form)
         .await?
     {
         ApiOutcome::Ok(authorization) => checked(authorization),
@@ -423,7 +448,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let authorization = authorize(&test_client(&server)).await.unwrap();
+        let authorization = authorize(&test_client(&server), None).await.unwrap();
         assert_eq!(authorization.device_code, "dev-secret");
         assert_eq!(authorization.user_code, "BCDF-GHJK");
         assert_eq!(
@@ -433,6 +458,55 @@ mod tests {
         let schedule = PollSchedule::from_authorization(&authorization);
         assert_eq!(schedule.interval, Duration::from_secs(5));
         assert_eq!(schedule.expires_in, Duration::from_secs(600));
+    }
+
+    // The machine's own name, so the approval page can default the
+    // token to "Mergify CLI on work-laptop" instead of the client
+    // name every machine shares.
+    #[tokio::test]
+    async fn authorize_sends_the_device_name() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/device/code"))
+            .and(body_string_contains("client_id=mergify-cli"))
+            .and(body_string_contains("device_name=work-laptop"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "dev-secret",
+                "user_code": "BCDF-GHJK",
+                "verification_uri": "https://dashboard.mergify.com/device",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        authorize(&test_client(&server), Some("work-laptop"))
+            .await
+            .unwrap();
+    }
+
+    // A machine that cannot name itself sends no field at all. An
+    // empty one is not the same thing: the server would sanitize it
+    // back to nothing, and a deployment that predates the field has
+    // to see exactly the request it has always seen.
+    #[tokio::test]
+    async fn authorize_omits_the_device_name_when_there_is_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/device/code"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "dev-secret",
+                "user_code": "BCDF-GHJK",
+                "verification_uri": "https://dashboard.mergify.com/device",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        authorize(&test_client(&server), None).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let body = String::from_utf8_lossy(&requests[0].body);
+        assert_eq!(body, "client_id=mergify-cli", "got {body:?}");
     }
 
     // A deployment that omits the two optional numbers still has to
@@ -451,7 +525,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let authorization = authorize(&test_client(&server)).await.unwrap();
+        let authorization = authorize(&test_client(&server), None).await.unwrap();
         assert_eq!(authorization.verification_uri_complete, None);
         let schedule = PollSchedule::from_authorization(&authorization);
         assert_eq!(schedule.interval, DEFAULT_INTERVAL);
@@ -532,7 +606,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = authorize(&test_client(&server)).await.unwrap_err();
+        let err = authorize(&test_client(&server), None).await.unwrap_err();
         assert!(err.to_string().contains("only http(s)"), "got {err}");
     }
 
@@ -556,7 +630,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let authorization = authorize(&test_client(&server)).await.unwrap();
+        let authorization = authorize(&test_client(&server), None).await.unwrap();
         assert_eq!(
             authorization.user_code,
             "BCDF[2Kgo to https://attacker.test",
@@ -631,7 +705,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = authorize(&test_client(&server)).await.unwrap_err();
+        let err = authorize(&test_client(&server), None).await.unwrap_err();
         assert!(err.to_string().contains("Unknown client_id."), "got {err}");
         assert_eq!(err.exit_code(), mergify_core::ExitCode::MergifyApiError);
     }
