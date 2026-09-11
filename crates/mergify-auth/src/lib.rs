@@ -9,6 +9,8 @@
 //! - [`identity`] — `GET /v1/user`, the only way to turn a
 //!   credential into an account name and the only way to tell a
 //!   live one from a revoked one.
+//! - [`machine`] — the hostname a login sends so the approval page
+//!   can name the machine asking.
 //! - [`login`] / [`logout`] / [`status`] — the three commands.
 //!
 //! The credential itself is stored by
@@ -20,6 +22,7 @@ pub mod device;
 pub mod identity;
 pub mod login;
 pub mod logout;
+pub mod machine;
 pub mod status;
 
 #[cfg(test)]
