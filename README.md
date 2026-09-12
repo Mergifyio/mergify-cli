@@ -68,7 +68,9 @@ Sign in once:
 mergify auth login
 ```
 
-It prints a URL and a code, you approve them in your browser, and the
+It opens the approval page in your browser, and prints the URL and the code
+as well: pass `--no-browser`, or run it where there is no browser to open,
+and the printed pair is all you need. Once you approve, the
 credential lands in your OS keychain — or, on a machine with none (a
 container, an unattended agent, a headless box with no D-Bus session), in a
 restricted file under your configuration directory. `mergify auth status` says

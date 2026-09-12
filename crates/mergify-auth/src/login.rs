@@ -13,12 +13,18 @@ use mergify_core::credentials::Location;
 use serde::Serialize;
 use url::Url;
 
+use crate::browser::Browser;
 use crate::device;
 use crate::identity;
 
 pub struct LoginOptions<'a> {
     pub api_url: Option<&'a str>,
     pub store: &'a CredentialStore,
+    /// Where to open the approval page, or `None` for
+    /// `--no-browser`. Opening it is a convenience: the URL is
+    /// printed either way, and a browser that will not open does
+    /// not fail the login.
+    pub browser: Option<&'a dyn Browser>,
 }
 
 /// What `auth login` produced, for the JSON rendering `Output`
@@ -49,7 +55,8 @@ pub async fn run(opts: LoginOptions<'_>, output: &mut dyn Output) -> Result<(), 
     let previous = opts.store.get(&api_url)?;
 
     let authorization = device::authorize(&client).await?;
-    output.status(&instructions(&authorization))?;
+    let opened = open_verification_page(opts.browser, verification_url(&authorization));
+    output.status(&instructions(&authorization, opened))?;
 
     let token = device::poll(
         &client,
@@ -140,15 +147,51 @@ async fn revoke_quietly(client: &mergify_core::HttpClient, token: &str) {
     }
 }
 
-/// What the user has to do, on stderr, while the poll loop waits.
-fn instructions(authorization: &device::Authorization) -> String {
-    let theme = mergify_tui::Theme::detect();
-    let url = authorization
+/// The page the user approves on: the one with the code already
+/// filled in when the server offers it (RFC 8628 §3.3.1), the plain
+/// one otherwise. Both the browser and the printed instructions go
+/// through here, so what opens and what is on screen cannot drift
+/// apart.
+fn verification_url(authorization: &device::Authorization) -> &str {
+    authorization
         .verification_uri_complete
         .as_deref()
-        .unwrap_or(&authorization.verification_uri);
+        .unwrap_or(&authorization.verification_uri)
+}
+
+/// Try to put the approval page in front of the user, and report
+/// whether it worked so the instructions can say something true.
+///
+/// Returns rather than fails, always. A CI runner, a container and
+/// an SSH session have no browser to open, and none of that is a
+/// reason to refuse a login whose whole design is that the approval
+/// happens somewhere else.
+fn open_verification_page(browser: Option<&dyn Browser>, url: &str) -> bool {
+    let Some(browser) = browser else { return false };
+    match browser.open(url) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::debug!(error = %e, "could not open the verification page");
+            false
+        }
+    }
+}
+
+/// What the user has to do, on stderr, while the poll loop waits.
+///
+/// The URL is printed whether or not a browser took it: a spawned
+/// opener is not a window on screen, and the terminal is the only
+/// place the user can be sure to find the address again.
+fn instructions(authorization: &device::Authorization, opened: bool) -> String {
+    let theme = mergify_tui::Theme::detect();
+    let url = verification_url(authorization);
+    let open = if opened {
+        "Opening your browser to authorize the Mergify CLI. If nothing opens, go to:"
+    } else {
+        "Open this URL to authorize the Mergify CLI:"
+    };
     format!(
-        "Open this URL to authorize the Mergify CLI:\n\n    {url}\n\n\
+        "{open}\n\n    {url}\n\n\
          and confirm this code:\n\n    {bold}{code}{reset}\n\n\
          Waiting for approval…",
         bold = theme.bold.render(),
@@ -234,6 +277,44 @@ mod tests {
         }
     }
 
+    /// A browser that records instead of opening one, so the suite
+    /// never puts a window on the screen of whoever ran it.
+    struct RecordingBrowser {
+        opened: std::sync::Mutex<Vec<String>>,
+        works: bool,
+    }
+
+    impl RecordingBrowser {
+        fn working() -> Self {
+            Self {
+                opened: std::sync::Mutex::new(Vec::new()),
+                works: true,
+            }
+        }
+
+        fn broken() -> Self {
+            Self {
+                opened: std::sync::Mutex::new(Vec::new()),
+                works: false,
+            }
+        }
+
+        fn opened(&self) -> Vec<String> {
+            self.opened.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::browser::Browser for RecordingBrowser {
+        fn open(&self, url: &str) -> std::io::Result<()> {
+            self.opened.lock().unwrap().push(url.to_string());
+            if self.works {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("no browser here"))
+            }
+        }
+    }
+
     async fn mount_flow(server: &MockServer, with_identity: bool) {
         Mock::given(method("POST"))
             .and(path("/v1/oauth/device/code"))
@@ -287,6 +368,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -326,6 +408,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -357,6 +440,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -387,6 +471,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -435,6 +520,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -469,6 +555,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -515,6 +602,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -564,6 +652,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -611,6 +700,7 @@ mod tests {
                 LoginOptions {
                     api_url: Some(&server.uri()),
                     store: &store,
+                    browser: None,
                 },
                 &mut captured.output,
             )
@@ -630,12 +720,123 @@ mod tests {
     fn the_instructions_fall_back_to_the_plain_verification_url() {
         let mut authorization = authorization();
         authorization.verification_uri_complete = None;
-        let rendered = instructions(&authorization);
+        let rendered = instructions(&authorization, false);
         assert!(
             rendered.contains("https://dashboard.mergify.com/device\n"),
             "got {rendered:?}",
         );
         assert!(rendered.contains("BCDF-GHJK"), "got {rendered:?}");
+    }
+
+    // The same page the user is told to open is the one that opens:
+    // the pre-filled one, so the code they are comparing is already
+    // in the field.
+    #[test]
+    fn login_opens_the_verification_page() {
+        with_mergify_token(None, async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            let (dir, store) = file_store();
+            let browser = RecordingBrowser::working();
+            let mut captured = Captured::human();
+
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                    browser: Some(&browser),
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                browser.opened(),
+                ["https://dashboard.mergify.com/device?user_code=BCDF-GHJK"],
+            );
+            let stderr = captured.stderr();
+            assert!(stderr.contains("Opening your browser"), "got {stderr:?}");
+            // Still printed, always: a spawned opener is not a
+            // window on screen, and this is where the user looks.
+            assert!(
+                stderr.contains("https://dashboard.mergify.com/device?user_code=BCDF-GHJK"),
+                "got {stderr:?}",
+            );
+            drop(dir);
+        });
+    }
+
+    // Opening is a convenience, and the machines that cannot do it
+    // — a CI runner, a container, an SSH session — are the ones the
+    // device grant exists for.
+    #[test]
+    fn a_browser_that_will_not_open_does_not_fail_the_login() {
+        with_mergify_token(None, async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            let (dir, store) = file_store();
+            let browser = RecordingBrowser::broken();
+            let mut captured = Captured::human();
+
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                    browser: Some(&browser),
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let api_url = Url::parse(&server.uri()).unwrap();
+            assert_eq!(
+                store.get(&api_url).unwrap().unwrap().credential.token,
+                "mut_secret",
+            );
+            let stderr = captured.stderr();
+            assert!(
+                stderr.contains("Open this URL to authorize"),
+                "a browser that did not open must not be claimed to have opened, got {stderr:?}",
+            );
+            assert!(
+                stderr.contains("https://dashboard.mergify.com/device?user_code=BCDF-GHJK"),
+                "got {stderr:?}",
+            );
+            drop(dir);
+        });
+    }
+
+    // `--no-browser`: nothing is spawned, and the instructions go
+    // back to telling the user to open the URL themselves.
+    #[test]
+    fn no_browser_tells_the_user_to_open_the_url() {
+        with_mergify_token(None, async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            let (dir, store) = file_store();
+            let mut captured = Captured::human();
+
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                    browser: None,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let stderr = captured.stderr();
+            assert!(
+                stderr.contains("Open this URL to authorize"),
+                "got {stderr:?}",
+            );
+            assert!(!stderr.contains("Opening your browser"), "got {stderr:?}");
+            drop(dir);
+        });
     }
 
     #[test]
