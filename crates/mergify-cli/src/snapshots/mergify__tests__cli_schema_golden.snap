@@ -104,9 +104,26 @@ expression: schema
           {
             "about": "Sign in to Mergify and store the credential",
             "aliases": [],
-            "args": [],
+            "args": [
+              {
+                "default": "false",
+                "env": null,
+                "global": false,
+                "help": "Do not open a browser; only print the URL to open",
+                "id": "no_browser",
+                "kind": "flag",
+                "long": "no-browser",
+                "longHelp": "Do not open a browser; only print the URL to open",
+                "numArgs": "0",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": []
+              }
+            ],
             "commands": [],
-            "longAbout": "Sign in to Mergify and store the credential.\n\nPrints a URL and a code: open the one, enter the other, and approve. The credential lands in your OS keychain, or in a `0600` file when the machine has no keychain to offer.",
+            "longAbout": "Sign in to Mergify and store the credential.\n\nOpens the approval page in your browser and prints the URL and the code as well, so a machine with no browser can sign in from the same command. The credential lands in your OS keychain, or in a `0600` file when the machine has no keychain to offer.",
             "name": "login",
             "path": [
               "mergify",
