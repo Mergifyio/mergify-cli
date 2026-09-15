@@ -16,6 +16,7 @@ use url::Url;
 use crate::browser::Browser;
 use crate::device;
 use crate::identity;
+use crate::machine;
 
 pub struct LoginOptions<'a> {
     pub api_url: Option<&'a str>,
@@ -54,7 +55,14 @@ pub async fn run(opts: LoginOptions<'_>, output: &mut dyn Output) -> Result<(), 
     // store, so this costs nothing.
     let previous = opts.store.get(&api_url)?;
 
-    let authorization = device::authorize(&client).await?;
+    // The machine's own name, so the approval page's Token name
+    // field defaults to this machine instead of to the client name
+    // every machine shares — the page's own helper text already asks
+    // the user to name it after the machine. Optional: a machine
+    // that cannot name itself, or a deployment that predates the
+    // field, falls back to that shared default.
+    let device_name = machine::name().await;
+    let authorization = device::authorize(&client, device_name.as_deref()).await?;
     let opened = open_verification_page(opts.browser, verification_url(&authorization));
     output.status(&instructions(&authorization, opened))?;
 
@@ -804,6 +812,44 @@ mod tests {
                 stderr.contains("https://dashboard.mergify.com/device?user_code=BCDF-GHJK"),
                 "got {stderr:?}",
             );
+            drop(dir);
+        });
+    }
+
+    // The wiring, not the renderer: `device_name` has to leave this
+    // command on the grant request, or the approval page goes back
+    // to naming every machine "Mergify CLI". Asserted against what
+    // this machine actually calls itself, so the test says the same
+    // thing on a laptop and in a container with no `hostname`.
+    #[test]
+    fn login_tells_the_server_which_machine_asked() {
+        with_mergify_token(None, async {
+            let server = MockServer::start().await;
+            mount_flow(&server, true).await;
+            let (dir, store) = file_store();
+            let mut captured = Captured::human();
+
+            run(
+                LoginOptions {
+                    api_url: Some(&server.uri()),
+                    store: &store,
+                    browser: None,
+                },
+                &mut captured.output,
+            )
+            .await
+            .unwrap();
+
+            let requests = server.received_requests().await.unwrap();
+            let grant = requests
+                .iter()
+                .find(|r| r.url.path() == "/v1/oauth/device/code")
+                .expect("the grant request");
+            let body = String::from_utf8_lossy(&grant.body);
+            match crate::machine::name().await {
+                Some(_) => assert!(body.contains("device_name="), "got {body:?}"),
+                None => assert_eq!(body, "client_id=mergify-cli", "got {body:?}"),
+            }
             drop(dir);
         });
     }
