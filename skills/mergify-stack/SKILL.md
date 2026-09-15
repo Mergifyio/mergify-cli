@@ -57,8 +57,8 @@ A branch is a stack. Keep stacks short and focused:
 
 ```bash
 mergify stack new NAME       # Create a new stack/branch for new work
-mergify stack push           # Push and create/update PRs
-mergify stack push --github-native  # ...and register it as a GitHub-native stack (opt-in)
+mergify stack push           # Push and create/update PRs (also registers as a GitHub-native stack by default)
+mergify stack push --no-github-native  # ...without registering it as a GitHub-native stack
 mergify stack checkout BRANCH    # Checkout an existing stack from GitHub (e.g. someone else's)
 mergify stack checkout PR_URL    # Same, from any PR in the stack — middle included
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
@@ -92,18 +92,19 @@ Use `mergify stack sync` to bring your stack up to date. It fetches the latest t
 
 Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. It also shows CI status, review status, and merge conflicts for each PR. Use `--verbose` for detailed check names and reviewer names. Use `--json` when you need to parse the output programmatically — it includes full CI check details and review data.
 
-## GitHub-native stacks (experimental, opt-in)
+## GitHub-native stacks (experimental, on by default)
 
-`mergify stack push --github-native` additionally registers the stack with
-GitHub's own Stacks API, so GitHub renders it as a stack. Off by default; turn
-it on per repo with `git config mergify-cli.stack-github-native true`.
+`mergify stack push` registers the stack with GitHub's own Stacks API by
+default, so GitHub renders it as a stack. Opt out per invocation with
+`--no-github-native`, or per repo with
+`git config mergify-cli.stack-github-native false`.
 
 Change-Ids, branch layout, stack comments and revision history are unchanged,
 and it degrades quietly: where the API isn't available (older GitHub
 Enterprise, a repo without the feature) the push reports
 `not registered on GitHub` and succeeds exactly as it would have.
 
-Three things to know before turning it on:
+Three things to know:
 
 - **A stack needs at least 2 pull requests.** GitHub rejects a 1-PR stack, so a
   single-change stack stays a plain PR — and a 2-PR stack that loses a member
@@ -118,8 +119,8 @@ Three things to know before turning it on:
 - **Registering changes how the PRs merge.** While a stack is registered,
   GitHub refuses the classic merge endpoint
   (`PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` → 403) for
-  its members. That is GitHub's contract, not ours; it is the reason this is
-  opt-in.
+  its members. That is GitHub's contract, not ours; it is the reason
+  `--no-github-native` exists.
 
 Pushing stays cheap. Refreshing commits (amend, reword, force-push) leaves the
 registration untouched, and adding a change on top extends the same stack.

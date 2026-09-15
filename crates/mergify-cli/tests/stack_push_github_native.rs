@@ -1,11 +1,13 @@
-//! End-to-end tests for `mergify stack push --github-native`.
+//! End-to-end tests for `mergify stack push`'s GitHub-native stack
+//! registration, on by default and disabled with `--no-github-native`.
 //!
 //! Runs the real binary against a wiremock GitHub server and a real
 //! git repo, and asserts on the *sequence* of requests it issued —
 //! because the whole feature is a sequencing contract:
 //!
-//! - with the flag off, not a single `/stacks` request may be sent
-//!   (the flag-off path has to stay exactly what it was);
+//! - with `--no-github-native`, not a single `/stacks` request may be
+//!   sent (the disabled path has to stay exactly what it was before
+//!   this feature existed);
 //! - a push that only refreshes commits must leave the registration
 //!   completely alone — no unstack, no re-registration, and no `base`
 //!   in the PATCH bodies, which is what makes that possible;
@@ -298,23 +300,16 @@ async fn request_log(server: &MockServer) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_the_flag_no_stacks_request_is_ever_sent() {
-    // The load-bearing regression test for "default behaviour is
-    // byte-identical": the feature is invisible unless asked for.
-    let (work, _) = build_stack_repo(2);
-    let local = work.path().join("local");
-    let server = mock_github_creating(&[101, 102]).await;
-
-    assert_success(&run_push(&local, &server.uri(), &[]));
-
-    let log = request_log(&server).await;
+/// Asserts the escape hatch actually took: no `/stacks` request at
+/// all, and the `Depends-On:` chain written exactly as it always was.
+/// Shared by the two ways to reach it — the flag and git config.
+async fn assert_stacks_untouched_and_depends_on_chained(server: &MockServer) {
+    let log = request_log(server).await;
     assert!(
         log.iter().all(|r| !r.contains("/stacks")),
-        "flag off must not touch the Stacks API, got: {log:#?}",
+        "the escape hatch must not touch the Stacks API, got: {log:#?}",
     );
-    // …and the `Depends-On:` chain is written exactly as it always was.
-    let bodies = pull_post_bodies(&server).await;
+    let bodies = pull_post_bodies(server).await;
     assert_eq!(bodies.len(), 2, "two PRs are created: {bodies:#?}");
     assert!(
         bodies[1]["body"]
@@ -327,10 +322,42 @@ async fn without_the_flag_no_stacks_request_is_ever_sent() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn depends_on_omitted_when_native_registration_succeeds() {
-    // The point of the flag: once GitHub holds the order, the header
-    // is a second copy of it, in prose, that a reader has to reconcile
-    // against the first. One edge, one source of truth.
+async fn no_github_native_keeps_the_stacks_api_untouched() {
+    // The load-bearing regression test for the escape hatch: passing
+    // `--no-github-native` must reproduce the pre-native-stack
+    // behaviour exactly, byte for byte.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let server = mock_github_creating(&[101, 102]).await;
+
+    assert_success(&run_push(&local, &server.uri(), &["--no-github-native"]));
+
+    assert_stacks_untouched_and_depends_on_chained(&server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_config_false_keeps_the_stacks_api_untouched_without_the_flag() {
+    // The other half of the escape hatch: a repo that has opted out in
+    // git config must stay opted out with no flag at all.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    run_in(
+        &local,
+        &["config", "mergify-cli.stack-github-native", "false"],
+    );
+    let server = mock_github_creating(&[101, 102]).await;
+
+    assert_success(&run_push(&local, &server.uri(), &[]));
+
+    assert_stacks_untouched_and_depends_on_chained(&server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn by_default_depends_on_is_omitted_when_native_registration_succeeds() {
+    // The point of the feature, unset config and no flag: once GitHub
+    // holds the order, the header is a second copy of it, in prose,
+    // that a reader has to reconcile against the first. One edge, one
+    // source of truth.
     let (work, _) = build_stack_repo(2);
     let local = work.path().join("local");
     let server = mock_github_creating(&[101, 102]).await;
@@ -340,7 +367,7 @@ async fn depends_on_omitted_when_native_registration_succeeds() {
         .mount(&server)
         .await;
 
-    assert_success(&run_push(&local, &server.uri(), &["--github-native"]));
+    assert_success(&run_push(&local, &server.uri(), &[]));
 
     let descriptions = written_descriptions(&server).await;
     assert_eq!(
@@ -359,8 +386,8 @@ async fn depends_on_omitted_when_native_registration_succeeds() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn depends_on_restored_when_native_registration_does_not_happen() {
     // The whole reason the removal is keyed off the registration and
-    // not off the flag. `--github-native` degrades silently by design,
-    // and a stack that is neither registered on GitHub nor chained by
+    // not off the flag: registration degrades silently by design, and
+    // a stack that is neither registered on GitHub nor chained by
     // markers has no ordering anywhere: Mergify would let a mid-stack
     // pull request merge ahead of the one below it.
     let (work, _) = build_stack_repo(2);
@@ -372,7 +399,7 @@ async fn depends_on_restored_when_native_registration_does_not_happen() {
         .mount(&server)
         .await;
 
-    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    let output = run_push(&local, &server.uri(), &[]);
     assert_success(&output);
 
     // The repair runs after the failed registration, and only for the
@@ -421,7 +448,7 @@ async fn depends_on_restored_when_native_registration_does_not_happen() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_flag_registers_the_stack_after_every_pull_request_is_upserted() {
+async fn by_default_the_stack_is_registered_after_every_pull_request_is_upserted() {
     let (work, _) = build_stack_repo(2);
     let local = work.path().join("local");
     let server = mock_github_creating(&[101, 102]).await;
@@ -432,7 +459,7 @@ async fn the_flag_registers_the_stack_after_every_pull_request_is_upserted() {
         .mount(&server)
         .await;
 
-    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    let output = run_push(&local, &server.uri(), &[]);
     assert_success(&output);
 
     let log = request_log(&server).await;
@@ -569,7 +596,7 @@ async fn a_routine_push_leaves_the_registration_completely_alone() {
     )
     .await;
 
-    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    let output = run_push(&local, &server.uri(), &[]);
     assert_success(&output);
 
     let log = request_log(&server).await;
@@ -632,7 +659,7 @@ async fn a_change_pushed_on_top_extends_the_stack_instead_of_rebuilding_it() {
         .mount(&server)
         .await;
 
-    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    let output = run_push(&local, &server.uri(), &[]);
     assert_success(&output);
 
     let log = request_log(&server).await;
@@ -713,7 +740,7 @@ async fn a_stack_that_cannot_be_extended_is_rebuilt() {
         .mount(&server)
         .await;
 
-    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    let output = run_push(&local, &server.uri(), &[]);
     assert_success(&output);
 
     let body: serde_json::Value = server
@@ -759,7 +786,7 @@ async fn a_registered_stack_is_dissolved_before_a_pull_request_is_retargeted() {
         .mount(&server)
         .await;
 
-    assert_success(&run_push(&local, &server.uri(), &["--github-native"]));
+    assert_success(&run_push(&local, &server.uri(), &[]));
 
     let log = request_log(&server).await;
     let unstack = log
@@ -805,7 +832,7 @@ async fn a_repository_without_the_stacks_api_still_pushes_cleanly() {
         .mount(&server)
         .await;
 
-    let output = run_push(&local, &server.uri(), &["--github-native"]);
+    let output = run_push(&local, &server.uri(), &[]);
     assert_success(&output);
     let out = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -825,7 +852,7 @@ async fn a_one_change_stack_stays_a_plain_pull_request() {
     let local = work.path().join("local");
     let server = mock_github_creating(&[101]).await;
 
-    assert_success(&run_push(&local, &server.uri(), &["--github-native"]));
+    assert_success(&run_push(&local, &server.uri(), &[]));
 
     let log = request_log(&server).await;
     assert!(
@@ -835,7 +862,10 @@ async fn a_one_change_stack_stays_a_plain_pull_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn git_config_can_turn_the_feature_on_without_the_flag() {
+async fn git_config_true_is_equivalent_to_the_unset_default() {
+    // Not load-bearing on its own now that `true` is the default, but
+    // worth pinning: a repo that pins the config explicitly must see
+    // the exact same behaviour as one that never mentions it.
     let (work, _) = build_stack_repo(2);
     let local = work.path().join("local");
     run_in(

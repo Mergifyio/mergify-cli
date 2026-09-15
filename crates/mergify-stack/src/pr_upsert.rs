@@ -227,7 +227,7 @@ struct BodyPatch {
 /// Write the `Depends-On: #<n>` marker back into a pull request body
 /// that was rendered without one.
 ///
-/// The undo half of the `--github-native` optimism: the upsert leaves
+/// The undo half of the github-native optimism: the upsert leaves
 /// the marker out because GitHub is about to hold the order itself,
 /// and this puts it back for the pushes where GitHub did not (see
 /// [`crate::native_stack::register`], which degrades to `None` rather
