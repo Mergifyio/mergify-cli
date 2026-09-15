@@ -21,10 +21,11 @@
 //! 10. Upsert stack comments, and render + upsert each prepared
 //!     revision-history comment, per PR via [`crate::comment_upsert`].
 //! 11. Tear down orphan branches.
-//! 12. With `--github-native`, bring GitHub's native stack in line
-//!     with what was just pushed, via [`crate::native_stack`], and
-//!     restore any `Depends-On:` header step 9 left out if it did not
-//!     take.
+//! 12. Unless native registration is disabled (`--no-github-native`,
+//!     or git config `mergify-cli.stack-github-native=false`), bring
+//!     GitHub's native stack in line with what was just pushed, via
+//!     [`crate::native_stack`], and restore any `Depends-On:` header
+//!     step 9 left out if it did not take.
 //!
 //! Step 12 has a conditional step 0. A registered stack blocks one
 //! thing: changing a PR's base. So a push that retargets a PR, or
@@ -36,12 +37,13 @@
 //! if changes were added on top, and otherwise issues no request at
 //! all. See [`crate::native_stack`] for the measured behaviour behind
 //! each case. Between the two steps the flow is exactly what it is
-//! with the flag off, with one exception: step 9 renders the PR bodies
-//! without their `Depends-On:` header, because a registered stack is
-//! the dependency edge and a second copy of it in prose is the one
-//! users read. That is a bet on step 12, which is allowed to quietly
-//! not happen — so the headers are held and written back when it
-//! doesn't, rather than being dropped on the strength of the flag.
+//! with native registration disabled, with one exception: step 9
+//! renders the PR bodies without their `Depends-On:` header, because a
+//! registered stack is the dependency edge and a second copy of it in
+//! prose is the one users read. That is a bet on step 12, which is
+//! allowed to quietly not happen — so the headers are held and written
+//! back when it doesn't, rather than being dropped on the strength of
+//! that setting.
 //! The bet is settled inside the push, so the only way to end up with
 //! neither the registration nor the headers is a push that *fails*
 //! between steps 9 and 12 — and re-running it settles the stack either
@@ -125,10 +127,11 @@ pub struct Options<'a> {
     pub only_update_existing_pulls: bool,
     pub revision_history: bool,
     pub no_verify: bool,
-    /// Opt-in: also register the pushed stack with GitHub's native
-    /// Stacks API. Off by default — when off, this flow issues no
-    /// stacks request at all and behaves exactly as it did before the
-    /// feature existed. See [`crate::native_stack`].
+    /// Register the pushed stack with GitHub's native Stacks API. On
+    /// by default; off via `--no-github-native` or git config
+    /// `mergify-cli.stack-github-native=false`, in which case this
+    /// flow issues no stacks request at all and behaves exactly as it
+    /// did before the feature existed. See [`crate::native_stack`].
     pub github_native: bool,
 }
 
@@ -730,8 +733,9 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     // predecessor's freshly-known PR number — and fine for typical
     // stack sizes (see the module doc on why this isn't parallelised).
     //
-    // With `--github-native` the marker is left out of the rendered
-    // bodies: a registered stack IS the ordering, held by GitHub, and
+    // With github-native registration on, the marker is left out of
+    // the rendered bodies: a registered stack IS the ordering, held by
+    // GitHub, and
     // a second copy of it in prose is one the reader has to reconcile.
     // Optimistically, though — step 12 is where the registration is
     // actually attempted, and it is allowed to quietly not happen. So
@@ -990,11 +994,11 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     // without them a mid-stack pull request has nothing keeping it
     // behind its predecessor. Put them back.
     //
-    // Fatal on failure, unlike everything else about `--github-native`:
-    // every other way this feature degrades leaves the pull requests in
-    // the state the flag-off push produces, and this one would not. A
-    // stack that is neither registered nor chained is the one outcome
-    // worth stopping for.
+    // Fatal on failure, unlike everything else about github-native
+    // registration: every other way this feature degrades leaves the
+    // pull requests in the state a `--no-github-native` push produces,
+    // and this one would not. A stack that is neither registered nor
+    // chained is the one outcome worth stopping for.
     if !stack_is_registered && !suppressed_markers.is_empty() {
         let ridx = prog.add("queued");
         prog.run(ridx, "restoring dependencies", async {
@@ -1043,8 +1047,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
 }
 
 /// A `Depends-On:` marker the upsert left out of a pull request body
-/// because `--github-native` was going to hand the ordering to GitHub.
-/// Held until the registration's outcome is known — see
+/// because github-native registration was going to hand the ordering
+/// to GitHub. Held until the registration's outcome is known — see
 /// [`pr_upsert::restore_depends_on`].
 struct SuppressedMarker {
     /// The pull request whose body is missing its marker.
