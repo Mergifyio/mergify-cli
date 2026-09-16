@@ -1,0 +1,6 @@
+Revision history for #1833:
+
+rev 2 (content) 2026-09-15 14:38 UTC — Bump rustls to 0.23.45 (RUSTSEC-2026-0285 fixed cargo-deny CI); clarify push.rs docs to mention the git-config opt-out alongside --no-github-native, per Copilot review.
+rev 1 (initial) 2026-09-15 14:38 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":1833,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"73767d22ec73d0da5863cd8aa46804fcd6d3e02a","timestamp_iso":"2026-09-15T14:38:28Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"content","old_sha":"73767d22ec73d0da5863cd8aa46804fcd6d3e02a","new_sha":"8e7c75e636c9bd209819c03ebdccd2efcd675e85","timestamp_iso":"2026-09-15T14:38:28Z","reason":"Bump rustls to 0.23.45 (RUSTSEC-2026-0285 fixed cargo-deny CI); clarify push.rs docs to mention the git-config opt-out alongside --no-github-native, per Copilot review.","replay_sha":null,"compare_url":"https://github.com/Mergifyio/mergify-cli/compare/73767d22ec73d0da5863cd8aa46804fcd6d3e02a...8e7c75e636c9bd209819c03ebdccd2efcd675e85"}]} -->
