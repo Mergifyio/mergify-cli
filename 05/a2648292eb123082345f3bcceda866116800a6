@@ -1,1 +1,6 @@
-rebase onto main: picks up rustls 0.23.45 from #1833, which clears RUSTSEC-2026-0285 in cargo-deny; no change to the bumps themselves
+Revision history for #1834:
+
+rev 2 (rebase) 2026-09-16 16:16 UTC — rebase onto main: picks up rustls 0.23.45 from #1833, which clears RUSTSEC-2026-0285 in cargo-deny; no change to the bumps themselves
+rev 1 (initial) 2026-09-16 16:16 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":1834,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"2135318cd8b0baf819b0373d53ad7ea1545eb823","timestamp_iso":"2026-09-16T16:16:54Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"rebase","old_sha":"2135318cd8b0baf819b0373d53ad7ea1545eb823","new_sha":"05a2648292eb123082345f3bcceda866116800a6","timestamp_iso":"2026-09-16T16:16:54Z","reason":"rebase onto main: picks up rustls 0.23.45 from #1833, which clears RUSTSEC-2026-0285 in cargo-deny; no change to the bumps themselves","replay_sha":null,"compare_url":"https://github.com/Mergifyio/mergify-cli/compare/2135318cd8b0baf819b0373d53ad7ea1545eb823...05a2648292eb123082345f3bcceda866116800a6"}]} -->
