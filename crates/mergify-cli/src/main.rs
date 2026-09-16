@@ -3449,13 +3449,18 @@ struct StackPushCli {
     #[arg(long = "no-verify", action = clap::ArgAction::SetTrue)]
     no_verify: bool,
 
-    /// Also register the stack with GitHub's native Stacks API, so
-    /// GitHub shows it as a stack and holds the ordering (the PR
-    /// descriptions then carry no `Depends-On:` header).
-    /// Experimental, and silently skipped where the API isn't
+    /// Don't register the stack with GitHub's native Stacks API.
+    /// By default, `mergify stack push` registers it, so GitHub
+    /// shows it as a stack and holds the ordering (the PR
+    /// descriptions then carry no `Depends-On:` header) —
+    /// experimental, and silently skipped where the API isn't
     /// available. Default falls back to git config
-    /// `mergify-cli.stack-github-native` (`false` when unset).
-    #[arg(long = "github-native", num_args = 0, default_missing_value = "true")]
+    /// `mergify-cli.stack-github-native` (`true` when unset).
+    #[arg(
+        long = "no-github-native",
+        num_args = 0,
+        default_missing_value = "false"
+    )]
     github_native: Option<bool>,
 }
 

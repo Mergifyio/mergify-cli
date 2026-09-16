@@ -1,5 +1,6 @@
-//! Opt-in registration of a pushed stack with GitHub's **native**
-//! Stacks API (`stack push --github-native`).
+//! Registration of a pushed stack with GitHub's **native** Stacks
+//! API — on by default for `stack push`, opt out with
+//! `--no-github-native`.
 //!
 //! Native membership is *additive* in identity: Change-Id, the branch
 //! layout and the revision history stay ours. All this module does is
@@ -65,9 +66,9 @@
 //! [`crate::pr_upsert::neutralize_stale_bases`] *or* from the upsert
 //! itself, and the orphan teardown at the end depends on the retarget
 //! having landed. In between, the flow is byte-for-byte the flow that
-//! runs with the flag off, which is what makes the failure mode benign
-//! — an interrupted push leaves the stack merely unregistered, i.e.
-//! exactly today's behaviour.
+//! runs when nothing gets registered, which is what makes the failure
+//! mode benign — an interrupted push leaves the stack merely
+//! unregistered, i.e. exactly the pre-registration behaviour.
 //!
 //! # Failure policy — deliberately asymmetric
 //!
