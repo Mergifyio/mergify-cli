@@ -688,8 +688,17 @@ fn detect_dispatch(argv: &[String]) -> Dispatch {
     };
     // Resolve the color preference once, before any command builds a
     // theme via `Theme::detect`.
-    mergify_tui::set_color_choice(parsed.color.into());
-    init_tracing(parsed.verbose, parsed.debug);
+    // Exported-but-empty is not set: a workflow writing
+    // `NO_COLOR: ${{ inputs.no_color }}` with no input exports the
+    // empty string, and <https://no-color.org> says that does not
+    // count. Same rule as every other variable this CLI reads.
+    let color = resolve_color_choice(
+        parsed.color,
+        non_empty("NO_COLOR"),
+        non_empty("FORCE_COLOR") || non_empty("CLICOLOR_FORCE"),
+    );
+    mergify_tui::set_color_choice(color);
+    init_tracing(parsed.verbose, parsed.debug, color);
     dispatch_from_parsed(parsed)
 }
 
@@ -698,7 +707,7 @@ fn detect_dispatch(argv: &[String]) -> Dispatch {
 /// trace), with `--debug` flooring at debug; an explicit `RUST_LOG`
 /// overrides both. Only our own crates are raised — third-party deps
 /// stay at `warn` so `-vv` doesn't drown in hyper/reqwest noise.
-fn init_tracing(verbose: u8, debug: bool) {
+fn init_tracing(verbose: u8, debug: bool, color: mergify_tui::ColorChoice) {
     use tracing_subscriber::EnvFilter;
 
     let level = match verbose {
@@ -717,7 +726,7 @@ fn init_tracing(verbose: u8, debug: bool) {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
+        .with_ansi(ansi_on_stderr(color))
         .try_init();
 }
 
@@ -2800,13 +2809,56 @@ enum ColorArg {
     Never,
 }
 
-impl From<ColorArg> for mergify_tui::ColorChoice {
-    fn from(c: ColorArg) -> Self {
-        match c {
-            ColorArg::Auto => Self::Auto,
-            ColorArg::Always => Self::Always,
-            ColorArg::Never => Self::Never,
-        }
+/// `true` when `name` is exported to something other than the empty
+/// string, which is what <https://no-color.org> means by "present".
+///
+/// The rule itself lives in `mergify_core::env::var_non_empty`, which
+/// is where it is documented and tested; spelling it out a second time
+/// here is how the color variables would drift away from every other
+/// variable this CLI reads.
+fn non_empty(name: &str) -> bool {
+    mergify_core::env::var_non_empty(name).is_some()
+}
+
+/// Whether the log subscriber may emit ANSI on stderr.
+///
+/// The same decision `Theme::detect` makes for stdout, against
+/// stderr, because that is where the logs go. Without this
+/// `--color never` and `NO_COLOR` styled stdout and left the `-vv`
+/// stream on stderr full of escapes, which is the one place a user
+/// redirects to a file.
+fn ansi_on_stderr(color: mergify_tui::ColorChoice) -> bool {
+    match color {
+        mergify_tui::ColorChoice::Always => true,
+        mergify_tui::ColorChoice::Never => false,
+        mergify_tui::ColorChoice::Auto => std::io::stderr().is_terminal(),
+    }
+}
+
+/// Map `--color` to the choice `mergify-tui` records, folding in
+/// `NO_COLOR` / `FORCE_COLOR` / `CLICOLOR_FORCE`.
+///
+/// An explicit `--color always|never` wins over all three, which is
+/// why only the `Auto` arms consult them. `NO_COLOR` beats the two
+/// force flags, per <https://no-color.org>.
+///
+/// This lives here rather than in `mergify-tui` so that crate never
+/// reads the environment: it is the whole reason a consumer crate's
+/// test binary used to touch the environment just by rendering a
+/// themed line.
+fn resolve_color_choice(
+    arg: ColorArg,
+    no_color: bool,
+    force_color: bool,
+) -> mergify_tui::ColorChoice {
+    use mergify_tui::ColorChoice;
+
+    match arg {
+        ColorArg::Always => ColorChoice::Always,
+        ColorArg::Never => ColorChoice::Never,
+        ColorArg::Auto if no_color => ColorChoice::Never,
+        ColorArg::Auto if force_color => ColorChoice::Always,
+        ColorArg::Auto => ColorChoice::Auto,
     }
 }
 
@@ -4798,6 +4850,51 @@ mod tests {
             err.to_string().contains(VERSION),
             "version output should contain VERSION ({VERSION}), got: {err}",
         );
+    }
+
+    #[test]
+    fn color_choice_folds_env_overrides_into_auto_only() {
+        use mergify_tui::ColorChoice;
+
+        // `--color always|never` is the user being explicit; no env
+        // var may override it.
+        assert_eq!(
+            resolve_color_choice(ColorArg::Always, true, false),
+            ColorChoice::Always
+        );
+        assert_eq!(
+            resolve_color_choice(ColorArg::Never, false, true),
+            ColorChoice::Never
+        );
+        // Auto: NO_COLOR wins over FORCE_COLOR / CLICOLOR_FORCE.
+        assert_eq!(
+            resolve_color_choice(ColorArg::Auto, true, true),
+            ColorChoice::Never
+        );
+        assert_eq!(
+            resolve_color_choice(ColorArg::Auto, false, true),
+            ColorChoice::Always
+        );
+        // Auto with neither set stays Auto, i.e. defers to the TTY.
+        assert_eq!(
+            resolve_color_choice(ColorArg::Auto, false, false),
+            ColorChoice::Auto
+        );
+    }
+
+    #[test]
+    fn stderr_ansi_follows_the_resolved_color_choice() {
+        use mergify_tui::ColorChoice;
+
+        // The log stream obeys the same decision as stdout: before
+        // this, `--color never` and `NO_COLOR` gave a plain stdout and
+        // a `-vv` stream still full of escapes.
+        assert!(ansi_on_stderr(ColorChoice::Always));
+        assert!(!ansi_on_stderr(ColorChoice::Never));
+        // `Auto` is deliberately not asserted: it is
+        // `stderr().is_terminal()`, which is whatever the harness was
+        // given, so an assertion here would either restate the branch
+        // or test the terminal the suite happens to run under.
     }
 
     #[test]

@@ -109,8 +109,14 @@ pub struct Progress {
 impl Progress {
     /// Detect the output mode from stdout. Interactive (cursor
     /// redraw + spinner) only on a real terminal whose size we can
-    /// read. Color is delegated to [`Theme::detect`] (TTY-and-
-    /// `NO_COLOR`-aware, suppressed under tests).
+    /// read.
+    ///
+    /// Color follows that same interactivity, so it is narrower than
+    /// the recorded `--color` choice: a non-interactive `Progress` is
+    /// always plain, including under `--color always`. Only the
+    /// interactive branch consults [`Theme::detect`] (the recorded
+    /// choice, else the TTY; off outside the CLI entry point, so
+    /// tests are never colored). See the comment in the body.
     #[must_use]
     pub fn new() -> Self {
         let stdout = std::io::stdout();

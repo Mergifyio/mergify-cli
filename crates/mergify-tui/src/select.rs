@@ -67,9 +67,9 @@ pub fn fuzzy_select(prompt: &str, items: &[String], default: usize) -> io::Resul
     install_sigint_handler();
     let colorful = ColorfulTheme::default();
     let simple = SimpleTheme;
-    // Same color policy as every other renderer (`--color` override
-    // > `NO_COLOR` > `FORCE_COLOR`/`CLICOLOR_FORCE` > TTY), reused
-    // from `theme.rs` rather than re-derived.
+    // Same color policy as every other renderer — the choice the
+    // entry point recorded, else the TTY — reused from `theme.rs`
+    // rather than re-derived.
     let theme: &dyn Theme = if colors_enabled() { &colorful } else { &simple };
     PICKER_ACTIVE.store(true, Ordering::SeqCst);
     let result = FuzzySelect::with_theme(theme)
