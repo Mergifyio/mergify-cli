@@ -37,7 +37,7 @@ getrandom = "0.4"
 glob = "0.3"
 globset = "0.4"
 iana-time-zone = "0.1"
-jsonschema = { version = "0.55", default-features = false }
+jsonschema = { version = "0.56", default-features = false }
 # OS credential store for the token `mergify auth login` mints. The
 # default feature set is the one that keeps the Linux build free of C:
 # `zbus-secret-service-keyring-store` talks to the Secret Service over
