@@ -219,26 +219,22 @@ pub fn parse(xml: &[u8]) -> Result<ParseResult, InvalidJunitXml> {
                 // `GeneralRef` event below; entity resolution
                 // happens in the `GeneralRef` arm.
                 //
-                // `xml10_content()` (vs the plainer `decode()`) is
-                // important on Windows: when git checks fixtures
-                // out with `core.autocrlf` enabled the file's line
-                // endings are `\r\n`, and the XML 1.0 spec
-                // requires those to be normalized to `\n` before
-                // they reach element text. Without this, failure
-                // stacktraces ship `\r\n` and tests that diff on
-                // the assembled stacktrace fail only on Windows.
-                let s = e.xml10_content().map_err(|err| InvalidJunitXml {
-                    details: format!("invalid UTF-8 in element text: {err}"),
-                })?;
+                // `xml10_content()` (vs the plain `Deref<Target =
+                // str>` content) is important on Windows: when git
+                // checks fixtures out with `core.autocrlf` enabled
+                // the file's line endings are `\r\n`, and the XML
+                // 1.0 spec requires those to be normalized to `\n`
+                // before they reach element text. Without this,
+                // failure stacktraces ship `\r\n` and tests that
+                // diff on the assembled stacktrace fail only on
+                // Windows.
+                let s = e.xml10_content();
                 state.append_failure_text(&s);
             }
             Ok(Event::CData(e)) => {
-                // CDATA bodies are by definition not entity-escaped,
-                // so plain UTF-8 decoding is correct here.
-                let text = std::str::from_utf8(e.as_ref()).map_err(|err| InvalidJunitXml {
-                    details: format!("invalid UTF-8 in CDATA: {err}"),
-                })?;
-                state.append_failure_text(text);
+                // quick-xml validates UTF-8 up front, so the event
+                // already derefs to `str` — no decoding step needed.
+                state.append_failure_text(e.as_ref());
             }
             Ok(Event::GeneralRef(e)) => {
                 // quick-xml emits a separate `GeneralRef` event for
@@ -258,10 +254,8 @@ pub fn parse(xml: &[u8]) -> Result<ParseResult, InvalidJunitXml> {
                         state.append_failure_text(ch.encode_utf8(&mut tmp));
                     }
                 } else {
-                    let name = e.decode().map_err(|err| InvalidJunitXml {
-                        details: format!("invalid UTF-8 in entity reference: {err}"),
-                    })?;
-                    let resolved = match name.as_ref() {
+                    let name = e.as_ref();
+                    let resolved = match name {
                         "lt" => "<",
                         "gt" => ">",
                         "amp" => "&",
@@ -294,14 +288,13 @@ pub fn parse(xml: &[u8]) -> Result<ParseResult, InvalidJunitXml> {
 /// `testsuite` or `ns:testsuite` (XML namespaces); Python's
 /// `findall(".//{*}testsuite")` ignores the namespace prefix
 /// entirely, so we do the same.
-fn local_name<'a>(name: QName<'a>) -> &'a [u8] {
-    // `QName::local_name` would return a wrapped type; we want
-    // raw bytes here. `into_inner()` (`QName: Deref<Target = [u8]>`
-    // via `&'a [u8]`) gives the input-borrowed slice back so the
-    // returned `&[u8]` stays tied to `'a`, not the temporary
-    // function frame.
-    let raw: &'a [u8] = name.into_inner();
-    raw.rsplit(|b| *b == b':').next().unwrap_or(raw)
+fn local_name<'a>(name: QName<'a>) -> &'a str {
+    // `QName::local_name` would return a wrapped type; we want the
+    // raw string here. `into_inner()` gives the input-borrowed
+    // `&'a str` back so the return stays tied to `'a`, not the
+    // temporary function frame.
+    let raw: &'a str = name.into_inner();
+    raw.rsplit(':').next().unwrap_or(raw)
 }
 
 /// Decode an attribute value to a `String`, resolving XML entity
@@ -383,11 +376,11 @@ impl ParserState {
         let name = local_name(e.name());
         if !self.saw_valid_root {
             match name {
-                b"testsuites" => {
+                "testsuites" => {
                     self.saw_valid_root = true;
                     return Ok(());
                 }
-                b"testsuite" => {
+                "testsuite" => {
                     self.saw_valid_root = true;
                     self.saw_any_testsuite = true;
                     let suite_name = read_suite_name(e)?;
@@ -404,13 +397,13 @@ impl ParserState {
         }
 
         match name {
-            b"testsuite" => {
+            "testsuite" => {
                 self.saw_any_testsuite = true;
                 let suite_name = read_suite_name(e)?;
                 self.suite_names.push(suite_name.clone());
                 self.suite_stack.push(suite_name);
             }
-            b"testcase" => {
+            "testcase" => {
                 if self.in_progress.is_some() {
                     return Err(InvalidJunitXml {
                         details: "nested <testcase> not allowed".to_string(),
@@ -424,11 +417,11 @@ impl ParserState {
                 self.in_progress = Some(read_testcase(e, &suite_name)?);
                 self.failure_captured = false;
             }
-            b"failure" | b"error" => {
+            "failure" | "error" => {
                 if let Some(tc) = self.in_progress.as_mut()
                     && !self.failure_captured
                 {
-                    tc.status = if name == b"failure" {
+                    tc.status = if name == "failure" {
                         TestStatus::Failed
                     } else {
                         TestStatus::Errored
@@ -439,7 +432,7 @@ impl ParserState {
                     self.failure_text_buf.clear();
                 }
             }
-            b"skipped" => {
+            "skipped" => {
                 if let Some(tc) = self.in_progress.as_mut() {
                     // `<skipped>` wins over `<failure>` only when
                     // the failure wasn't already recorded — Python
@@ -465,7 +458,7 @@ impl ParserState {
         // mirror the work `on_start` does and just skip the
         // matching `on_end` since there's no body to track.
         match name {
-            b"testsuite" => {
+            "testsuite" => {
                 self.saw_any_testsuite = true;
                 if !self.saw_valid_root {
                     self.saw_valid_root = true;
@@ -477,7 +470,7 @@ impl ParserState {
                 self.suite_names.push(read_suite_name(e)?);
                 // Empty testsuite contributes nothing to `cases`.
             }
-            b"testcase" => {
+            "testcase" => {
                 if !self.saw_valid_root {
                     return Err(InvalidJunitXml {
                         details: "<testcase> outside <testsuite>".to_string(),
@@ -491,18 +484,18 @@ impl ParserState {
                 let tc = read_testcase(e, &suite_name)?;
                 self.output.push(tc);
             }
-            b"skipped" => {
+            "skipped" => {
                 if let Some(tc) = self.in_progress.as_mut()
                     && !self.failure_captured
                 {
                     tc.status = TestStatus::Skipped;
                 }
             }
-            b"failure" | b"error" => {
+            "failure" | "error" => {
                 if let Some(tc) = self.in_progress.as_mut()
                     && !self.failure_captured
                 {
-                    tc.status = if name == b"failure" {
+                    tc.status = if name == "failure" {
                         TestStatus::Failed
                     } else {
                         TestStatus::Errored
@@ -524,16 +517,16 @@ impl ParserState {
     fn on_end(&mut self, e: &quick_xml::events::BytesEnd<'_>) {
         let name = local_name(e.name());
         match name {
-            b"testsuite" => {
+            "testsuite" => {
                 self.suite_stack.pop();
             }
-            b"testcase" => {
+            "testcase" => {
                 if let Some(tc) = self.in_progress.take() {
                     self.output.push(tc);
                 }
                 self.failure_captured = false;
             }
-            b"failure" | b"error" if self.in_failure => {
+            "failure" | "error" if self.in_failure => {
                 // Flush the accumulated body text into the
                 // testcase's failure record. Trimming once at the
                 // close keeps the wire format identical to
@@ -569,7 +562,7 @@ fn read_suite_name(e: &quick_xml::events::BytesStart<'_>) -> Result<String, Inva
         let attr = attr.map_err(|err| InvalidJunitXml {
             details: format!("invalid attribute: {err}"),
         })?;
-        if local_name(attr.key) == b"name" {
+        if local_name(attr.key) == "name" {
             return attr_value(&attr);
         }
     }
@@ -590,16 +583,16 @@ fn read_testcase(
             details: format!("invalid attribute: {err}"),
         })?;
         match local_name(attr.key) {
-            b"classname" => classname = Some(attr_value(&attr)?),
-            b"name" => name = Some(attr_value(&attr)?),
-            b"time" => {
+            "classname" => classname = Some(attr_value(&attr)?),
+            "name" => name = Some(attr_value(&attr)?),
+            "time" => {
                 let raw = attr_value(&attr)?;
                 if !raw.is_empty() {
                     time = raw.parse::<f64>().ok();
                 }
             }
-            b"file" => file = Some(attr_value(&attr)?),
-            b"line" => line = Some(attr_value(&attr)?),
+            "file" => file = Some(attr_value(&attr)?),
+            "line" => line = Some(attr_value(&attr)?),
             _ => {}
         }
     }
@@ -628,8 +621,8 @@ fn read_failure(e: &quick_xml::events::BytesStart<'_>) -> Result<Failure, Invali
             details: format!("invalid attribute: {err}"),
         })?;
         match local_name(attr.key) {
-            b"type" => failure.kind = Some(attr_value(&attr)?),
-            b"message" => failure.message = Some(attr_value(&attr)?),
+            "type" => failure.kind = Some(attr_value(&attr)?),
+            "message" => failure.message = Some(attr_value(&attr)?),
             _ => {}
         }
     }
