@@ -111,7 +111,7 @@ mod tests {
     // the variable instead.
     #[test]
     fn the_variables_are_the_fallback() {
-        let from_windows = temp_env::with_vars(
+        let from_windows = mergify_core::env::testing::with_vars(
             [
                 ("COMPUTERNAME", Some("WIN-BOX")),
                 ("HOSTNAME", Some("ignored")),
@@ -120,13 +120,13 @@ mod tests {
         );
         assert_eq!(from_windows.as_deref(), Some("WIN-BOX"));
 
-        let from_shell = temp_env::with_vars(
+        let from_shell = mergify_core::env::testing::with_vars(
             [("COMPUTERNAME", None), ("HOSTNAME", Some("build-42"))],
             from_env,
         );
         assert_eq!(from_shell.as_deref(), Some("build-42"));
 
-        let from_nothing = temp_env::with_vars(
+        let from_nothing = mergify_core::env::testing::with_vars(
             [("COMPUTERNAME", None::<&str>), ("HOSTNAME", None)],
             from_env,
         );
