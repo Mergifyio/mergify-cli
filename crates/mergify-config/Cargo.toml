@@ -20,7 +20,6 @@ url = { workspace = true }
 [dev-dependencies]
 mergify-test-support = { path = "../mergify-test-support" }
 tempfile = { workspace = true }
-temp-env = { workspace = true }
 tokio = { workspace = true }
 wiremock = { workspace = true }
 
