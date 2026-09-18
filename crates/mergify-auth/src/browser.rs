@@ -231,7 +231,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_opens_the_url_with_open() {
-        let command = temp_env::with_vars(
+        let command = mergify_core::env::testing::with_vars(
             [("SSH_CONNECTION", None::<&str>), ("SSH_TTY", None::<&str>)],
             || command_for("https://dashboard.mergify.com/device"),
         )
@@ -246,7 +246,7 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn a_graphical_session_gets_xdg_open() {
-        let command = temp_env::with_vars(
+        let command = mergify_core::env::testing::with_vars(
             [("DISPLAY", Some(":0")), ("WAYLAND_DISPLAY", None::<&str>)],
             || command_for("https://dashboard.mergify.com/device"),
         )
@@ -263,7 +263,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn an_ssh_session_to_a_mac_opens_nothing() {
-        let opened = temp_env::with_vars(
+        let opened = mergify_core::env::testing::with_vars(
             [
                 ("SSH_CONNECTION", Some("10.0.0.1 52000 10.0.0.2 22")),
                 ("SSH_TTY", None),
@@ -281,7 +281,7 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn a_headless_session_opens_nothing() {
-        let opened = temp_env::with_vars(
+        let opened = mergify_core::env::testing::with_vars(
             [("DISPLAY", None::<&str>), ("WAYLAND_DISPLAY", None::<&str>)],
             || command_for("https://dashboard.mergify.com/device").is_ok(),
         );

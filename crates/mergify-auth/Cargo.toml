@@ -25,7 +25,6 @@ url = { workspace = true }
 mergify-core = { path = "../mergify-core", features = ["test-support"] }
 mergify-test-support = { path = "../mergify-test-support" }
 serde_json = { workspace = true }
-temp-env = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 wiremock = { workspace = true }
