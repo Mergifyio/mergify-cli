@@ -5,8 +5,8 @@
 //! `mergify_cli/ci/scopes/cli.py` and stay quiet when their
 //! respective environment knob is absent.
 
+use mergify_core::env;
 use std::collections::BTreeSet;
-use std::env;
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -64,7 +64,7 @@ pub fn maybe_write_buildkite_metadata(
     all: &BTreeSet<String>,
     hit: &BTreeSet<String>,
 ) -> Result<(), CliError> {
-    if env::var("BUILDKITE").as_deref() != Ok("true") {
+    if env::var("BUILDKITE").as_deref() != Some("true") {
         return Ok(());
     }
     let payload = scopes_dict_json(all, hit);
@@ -114,10 +114,7 @@ pub fn maybe_write_github_step_summary(
     all: &BTreeSet<String>,
     hit: &BTreeSet<String>,
 ) -> Result<(), CliError> {
-    let Some(path) = env::var("GITHUB_STEP_SUMMARY")
-        .ok()
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(path) = env::var_non_empty("GITHUB_STEP_SUMMARY") else {
         return Ok(());
     };
     let md = build_summary_markdown(refs, all, hit);
@@ -138,7 +135,7 @@ pub fn maybe_write_buildkite_annotation(
     all: &BTreeSet<String>,
     hit: &BTreeSet<String>,
 ) {
-    if env::var("BUILDKITE").as_deref() != Ok("true") {
+    if env::var("BUILDKITE").as_deref() != Some("true") {
         return;
     }
     let md = build_summary_markdown(refs, all, hit);

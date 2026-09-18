@@ -555,7 +555,8 @@ mod tests {
     use super::*;
     use crate::junit_process::junit::{Failure, ParseResult, TestCase, TestStatus};
     use crate::junit_process::spans::{UploadMetadata, build_traces};
-    use crate::testing::{incompressible, with_ci_env};
+    use crate::testing::incompressible;
+    use mergify_core::env;
     use std::collections::BTreeSet;
     use std::time::Duration;
 
@@ -595,7 +596,7 @@ mod tests {
             mergify_test_job_name: None,
             quarantined: BTreeSet::new(),
         };
-        with_ci_env(&[], || build_traces(&parsed, &metadata)).request
+        env::testing::with_no_vars(|| build_traces(&parsed, &metadata)).request
     }
 
     /// Collect the `test.case.name` of every case span in a chunk.

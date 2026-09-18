@@ -33,7 +33,7 @@
 //! ahead of the `<<`) would let the runner read the block as
 //! something else.
 
-use std::env;
+use mergify_core::env;
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write as _;
@@ -45,7 +45,7 @@ use mergify_core::CliError;
 /// output. No-op when the variable is unset or empty — i.e. anywhere
 /// but a GitHub Actions runner.
 pub(crate) fn append(outputs: &[(&'static str, &str)]) -> Result<(), CliError> {
-    let Some(path) = env::var("GITHUB_OUTPUT").ok().filter(|s| !s.is_empty()) else {
+    let Some(path) = env::var_non_empty("GITHUB_OUTPUT") else {
         return Ok(());
     };
     // Assembled first, then written once. Three `writeln!` calls on an
@@ -90,13 +90,13 @@ mod tests {
 
     #[test]
     fn append_is_a_noop_outside_github_actions() {
-        temp_env::with_var("GITHUB_OUTPUT", None::<&str>, || {
+        env::testing::with_var("GITHUB_OUTPUT", None::<&str>, || {
             append(&[("k", "v")]).unwrap();
         });
         // An empty value is treated the same as unset: the runner
         // exports `GITHUB_OUTPUT=` in some contexts, and an empty
         // path is not openable.
-        temp_env::with_var("GITHUB_OUTPUT", Some(""), || {
+        env::testing::with_var("GITHUB_OUTPUT", Some(""), || {
             append(&[("k", "v")]).unwrap();
         });
     }
@@ -105,7 +105,7 @@ mod tests {
     fn append_wraps_every_output_in_its_own_heredoc() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gha_output");
-        temp_env::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
+        env::testing::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
             append(&[("base", "cafef00d"), ("head", "0badc0de")]).unwrap();
         });
         let written = std::fs::read_to_string(&path).unwrap();
@@ -134,7 +134,7 @@ mod tests {
         // step output (MRGFY-8845).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gha_output");
-        temp_env::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
+        env::testing::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
             append(&[("base", "cafef00d\nevil=1")]).unwrap();
         });
         let written = std::fs::read_to_string(&path).unwrap();
@@ -152,7 +152,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gha_output");
         std::fs::write(&path, "earlier=1\n").unwrap();
-        temp_env::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
+        env::testing::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
             append(&[("base", "cafef00d")]).unwrap();
         });
         let written = std::fs::read_to_string(&path).unwrap();

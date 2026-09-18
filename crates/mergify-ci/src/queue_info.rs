@@ -109,6 +109,7 @@ fn write_github_output(metadata: &Value) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use mergify_core::ExitCode;
+    use mergify_core::env;
     use mergify_test_support::Captured;
     use serde_json::json;
 
@@ -141,7 +142,7 @@ mod tests {
     fn prints_whole_note_payload() {
         let note = || Some(sample());
         let mut cap = Captured::human();
-        temp_env::with_var("GITHUB_OUTPUT", None::<&str>, || {
+        env::testing::with_var("GITHUB_OUTPUT", None::<&str>, || {
             run_with_reader(&mut cap.output, &note).unwrap();
         });
         let stdout = cap.stdout();
@@ -161,7 +162,7 @@ mod tests {
         let gha_output = dir.path().join("gha_output");
         let note = || Some(sample());
         let mut cap = Captured::human();
-        temp_env::with_var("GITHUB_OUTPUT", Some(gha_output.to_str().unwrap()), || {
+        env::testing::with_var("GITHUB_OUTPUT", Some(gha_output.to_str().unwrap()), || {
             run_with_reader(&mut cap.output, &note).unwrap();
         });
         let written = std::fs::read_to_string(&gha_output).unwrap();
