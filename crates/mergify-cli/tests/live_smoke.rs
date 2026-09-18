@@ -109,8 +109,18 @@ fn cli_with(args: &[&str], extra_env: &[(&str, &str)], cwd: Option<&Path>) -> Cl
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_clear();
-    for (k, v) in std::env::vars() {
-        if !scrub.contains(k.as_str()) {
+    // The one place the whole environment is read on purpose: this
+    // builds the *child's* environment out of ours, minus the CI
+    // variables a runner exports. Not the process-wide read the lint
+    // is aimed at.
+    //
+    // `vars_os`, not `vars`: the latter panics on a single variable
+    // that is not valid Unicode, and one Latin-1 export on the host
+    // would take down every case here before it spawned anything.
+    // `Command::env` takes `OsStr`, so nothing is lost.
+    #[allow(clippy::disallowed_methods)]
+    for (k, v) in std::env::vars_os() {
+        if !k.to_str().is_some_and(|k| scrub.contains(k)) {
             cmd.env(k, v);
         }
     }
@@ -185,16 +195,21 @@ fn wait_timeout(
     }
 }
 
+/// A token from the environment, or `None` when it is unset, empty,
+/// or whitespace — the CI secret is empty on a fork's build, and a
+/// stray newline in a locally exported one would otherwise be sent
+/// as the bearer.
+fn non_blank_env(name: &str) -> Option<String> {
+    let value = mergify_core::env::var(name)?.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 /// Look up `LIVE_TEST_MERGIFY_TOKEN_CI`, the key scoped to what a
 /// CI job does. Empty / unset = skip the test (early return with
 /// `SKIP:` printed to stderr so the cargo test log shows what was
 /// skipped).
 fn live_token() -> Option<String> {
-    let token = std::env::var("LIVE_TEST_MERGIFY_TOKEN_CI")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    (!token.is_empty()).then_some(token)
+    non_blank_env("LIVE_TEST_MERGIFY_TOKEN_CI")
 }
 
 /// Token for endpoints the CI-scoped key cannot reach: the
@@ -210,11 +225,7 @@ fn live_token() -> Option<String> {
 /// details fetch. A rename or wire-format drift on that route
 /// still ships green.
 fn live_admin_token() -> Option<String> {
-    let token = std::env::var("LIVE_TEST_MERGIFY_TOKEN_ADMIN")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    (!token.is_empty()).then_some(token)
+    non_blank_env("LIVE_TEST_MERGIFY_TOKEN_ADMIN")
 }
 
 /// 8 random hex-ish chars, so concurrent or repeated runs never
