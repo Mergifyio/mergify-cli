@@ -6,7 +6,7 @@
 //! Rust commands are mirrored; the rest stays in Python until its
 //! command is ported.
 
-use std::env;
+use mergify_core::env;
 
 use mergify_core::CliError;
 use mergify_core::auth;
@@ -38,16 +38,16 @@ impl CIProvider {
 
 #[must_use]
 pub fn get_ci_provider() -> Option<CIProvider> {
-    if env::var("JENKINS_URL").is_ok_and(|v| !v.is_empty()) {
+    if env::var_non_empty("JENKINS_URL").is_some() {
         return Some(CIProvider::Jenkins);
     }
-    if env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+    if env::var("GITHUB_ACTIONS").as_deref() == Some("true") {
         return Some(CIProvider::GithubActions);
     }
-    if env::var("CIRCLECI").as_deref() == Ok("true") {
+    if env::var("CIRCLECI").as_deref() == Some("true") {
         return Some(CIProvider::CircleCi);
     }
-    if env::var("BUILDKITE").as_deref() == Ok("true") {
+    if env::var("BUILDKITE").as_deref() == Some("true") {
         return Some(CIProvider::Buildkite);
     }
     None
@@ -58,7 +58,7 @@ pub fn get_ci_provider() -> Option<CIProvider> {
 /// repository URL into ``owner/repo``. Returns ``None`` when the var
 /// is unset or the value doesn't parse.
 fn get_github_repository_from_env(env_name: &str) -> Option<String> {
-    let raw = env::var(env_name).ok()?;
+    let raw = env::var(env_name)?;
     parse_repository_url(&raw)
 }
 
@@ -151,7 +151,7 @@ pub fn split_owner_repo(value: &str) -> Result<(&str, &str), CliError> {
 #[must_use]
 pub fn get_github_repository() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => env::var("GITHUB_REPOSITORY").ok().filter(|s| !s.is_empty()),
+        CIProvider::GithubActions => env::var_non_empty("GITHUB_REPOSITORY"),
         CIProvider::CircleCi => get_github_repository_from_env("CIRCLE_REPOSITORY_URL"),
         CIProvider::Jenkins => get_github_repository_from_env("GIT_URL"),
         CIProvider::Buildkite => get_github_repository_from_env("BUILDKITE_REPO"),
@@ -199,9 +199,13 @@ pub fn get_github_pull_request_number() -> Result<Option<u64>, CliError> {
     match get_ci_provider() {
         Some(CIProvider::GithubActions) => read_github_event_pull_request_number(),
         Some(CIProvider::Buildkite) => match env::var("BUILDKITE_PULL_REQUEST") {
-            Ok(pr) if !pr.is_empty() && pr != "false" => pr.parse::<u64>().map(Some).map_err(|e| {
-                CliError::Configuration(format!("BUILDKITE_PULL_REQUEST is not an integer: {e}"))
-            }),
+            Some(pr) if !pr.is_empty() && pr != "false" => {
+                pr.parse::<u64>().map(Some).map_err(|e| {
+                    CliError::Configuration(format!(
+                        "BUILDKITE_PULL_REQUEST is not an integer: {e}"
+                    ))
+                })
+            }
             _ => Ok(None),
         },
         _ => Ok(None),
@@ -216,7 +220,7 @@ fn read_github_event_pull_request_number() -> Result<Option<u64>, CliError> {
     // [`read_github_event_pull_request_head_sha`]) stays lenient
     // because every one of its callers has somewhere to go without
     // an answer.
-    let Some(event_path) = env::var("GITHUB_EVENT_PATH").ok().filter(|s| !s.is_empty()) else {
+    let Some(event_path) = env::var_non_empty("GITHUB_EVENT_PATH") else {
         return Ok(None);
     };
     let content = match std::fs::read_to_string(&event_path) {
@@ -276,8 +280,8 @@ pub fn get_github_pull_request_head_sha() -> Option<String> {
         // Buildkite and CircleCI both build a pull request from its head
         // commit, so their revision var *is* that head (`git_refs` reads
         // `BUILDKITE_COMMIT` for the same purpose).
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_COMMIT"),
-        CIProvider::CircleCi => non_empty_env("CIRCLE_SHA1"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_COMMIT"),
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_SHA1"),
         CIProvider::Jenkins => None,
     }?;
     is_sha1_object_name(&sha).then_some(sha)
@@ -310,19 +314,18 @@ pub fn get_pipeline_name() -> Option<String> {
         CIProvider::Buildkite => "BUILDKITE_PIPELINE_SLUG",
         CIProvider::CircleCi => return None,
     };
-    non_empty_env(var)
+    env::var_non_empty(var)
 }
 
 /// `cicd.pipeline.task.name` — the job within a pipeline.
 #[must_use]
 pub fn get_job_name() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => non_empty_env("GITHUB_JOB"),
-        CIProvider::CircleCi => non_empty_env("CIRCLE_JOB"),
-        CIProvider::Jenkins => non_empty_env("JOB_NAME"),
-        CIProvider::Buildkite => {
-            non_empty_env("BUILDKITE_LABEL").or_else(|| non_empty_env("BUILDKITE_STEP_KEY"))
-        }
+        CIProvider::GithubActions => env::var_non_empty("GITHUB_JOB"),
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_JOB"),
+        CIProvider::Jenkins => env::var_non_empty("JOB_NAME"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_LABEL")
+            .or_else(|| env::var_non_empty("BUILDKITE_STEP_KEY")),
     }
 }
 
@@ -334,10 +337,10 @@ pub fn get_head_ref_name() -> Option<String> {
             // GitHub Actions sets `GITHUB_HEAD_REF` only on PR
             // events. Fall back to `GITHUB_REF_NAME` everywhere
             // else (the bare branch name, not `<pr#>/merge`).
-            non_empty_env("GITHUB_HEAD_REF").or_else(|| non_empty_env("GITHUB_REF_NAME"))
+            env::var_non_empty("GITHUB_HEAD_REF").or_else(|| env::var_non_empty("GITHUB_REF_NAME"))
         }
-        CIProvider::CircleCi => non_empty_env("CIRCLE_BRANCH"),
-        CIProvider::Jenkins => non_empty_env("GIT_BRANCH").map(|raw| {
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_BRANCH"),
+        CIProvider::Jenkins => env::var_non_empty("GIT_BRANCH").map(|raw| {
             // Jenkins' Git plugin sets `GIT_BRANCH` to
             // `<remote>/<branch>` (or `refs/heads/<branch>` when
             // the job's configured for a refspec). Strip the
@@ -350,7 +353,7 @@ pub fn get_head_ref_name() -> Option<String> {
             }
             raw
         }),
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_BRANCH"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_BRANCH"),
     }
 }
 
@@ -358,9 +361,9 @@ pub fn get_head_ref_name() -> Option<String> {
 #[must_use]
 pub fn get_base_ref_name() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => non_empty_env("GITHUB_BASE_REF"),
-        CIProvider::Jenkins => non_empty_env("CHANGE_TARGET"),
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_PULL_REQUEST_BASE_BRANCH"),
+        CIProvider::GithubActions => env::var_non_empty("GITHUB_BASE_REF"),
+        CIProvider::Jenkins => env::var_non_empty("CHANGE_TARGET"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_PULL_REQUEST_BASE_BRANCH"),
         CIProvider::CircleCi => None,
     }
 }
@@ -369,9 +372,9 @@ pub fn get_base_ref_name() -> Option<String> {
 #[must_use]
 pub fn get_cicd_pipeline_runner_name() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => non_empty_env("RUNNER_NAME"),
-        CIProvider::Jenkins => non_empty_env("NODE_NAME"),
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_AGENT_NAME"),
+        CIProvider::GithubActions => env::var_non_empty("RUNNER_NAME"),
+        CIProvider::Jenkins => env::var_non_empty("NODE_NAME"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_AGENT_NAME"),
         CIProvider::CircleCi => None,
     }
 }
@@ -382,10 +385,10 @@ pub fn get_cicd_pipeline_runner_name() -> Option<String> {
 #[must_use]
 pub fn get_cicd_pipeline_run_id() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => non_empty_env("GITHUB_RUN_ID"),
-        CIProvider::CircleCi => non_empty_env("CIRCLE_WORKFLOW_ID"),
-        CIProvider::Jenkins => non_empty_env("BUILD_ID"),
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_BUILD_ID"),
+        CIProvider::GithubActions => env::var_non_empty("GITHUB_RUN_ID"),
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_WORKFLOW_ID"),
+        CIProvider::Jenkins => env::var_non_empty("BUILD_ID"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_BUILD_ID"),
     }
 }
 
@@ -393,11 +396,11 @@ pub fn get_cicd_pipeline_run_id() -> Option<String> {
 #[must_use]
 pub fn get_cicd_pipeline_run_attempt() -> Option<u64> {
     match get_ci_provider()? {
-        CIProvider::GithubActions => non_empty_env("GITHUB_RUN_ATTEMPT")?.parse().ok(),
-        CIProvider::CircleCi => non_empty_env("CIRCLE_BUILD_NUM")?.parse().ok(),
+        CIProvider::GithubActions => env::var_non_empty("GITHUB_RUN_ATTEMPT")?.parse().ok(),
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_BUILD_NUM")?.parse().ok(),
         // Buildkite uses 0-indexed retries; add 1 so a fresh run
         // reads as attempt 1 (matching the GHA/CircleCI semantics).
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_RETRY_COUNT")?
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_RETRY_COUNT")?
             .parse::<u64>()
             .ok()
             .map(|n| n + 1),
@@ -409,7 +412,7 @@ pub fn get_cicd_pipeline_run_attempt() -> Option<u64> {
 #[must_use]
 pub fn get_cicd_pipeline_run_url() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_BUILD_URL"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_BUILD_URL"),
         _ => None,
     }
 }
@@ -420,9 +423,9 @@ pub fn get_cicd_pipeline_run_url() -> Option<String> {
 #[must_use]
 pub fn get_repository_url() -> Option<String> {
     match get_ci_provider()? {
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_REPO"),
-        CIProvider::CircleCi => non_empty_env("CIRCLE_REPOSITORY_URL"),
-        CIProvider::Jenkins => non_empty_env("GIT_URL"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_REPO"),
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_REPOSITORY_URL"),
+        CIProvider::Jenkins => env::var_non_empty("GIT_URL"),
         CIProvider::GithubActions => None,
     }
 }
@@ -444,19 +447,19 @@ pub fn get_repository_url() -> Option<String> {
 pub fn get_head_sha() -> Option<String> {
     match get_ci_provider()? {
         CIProvider::GithubActions => get_github_actions_head_sha(),
-        CIProvider::CircleCi => non_empty_env("CIRCLE_SHA1"),
-        CIProvider::Jenkins => non_empty_env("GIT_COMMIT"),
-        CIProvider::Buildkite => non_empty_env("BUILDKITE_COMMIT"),
+        CIProvider::CircleCi => env::var_non_empty("CIRCLE_SHA1"),
+        CIProvider::Jenkins => env::var_non_empty("GIT_COMMIT"),
+        CIProvider::Buildkite => env::var_non_empty("BUILDKITE_COMMIT"),
     }
 }
 
 fn get_github_actions_head_sha() -> Option<String> {
-    if env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request")
+    if env::var("GITHUB_EVENT_NAME").as_deref() == Some("pull_request")
         && let Some(sha) = read_github_event_pull_request_head_sha()
     {
         return Some(sha);
     }
-    non_empty_env("GITHUB_SHA")
+    env::var_non_empty("GITHUB_SHA")
 }
 
 /// Read `GITHUB_EVENT_PATH` and pluck the
@@ -475,16 +478,12 @@ fn read_github_event_pull_request_head_sha() -> Option<String> {
 }
 
 fn read_github_event_json() -> Option<serde_json::Value> {
-    let event_path = env::var("GITHUB_EVENT_PATH").ok()?;
+    let event_path = env::var("GITHUB_EVENT_PATH")?;
     if event_path.is_empty() {
         return None;
     }
     let content = std::fs::read_to_string(&event_path).ok()?;
     serde_json::from_str(&content).ok()
-}
-
-fn non_empty_env(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|s| !s.is_empty())
 }
 
 /// Branch the quarantine API should look up tests for. Mirrors
@@ -500,13 +499,12 @@ pub fn get_tests_target_branch() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::with_ci_env;
     use crate::testing::write_github_event;
 
     #[test]
     fn ci_provider_jenkins_takes_precedence() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("JENKINS_URL", Some("http://jenkins")),
                 ("GITHUB_ACTIONS", Some("true")),
                 ("CIRCLECI", Some("true")),
@@ -520,15 +518,15 @@ mod tests {
 
     #[test]
     fn ci_provider_returns_none_when_unset() {
-        with_ci_env(&[], || {
+        env::testing::with_no_vars(|| {
             assert_eq!(get_ci_provider(), None);
         });
     }
 
     #[test]
     fn github_repository_github_actions() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_REPOSITORY", Some("owner/repo")),
             ],
@@ -540,8 +538,8 @@ mod tests {
 
     #[test]
     fn github_repository_buildkite_ssh() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_REPO", Some("git@github.com:owner/repo.git")),
             ],
@@ -553,8 +551,8 @@ mod tests {
 
     #[test]
     fn github_repository_buildkite_https() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_REPO", Some("https://github.com/owner/repo")),
             ],
@@ -566,8 +564,8 @@ mod tests {
 
     #[test]
     fn github_repository_circleci() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("CIRCLECI", Some("true")),
                 (
                     "CIRCLE_REPOSITORY_URL",
@@ -582,8 +580,8 @@ mod tests {
 
     #[test]
     fn github_repository_jenkins() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("JENKINS_URL", Some("http://jenkins")),
                 ("GIT_URL", Some("https://github.com/owner/repo.git")),
             ],
@@ -595,15 +593,15 @@ mod tests {
 
     #[test]
     fn github_repository_returns_none_with_no_provider() {
-        with_ci_env(&[("GITHUB_REPOSITORY", Some("owner/repo"))], || {
+        env::testing::with_vars([("GITHUB_REPOSITORY", Some("owner/repo"))], || {
             assert_eq!(get_github_repository(), None);
         });
     }
 
     #[test]
     fn resolve_repository_prefers_flag_over_env() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_REPOSITORY", Some("env/env")),
             ],
@@ -619,8 +617,8 @@ mod tests {
         // used — even though this test runs inside a git checkout whose
         // `origin` would otherwise resolve to a different slug. Asserts
         // both the CI fallback and its precedence over the git remote.
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_REPOSITORY", Some("owner/repo")),
             ],
@@ -636,7 +634,7 @@ mod tests {
         // git-remote fallback (`parse_slug`) accepts multi-segment
         // paths that would inject extra request-path segments; an
         // explicit value exercises the same guard deterministically.
-        with_ci_env(&[], || {
+        env::testing::with_no_vars(|| {
             assert!(matches!(
                 resolve_repository(Some("owner/repo/extra")),
                 Err(CliError::Configuration(_))
@@ -652,8 +650,8 @@ mod tests {
 
     #[test]
     fn pull_request_buildkite_reads_env() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_PULL_REQUEST", Some("42")),
             ],
@@ -665,8 +663,8 @@ mod tests {
 
     #[test]
     fn pull_request_buildkite_returns_none_when_false() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_PULL_REQUEST", Some("false")),
             ],
@@ -678,14 +676,14 @@ mod tests {
 
     #[test]
     fn pull_request_buildkite_returns_none_when_unset() {
-        with_ci_env(&[("BUILDKITE", Some("true"))], || {
+        env::testing::with_vars([("BUILDKITE", Some("true"))], || {
             assert_eq!(get_github_pull_request_number().unwrap(), None);
         });
     }
 
     #[test]
     fn pull_request_returns_none_with_no_provider() {
-        with_ci_env(&[], || {
+        env::testing::with_no_vars(|| {
             assert_eq!(get_github_pull_request_number().unwrap(), None);
         });
     }
@@ -699,8 +697,8 @@ mod tests {
             serde_json::json!({ "pull_request": { "number": 123 } }).to_string(),
         )
         .unwrap();
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
             ],
@@ -714,8 +712,8 @@ mod tests {
     fn pull_request_github_actions_missing_event_file_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("nope.json");
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_PATH", Some(missing.to_str().unwrap())),
             ],
@@ -764,8 +762,8 @@ mod tests {
         );
 
         for event_name in ["pull_request", "pull_request_target"] {
-            with_ci_env(
-                &[
+            env::testing::with_vars(
+                [
                     ("GITHUB_ACTIONS", Some("true")),
                     ("GITHUB_EVENT_NAME", Some(event_name)),
                     ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
@@ -793,8 +791,8 @@ mod tests {
         // not.
         let tmp = tempfile::tempdir().unwrap();
         let event_path = write_github_event(tmp.path(), &serde_json::json!({}));
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_NAME", Some("push")),
                 ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
@@ -811,8 +809,8 @@ mod tests {
 
     #[test]
     fn pull_request_head_sha_uses_buildkite_commit() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("BUILDKITE", Some("true")),
                 (
                     "BUILDKITE_COMMIT",
@@ -832,8 +830,8 @@ mod tests {
     fn pull_request_head_sha_drops_a_value_that_is_not_a_revision() {
         // An unset `BUILDKITE_COMMIT` is what `git_refs` reads as the
         // literal `HEAD`; callers must not have to re-check the shape.
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_COMMIT", Some("HEAD")),
             ],
@@ -845,8 +843,8 @@ mod tests {
 
     #[test]
     fn pull_request_head_sha_uses_circle_sha1() {
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("CIRCLECI", Some("true")),
                 (
                     "CIRCLE_SHA1",
@@ -868,8 +866,8 @@ mod tests {
         // plugin builds a pull request merged into its target, which is
         // its default, and nothing distinguishes that from the head-only
         // configuration. No answer beats the wrong one.
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("JENKINS_URL", Some("http://ci")),
                 (
                     "GIT_COMMIT",
@@ -976,8 +974,8 @@ mod tests {
         )
         .unwrap();
 
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
@@ -1003,8 +1001,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let event_path = tmp.path().join("event.json");
         std::fs::write(&event_path, serde_json::json!({}).to_string()).unwrap();
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_NAME", Some("push")),
                 ("GITHUB_EVENT_PATH", Some(event_path.to_str().unwrap())),
@@ -1021,8 +1019,8 @@ mod tests {
         // Workflows without an event file (e.g. local
         // `act` runs) still set GITHUB_SHA — we must not regress
         // to `None` just because the JSON file isn't there.
-        with_ci_env(
-            &[
+        env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some("/this/path/does/not/exist")),

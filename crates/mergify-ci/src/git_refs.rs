@@ -27,7 +27,7 @@
 //! `BUILDKITE=true` it invokes `buildkite-agent meta-data set` for
 //! base/head/source.
 
-use std::env;
+use mergify_core::env;
 use std::io::Write;
 use std::process::Command;
 
@@ -152,7 +152,7 @@ pub fn detect(
     output: &mut dyn Output,
     notes_reader: NotesReader<'_>,
 ) -> Result<References, CliError> {
-    if env::var("BUILDKITE").as_deref() == Ok("true")
+    if env::var("BUILDKITE").as_deref() == Some("true")
         && let Some(refs) = detect_from_buildkite(notes_reader)
     {
         return Ok(refs);
@@ -188,16 +188,12 @@ pub fn detect(
 }
 
 fn detect_from_buildkite(notes_reader: NotesReader<'_>) -> Option<References> {
-    let pr = env::var("BUILDKITE_PULL_REQUEST").ok()?;
+    let pr = env::var("BUILDKITE_PULL_REQUEST")?;
     if pr.is_empty() || pr == "false" {
         return None;
     }
-    let commit = env::var("BUILDKITE_COMMIT")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "HEAD".to_string());
-    if let Ok(branch) = env::var("BUILDKITE_BRANCH")
-        && !branch.is_empty()
+    let commit = env::var_non_empty("BUILDKITE_COMMIT").unwrap_or_else(|| "HEAD".to_string());
+    if let Some(branch) = env::var_non_empty("BUILDKITE_BRANCH")
         && let Some(base) = notes_reader(&branch, &commit)
     {
         return Some(References {
@@ -206,9 +202,7 @@ fn detect_from_buildkite(notes_reader: NotesReader<'_>) -> Option<References> {
             source: ReferencesSource::MergeQueue,
         });
     }
-    let base_branch = env::var("BUILDKITE_PULL_REQUEST_BASE_BRANCH")
-        .ok()
-        .filter(|s| !s.is_empty())?;
+    let base_branch = env::var_non_empty("BUILDKITE_PULL_REQUEST_BASE_BRANCH")?;
     Some(References {
         base: Some(base_branch),
         head: commit,
@@ -471,7 +465,7 @@ fn write_github_output(refs: &References) -> Result<(), CliError> {
 }
 
 fn write_buildkite_metadata(refs: &References) -> std::io::Result<()> {
-    if env::var("BUILDKITE").as_deref() != Ok("true") {
+    if env::var("BUILDKITE").as_deref() != Some("true") {
         return Ok(());
     }
     if let Some(base) = refs.base.as_deref() {
@@ -582,10 +576,9 @@ mod tests {
     #[test]
     fn falls_back_to_head_pair_when_no_event() {
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars_unset(
-            ["GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "BUILDKITE"],
-            || detect(&mut cap.output, &no_notes).unwrap(),
-        );
+        // An empty overlay is the empty environment: no provider
+        // variable is visible, whatever the host exports.
+        let refs = env::testing::with_no_vars(|| detect(&mut cap.output, &no_notes).unwrap());
         assert_eq!(refs.base.as_deref(), Some("HEAD^"));
         assert_eq!(refs.head, "HEAD");
         assert_eq!(refs.source, ReferencesSource::FallbackLastCommit);
@@ -604,7 +597,7 @@ mod tests {
             }),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -625,7 +618,7 @@ mod tests {
             &serde_json::json!({"before": "old-sha", "after": "new-sha"}),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("push")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -652,7 +645,7 @@ mod tests {
             }),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -688,7 +681,7 @@ mod tests {
             }),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -719,7 +712,7 @@ mod tests {
             }),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -757,7 +750,7 @@ mod tests {
             }),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -793,7 +786,7 @@ mod tests {
             }),
         );
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -834,7 +827,7 @@ mod tests {
             }
         };
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -853,7 +846,7 @@ mod tests {
             &serde_json::json!({"pull_request": {"head": {"sha": "h"}}}),
         );
         let mut cap = Captured::human();
-        let err = temp_env::with_vars(
+        let err = env::testing::with_vars(
             [
                 ("GITHUB_EVENT_NAME", Some("pull_request")),
                 ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
@@ -867,7 +860,7 @@ mod tests {
     #[test]
     fn detects_buildkite_pull_request() {
         let mut cap = Captured::human();
-        let refs = temp_env::with_vars(
+        let refs = env::testing::with_vars(
             [
                 ("BUILDKITE", Some("true")),
                 ("BUILDKITE_PULL_REQUEST", Some("42")),
@@ -966,7 +959,7 @@ mod tests {
             head: NOTE_BASE.into(),
             source: ReferencesSource::MergeQueue,
         };
-        temp_env::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
+        env::testing::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
             write_github_output(&refs).unwrap();
         });
         let written = std::fs::read_to_string(&path).unwrap();

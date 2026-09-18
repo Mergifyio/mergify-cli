@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use mergify_core::auth;
-use mergify_core::env::var_non_empty;
+use mergify_core::env;
 use mergify_core::{CliError, ExitCode, Output};
 
 use crate::detector;
@@ -164,7 +164,7 @@ async fn run_with_cap(
     let metadata = UploadMetadata {
         test_framework: opts.test_framework.map(str::to_string),
         test_language: opts.test_language.map(str::to_string),
-        mergify_test_job_name: var_non_empty("MERGIFY_TEST_JOB_NAME"),
+        mergify_test_job_name: env::var_non_empty("MERGIFY_TEST_JOB_NAME"),
         quarantined: quarantine_result
             .quarantined
             .iter()
@@ -337,7 +337,7 @@ fn resolve_test_exit_code(explicit: Option<i32>) -> Result<Option<i32>, CliError
     if explicit.is_some() {
         return Ok(explicit);
     }
-    let Some(raw) = var_non_empty("MERGIFY_TEST_EXIT_CODE") else {
+    let Some(raw) = env::var_non_empty("MERGIFY_TEST_EXIT_CODE") else {
         return Ok(None);
     };
     raw.parse::<i32>().map(Some).map_err(|e| {
@@ -606,10 +606,7 @@ fn upload_status_label(
 /// on stderr instead of erroring.
 fn maybe_write_github_output(status: &str) {
     use std::io::Write as _;
-    let Some(path) = std::env::var("GITHUB_OUTPUT")
-        .ok()
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(path) = env::var_non_empty("GITHUB_OUTPUT") else {
         return;
     };
     let result = std::fs::OpenOptions::new()
@@ -634,7 +631,7 @@ fn maybe_write_github_output(status: &str) {
 /// they're permanent misconfiguration; transient failures (5xx,
 /// 408, 429, network) as warnings.
 fn gha_upload_annotation(error: &upload::UploadError) -> Option<String> {
-    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+    if env::var("GITHUB_ACTIONS").as_deref() != Some("true") {
         return None;
     }
     Some(if error.is_rejection() {
@@ -659,7 +656,7 @@ fn gha_upload_annotation(error: &upload::UploadError) -> Option<String> {
 /// summary / checks UI — otherwise it only appears in the human
 /// report prose. Never an error: the CI outcome is unaffected.
 fn gha_oversized_annotation(names: &[String]) -> Option<String> {
-    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+    if env::var("GITHUB_ACTIONS").as_deref() != Some("true") {
         return None;
     }
     Some(format!(
@@ -890,7 +887,7 @@ mod tests {
         // `gha-mergify-ci` action uses when no runner exit code is
         // available. Pin so a future refactor can't accidentally
         // invert the precedence.
-        let got = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some("42"), || {
+        let got = env::testing::with_var("MERGIFY_TEST_EXIT_CODE", Some("42"), || {
             resolve_test_exit_code(Some(0)).unwrap()
         });
         assert_eq!(got, Some(0));
@@ -909,7 +906,7 @@ mod tests {
         // fix drops the clap `env` hook and routes the env var
         // through here — empty must collapse to `None`, the
         // same shape no env var would produce.
-        let got = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some(""), || {
+        let got = env::testing::with_var("MERGIFY_TEST_EXIT_CODE", Some(""), || {
             resolve_test_exit_code(None).unwrap()
         });
         assert_eq!(got, None);
@@ -917,7 +914,7 @@ mod tests {
 
     #[test]
     fn resolve_test_exit_code_parses_non_empty_env_var() {
-        let got = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some("7"), || {
+        let got = env::testing::with_var("MERGIFY_TEST_EXIT_CODE", Some("7"), || {
             resolve_test_exit_code(None).unwrap()
         });
         assert_eq!(got, Some(7));
@@ -929,7 +926,7 @@ mod tests {
         // real misconfiguration, not a "no value" sentinel —
         // error loudly with the offending value in the message so
         // the user can spot the typo without having to dig.
-        let err = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some("not-an-int"), || {
+        let err = env::testing::with_var("MERGIFY_TEST_EXIT_CODE", Some("not-an-int"), || {
             resolve_test_exit_code(None).unwrap_err()
         });
         let msg = err.to_string();
@@ -1098,13 +1095,13 @@ mod tests {
     #[test]
     fn gha_oversized_annotation_lists_names_only_on_gha() {
         // Outside GitHub Actions: no annotation.
-        let none = temp_env::with_var("GITHUB_ACTIONS", None::<&str>, || {
+        let none = env::testing::with_var("GITHUB_ACTIONS", None::<&str>, || {
             gha_oversized_annotation(&["a.big".to_string()])
         });
         assert!(none.is_none());
         // On GitHub Actions: a warning naming the dropped tests, never
         // an error (CI outcome is unaffected).
-        let ann = temp_env::with_var("GITHUB_ACTIONS", Some("true"), || {
+        let ann = env::testing::with_var("GITHUB_ACTIONS", Some("true"), || {
             gha_oversized_annotation(&["a.big".to_string(), "b.huge".to_string()])
         })
         .unwrap();
@@ -1134,7 +1131,7 @@ mod tests {
         write_oversized_cases(&mut report, std::slice::from_ref(&long));
         assert!(!report.contains(&long), "the report printed the whole name");
 
-        let ann = temp_env::with_var("GITHUB_ACTIONS", Some("true"), || {
+        let ann = env::testing::with_var("GITHUB_ACTIONS", Some("true"), || {
             gha_oversized_annotation(std::slice::from_ref(&long))
         })
         .unwrap();
@@ -1161,7 +1158,6 @@ mod tests {
     // banner text drifting).
     mod orchestrator {
         use super::*;
-        use crate::testing::with_ci_env_async;
         use mergify_core::{OutputMode, StdioOutput};
         use std::sync::{Arc, Mutex};
         use wiremock::matchers::{method, path};
@@ -1240,7 +1236,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1281,7 +1277,7 @@ mod tests {
             let api_url = server.uri();
             let mut cap = captured();
             let cap_bytes = 4 * 1024;
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1422,8 +1418,8 @@ mod tests {
             // checks survive stamping. With the environment scrubbed
             // it would only ever emit `test.run.id`, and the check
             // would pass on an empty resource.
-            with_ci_env_async(
-                &[
+            env::testing::with_vars_async(
+                [
                     ("GITHUB_ACTIONS", Some("true")),
                     ("GITHUB_REPOSITORY", Some("owner/repo")),
                     (
@@ -1525,7 +1521,7 @@ mod tests {
             let file = write_xml(&tmp, "report.xml", &incompressible_failures_xml(30, 2048));
             let api_url = server.uri();
             let mut cap = captured();
-            with_ci_env_async(&[], async {
+            env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1566,7 +1562,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            with_ci_env_async(&[], async {
+            env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1604,7 +1600,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            with_ci_env_async(&[], async {
+            env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1640,7 +1636,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            with_ci_env_async(&[], async {
+            env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1732,7 +1728,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            with_ci_env_async(&[], async {
+            env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1761,7 +1757,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            with_ci_env_async(&[], async {
+            env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1829,8 +1825,8 @@ mod tests {
             let output_path = github_output.to_string_lossy().into_owned();
             let mut cap = captured();
             // 64-byte cap: smaller than any single case's gzipped span.
-            let code = with_ci_env_async(
-                &[
+            let code = env::testing::with_vars_async(
+                [
                     ("GITHUB_ACTIONS", Some("true")),
                     ("GITHUB_OUTPUT", Some(&output_path)),
                 ],
@@ -1872,7 +1868,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1908,7 +1904,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -1952,7 +1948,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -2011,8 +2007,8 @@ mod tests {
         ) -> (ExitCode, String) {
             let mut cap = captured();
             let output_path = github_output.to_string_lossy().into_owned();
-            let code = with_ci_env_async(
-                &[
+            let code = env::testing::with_vars_async(
+                [
                     ("GITHUB_ACTIONS", Some("true")),
                     ("GITHUB_OUTPUT", Some(&output_path)),
                 ],
@@ -2131,7 +2127,7 @@ mod tests {
 
             let api_url = server.uri();
             let mut cap = captured();
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some(&api_url),
                     token: Some("secret"),
@@ -2179,7 +2175,7 @@ mod tests {
             // No mock server: if the orchestrator skips the early
             // exit and tries to reach the API, the bogus URL will
             // fail the test loudly.
-            let code = with_ci_env_async(&[], async {
+            let code = env::testing::with_no_vars_async(async {
                 let opts = JunitProcessOptions {
                     api_url: Some("http://127.0.0.1:1"),
                     token: Some("secret"),

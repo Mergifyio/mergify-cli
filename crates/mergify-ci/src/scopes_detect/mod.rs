@@ -25,14 +25,13 @@ pub mod config;
 pub mod matching;
 pub mod outputs;
 
-use std::env;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 use mergify_core::CliError;
 use mergify_core::Output;
-use mergify_core::env::var_non_empty;
+use mergify_core::env;
 use serde::Serialize;
 
 use crate::git_refs;
@@ -128,7 +127,7 @@ fn resolve_config_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
             path.display(),
         )));
     }
-    if let Some(env_path) = var_non_empty("MERGIFY_CONFIG_PATH") {
+    if let Some(env_path) = env::var_non_empty("MERGIFY_CONFIG_PATH") {
         let p = PathBuf::from(&env_path);
         if !p.is_file() {
             return Err(CliError::Configuration(format!(
@@ -240,7 +239,7 @@ fn emit_scopes_listing(
     by_scope: &std::collections::BTreeMap<String, Vec<String>>,
     output: &mut dyn Output,
 ) -> Result<(), CliError> {
-    let actions_debug = env::var("ACTIONS_STEP_DEBUG").as_deref() == Ok("true");
+    let actions_debug = env::var("ACTIONS_STEP_DEBUG").as_deref() == Some("true");
     if hit.is_empty() {
         output.status("No scopes matched.")?;
         return Ok(());
@@ -289,7 +288,6 @@ fn write_detected_scopes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::with_ci_env;
     use mergify_test_support::Captured;
 
     #[test]
@@ -330,7 +328,7 @@ mod tests {
         // so this function owns the lookup — and the empty branch
         // here must fall through to autodetect rather than report
         // a malformed env var.
-        let result = temp_env::with_var("MERGIFY_CONFIG_PATH", Some(""), || {
+        let result = env::testing::with_var("MERGIFY_CONFIG_PATH", Some(""), || {
             resolve_config_path(None)
         });
         // Either autodetect found a real config (cargo test runs
@@ -354,9 +352,10 @@ mod tests {
         // value that doesn't exist, the error must name the env
         // var + the bogus path so the user can spot the typo
         // without having to dig.
-        let err = temp_env::with_var("MERGIFY_CONFIG_PATH", Some("/no/such/.mergify.yml"), || {
-            resolve_config_path(None).unwrap_err()
-        });
+        let err =
+            env::testing::with_var("MERGIFY_CONFIG_PATH", Some("/no/such/.mergify.yml"), || {
+                resolve_config_path(None).unwrap_err()
+            });
         let msg = err.to_string();
         assert!(msg.contains("MERGIFY_CONFIG_PATH="), "got: {msg}");
         assert!(msg.contains("/no/such/.mergify.yml"), "got: {msg}");
@@ -402,11 +401,10 @@ mod tests {
         // "select all scopes" branch and reports every
         // configured scope as touched. No git operations.
         //
-        // The `with_ci_env` wrapper scrubs `GITHUB_OUTPUT` so a
-        // GHA runner executing the suite doesn't see `run()`
-        // append a heredoc to its real step-output file (which
-        // would break the runner step with "Matching delimiter
-        // not found").
+        // The empty overlay hides `GITHUB_OUTPUT` so a GHA runner
+        // executing the suite doesn't see `run()` append a heredoc
+        // to its real step-output file (which would break the
+        // runner step with "Matching delimiter not found").
         let tmp = tempfile::tempdir().unwrap();
         let cfg = tmp.path().join("mergify.yml");
         std::fs::write(
@@ -415,7 +413,7 @@ mod tests {
         )
         .unwrap();
         let mut cap = Captured::human();
-        with_ci_env(&[], || {
+        env::testing::with_no_vars(|| {
             run(
                 ScopesOptions {
                     config: Some(&cfg),
@@ -444,7 +442,7 @@ mod tests {
         let cfg = tmp.path().join("mergify.yml");
         std::fs::write(&cfg, "scopes:\n  source:\n    manual: null\n").unwrap();
         let mut cap = Captured::human();
-        let err = with_ci_env(&[], || {
+        let err = env::testing::with_no_vars(|| {
             run(
                 ScopesOptions {
                     config: Some(&cfg),
@@ -475,7 +473,7 @@ mod tests {
         .unwrap();
         let out = tmp.path().join("detected.json");
         let mut cap = Captured::human();
-        with_ci_env(&[], || {
+        env::testing::with_no_vars(|| {
             run(
                 ScopesOptions {
                     config: Some(&cfg),

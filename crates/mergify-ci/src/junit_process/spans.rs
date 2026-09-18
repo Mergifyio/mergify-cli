@@ -446,9 +446,10 @@ impl RandomBytes for OsRandom {
 
 #[cfg(test)]
 mod tests {
+    use mergify_core::env;
+
     use super::*;
     use crate::junit_process::junit::Failure;
-    use crate::testing::with_ci_env;
 
     /// Deterministic byte source for tests. Bytes are consumed
     /// in order. Tests provide enough buffer for the spans they
@@ -538,7 +539,8 @@ mod tests {
 
         let now: u64 = 1_700_000_000_000_000_000;
         let metadata = UploadMetadata::default();
-        let built = with_ci_env(&[], || build_traces_with(&parsed, &metadata, now, &mut rng));
+        let built =
+            env::testing::with_no_vars(|| build_traces_with(&parsed, &metadata, now, &mut rng));
 
         assert_eq!(built.oversized_case_names, vec![oversized.clone()]);
 
@@ -589,7 +591,7 @@ mod tests {
         bytes.extend(std::iter::repeat_n(0x55, 8));
         let mut rng = FixedRng::new(bytes);
 
-        let built = with_ci_env(&[], || {
+        let built = env::testing::with_no_vars(|| {
             build_traces_with(
                 &parsed,
                 &UploadMetadata::default(),
@@ -618,7 +620,7 @@ mod tests {
 
         let now: u64 = 1_700_000_000_000_000_000;
         let metadata = UploadMetadata::default();
-        let built = with_ci_env(&[], || {
+        let built = env::testing::with_no_vars(|| {
             build_traces_with(&sample_parsed(), &metadata, now, &mut rng)
         });
 
@@ -661,7 +663,7 @@ mod tests {
         let mut rng = FixedRng::new(vec![0xFF; 256]);
         let now: u64 = 1_700_000_000_000_000_000;
         let metadata = UploadMetadata::default();
-        let built = with_ci_env(&[], || {
+        let built = env::testing::with_no_vars(|| {
             build_traces_with(&sample_parsed(), &metadata, now, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
@@ -696,7 +698,7 @@ mod tests {
     fn case_attributes_include_file_line_and_code_function() {
         let mut rng = FixedRng::new(vec![0xFF; 256]);
         let metadata = UploadMetadata::default();
-        let built = with_ci_env(&[], || {
+        let built = env::testing::with_no_vars(|| {
             build_traces_with(&sample_parsed(), &metadata, 0, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
@@ -737,8 +739,8 @@ mod tests {
     fn resource_attributes_carry_ci_env_when_set() {
         let mut rng = FixedRng::new(vec![0xFF; 256]);
         let metadata = UploadMetadata::default();
-        let built = with_ci_env(
-            &[
+        let built = env::testing::with_vars(
+            [
                 ("GITHUB_ACTIONS", Some("true")),
                 ("GITHUB_REPOSITORY", Some("owner/repo")),
                 ("GITHUB_WORKFLOW", Some("CI")),
@@ -795,7 +797,7 @@ mod tests {
             mergify_test_job_name: None,
             quarantined: BTreeSet::new(),
         };
-        let built = with_ci_env(&[], || {
+        let built = env::testing::with_no_vars(|| {
             build_traces_with(&sample_parsed(), &metadata, 0, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
@@ -822,7 +824,7 @@ mod tests {
         let mut rng = FixedRng::new(vec![0xFF; 256]);
         let now: u64 = 1_000_000_000_000_000_000;
         let metadata = UploadMetadata::default();
-        let built = with_ci_env(&[], || {
+        let built = env::testing::with_no_vars(|| {
             build_traces_with(&sample_parsed(), &metadata, now, &mut rng)
         });
         let spans = &built.request.resource_spans[0].scope_spans[0].spans;
