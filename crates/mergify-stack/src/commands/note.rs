@@ -16,6 +16,7 @@ use std::process::Command;
 use crate::git::{resolve_repo_toplevel, run_git_capture as run_git};
 
 use mergify_core::CliError;
+use mergify_core::env;
 
 use crate::change_id;
 use crate::local_commits::{self, STACK_NOTES_REF};
@@ -212,9 +213,9 @@ fn read_note_from_editor() -> Result<String, CliError> {
     // Treat empty env-var values as unset so `GIT_EDITOR=` falls
     // through to `$VISUAL` / `$EDITOR` / `vi` instead of spawning
     // an empty command. Matches Python's `or`-chain semantics.
-    let editor = non_empty_env("GIT_EDITOR")
-        .or_else(|| non_empty_env("VISUAL"))
-        .or_else(|| non_empty_env("EDITOR"))
+    let editor = env::var_os_non_empty("GIT_EDITOR")
+        .or_else(|| env::var_os_non_empty("VISUAL"))
+        .or_else(|| env::var_os_non_empty("EDITOR"))
         .unwrap_or_else(|| OsString::from("vi"));
 
     let mut tmp = tempfile::Builder::new()
@@ -259,14 +260,6 @@ fn read_note_from_editor() -> Result<String, CliError> {
         ));
     }
     Ok(cleaned)
-}
-
-/// Read an env var, returning `None` for both unset *and* empty.
-/// `OsString::is_empty` covers both `KEY` being absent and
-/// `KEY=` exporting an empty string (which Python's `or` chain
-/// in `_read_note_from_editor` also treats as unset).
-fn non_empty_env(name: &str) -> Option<OsString> {
-    std::env::var_os(name).filter(|v| !v.is_empty())
 }
 
 #[cfg(unix)]
@@ -454,7 +447,7 @@ mod tests {
         .unwrap();
         set_executable(&editor);
 
-        temp_env::with_var("GIT_EDITOR", Some(editor.to_str().unwrap()), || {
+        env::testing::with_var("GIT_EDITOR", Some(editor.to_str().unwrap()), || {
             run(Some(dir.path()), None, Action::FromEditor).unwrap();
         });
         assert_eq!(
@@ -479,7 +472,7 @@ mod tests {
         .unwrap();
         set_executable(&editor);
 
-        let err = temp_env::with_var("GIT_EDITOR", Some(editor.to_str().unwrap()), || {
+        let err = env::testing::with_var("GIT_EDITOR", Some(editor.to_str().unwrap()), || {
             run(Some(dir.path()), None, Action::FromEditor).unwrap_err()
         });
         match err {
@@ -500,7 +493,7 @@ mod tests {
         std::fs::write(&editor, "#!/bin/sh\nprintf 'from VISUAL\\n' > \"$1\"\n").unwrap();
         set_executable(&editor);
 
-        temp_env::with_vars(
+        env::testing::with_vars(
             [
                 ("GIT_EDITOR", Some(String::new())),
                 ("VISUAL", Some(editor.to_str().unwrap().to_string())),

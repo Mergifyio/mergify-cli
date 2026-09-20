@@ -7,16 +7,19 @@
 //! is sporadic `git <foo> failed` panics in otherwise-pure tests
 //! that just happen to spawn git as a side effect.
 //!
-//! The workspace forbids `unsafe_code`, so we can't `set_var` at
-//! process start. Instead, [`isolated_git`] returns a fresh
-//! `Command` with `GIT_CONFIG_GLOBAL=/dev/null` and
-//! `GIT_CONFIG_NOSYSTEM=1` pre-applied; child git invocations
-//! made *by the production code under test* will inherit these
-//! when the parent test set them via the same helper before any
-//! production call — i.e. wire `isolated_git` through the test
-//! fixtures that build the repository, and the production code's
-//! own `git` children pick up the same env via inheritance from
-//! the spawned-fixture parent process (us).
+//! Nothing here mutates the process environment — `mergify_core::env`
+//! says why, and the rest of the workspace is being moved onto the
+//! same footing — so this cannot be a `set_var` at process start. Instead [`isolated_git`] returns a fresh `Command`
+//! with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`
+//! already on it. `Command::env` sets the *child's* environment, so
+//! each git invocation carries the isolation itself; nothing is
+//! shared and nothing has to be restored.
+//!
+//! It only covers the git commands that go through it. A `git` child
+//! spawned by production code under test builds its own environment
+//! from ours and sees neither these variables nor a test overlay, so
+//! a fixture that needs isolation must create its repository state
+//! through this helper.
 //!
 //! Practically: call [`isolated_git`] wherever the tests used to
 //! call `std::process::Command::new("git")`.
