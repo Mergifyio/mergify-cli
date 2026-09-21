@@ -1,0 +1,27 @@
+# The process environment is read through `mergify_core::env` and
+# written nowhere. `crates/mergify-core/src/env.rs` carries the
+# argument; these entries carry the replacement.
+#
+# `set_var` / `remove_var` are `unsafe fn`, so the workspace's
+# `unsafe_code = "forbid"` is what actually stops a mutation — these
+# two lines are documentation, and a contributor who relaxes that lint
+# is unlocking more than they think. `set_current_dir` is the safe
+# process-global mutator, banned for the same reason: it races every
+# relative path in every other test thread.
+#
+# `std::env::args` and `current_exe` are not the environment and are
+# not listed. `temp_dir` is a `getenv` for `TMPDIR` and is unlisted
+# for a different reason: it takes no variable name, so there is
+# nothing to route through the funnel, and it is a read, which was
+# never the unsound half. A build script reads cargo's environment,
+# not the process's, and cannot depend on `mergify-core`;
+# `crates/mergify-cli/build.rs` allows the lint in place.
+disallowed-methods = [
+    { path = "std::env::var", reason = "read it through `mergify_core::env::var` / `var_non_empty`" },
+    { path = "std::env::var_os", reason = "read it through `mergify_core::env::var_os` / `var_os_non_empty`" },
+    { path = "std::env::vars", reason = "read it through `mergify_core::env`; iterating the whole environment is only right when building a child process's, and needs an explicit allow" },
+    { path = "std::env::vars_os", reason = "read it through `mergify_core::env`; iterating the whole environment is only right when building a child process's, and needs an explicit allow" },
+    { path = "std::env::set_var", reason = "nothing mutates the process environment; give the code under test one with `mergify_core::env::testing::with_vars`" },
+    { path = "std::env::remove_var", reason = "nothing mutates the process environment; give the code under test one with `mergify_core::env::testing::with_vars`" },
+    { path = "std::env::set_current_dir", reason = "process-global, so it races every relative path in every other test thread; take the directory as a parameter" },
+]

@@ -14,6 +14,11 @@ fn main() {
     // Rebuild when the env var changes so a release rebuild after a
     // dev build actually picks up the new value.
     println!("cargo:rerun-if-env-changed=MERGIFY_RELEASE_VERSION");
+    // A build script's environment is cargo's, handed to it for this
+    // one invocation — not the process environment `clippy.toml`
+    // guards, and not reachable through `mergify_core::env`, which a
+    // build script cannot depend on.
+    #[allow(clippy::disallowed_methods)]
     let resolved = std::env::var("MERGIFY_RELEASE_VERSION")
         .ok()
         .filter(|v| !v.is_empty())

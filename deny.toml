@@ -16,6 +16,15 @@ multiple-versions = "warn"
 # requirement and would register as wildcards, so exempt them.
 wildcards = "deny"
 allow-wildcard-paths = true
+# `unsafe_code = "forbid"` stops our own code calling `setenv`, but it
+# does not reach into a dependency that wraps it in a safe API. This
+# blocks the one we used. It is a crate name, not a property —
+# cargo-deny cannot express "nothing that calls setenv" — so a
+# different wrapper would still get through; the rule itself lives in
+# AGENTS.md.
+deny = [
+    { crate = "temp-env", reason = "use mergify_core::env::testing::with_vars — see crates/mergify-core/src/env.rs" },
+]
 
 [licenses]
 # SPDX identifiers we accept for anything we redistribute. Keep this
