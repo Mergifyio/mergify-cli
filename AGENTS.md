@@ -191,8 +191,27 @@ A change is not done without a test. Use the highest-fidelity tool per layer.
   which masks the empty-body bug the rule exists to catch.
 - Pin exact exit codes for the `CliError` contract; add a regression test for
   every fixed failure mode (exit code, message, missing-field tolerance).
-- Use `temp_env::with_var` for env-dependent tests — never the unsound
-  process-global `std::env::set_var` (`unsafe_code = "forbid"` bans it anyway).
+- **Nothing mutates the process environment, tests included.** Read it through
+  `mergify_core::env` (`var`, `var_os`, `var_non_empty`); give the code under
+  test one with `mergify_core::env::testing::with_vars`, which installs a
+  thread-local overlay and touches no global state. `clippy.toml` disallows
+  `std::env::var*`, `set_var` and `remove_var`, and `deny.toml` bans
+  `temp-env`.
+
+  Why, in one line: `setenv` racing `getenv` on another thread is a
+  use-after-free, libtest runs tests on many threads, and the concurrent
+  reader is usually not even ours (`std::env::temp_dir` behind every
+  `tempfile::tempdir()`, `Command::spawn` building a child's environment).
+  `crates/mergify-core/src/env.rs` carries the full argument and the
+  overlay's limits — read it before reaching for an exception.
+
+  Two consequences worth knowing before you write the test. An overlay **is**
+  the environment while installed, so a variable you do not list reads as
+  unset whatever the host exports: name what the case is about and nothing
+  else, and it behaves the same on a laptop and on a CI runner. And it covers
+  our reads only — a dependency, or a process you spawn, still sees the real
+  environment. Giving a **child** a variable is a different job with a
+  different tool, `Command::env`, and is untouched by any of this.
 
 ## Dependencies
 
