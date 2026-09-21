@@ -1,0 +1,1 @@
+review: run the comment removal on a registered stack that has shrunk to one live PR (the count gate now guards only the fallback upsert), and fix a typo the CI typo checker flagged
