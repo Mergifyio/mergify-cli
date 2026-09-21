@@ -1,0 +1,6 @@
+Revision history for #1851:
+
+rev 2 (content) 2026-09-21 11:08 UTC — review: run the comment removal on a registered stack that has shrunk to one live PR (the count gate now guards only the fallback upsert), and fix a typo the CI typo checker flagged
+rev 1 (initial) 2026-09-21 11:08 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":1851,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"db4e03d96a3ea37f46df0c341123238b549db305","timestamp_iso":"2026-09-21T11:08:59Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"content","old_sha":"db4e03d96a3ea37f46df0c341123238b549db305","new_sha":"2e66ef54c97bc7e0274307a54f7513b917cb7217","timestamp_iso":"2026-09-21T11:08:59Z","reason":"review: run the comment removal on a registered stack that has shrunk to one live PR (the count gate now guards only the fallback upsert), and fix a typo the CI typo checker flagged","replay_sha":null,"compare_url":"https://github.com/Mergifyio/mergify-cli/compare/db4e03d96a3ea37f46df0c341123238b549db305...2e66ef54c97bc7e0274307a54f7513b917cb7217"}]} -->
