@@ -99,10 +99,10 @@ default, so GitHub renders it as a stack. Opt out per invocation with
 `--no-github-native`, or per repo with
 `git config mergify-cli.stack-github-native false`.
 
-Change-Ids, branch layout, stack comments and revision history are unchanged,
-and it degrades quietly: where the API isn't available (older GitHub
-Enterprise, a repo without the feature) the push reports
-`not registered on GitHub` and succeeds exactly as it would have.
+Change-Ids, branch layout and revision history are unchanged, and it degrades
+quietly: where the API isn't available (older GitHub Enterprise, a repo without
+the feature) the push reports `not registered on GitHub` and succeeds exactly
+as it would have.
 
 Three things to know:
 
@@ -116,6 +116,13 @@ Three things to know:
   written back in the same push and Mergify keeps ordering the stack. Your
   commit messages are never touched either way — the header only ever existed
   in the rendered PR description.
+- **The stack comment goes away too.** GitHub lists a registered stack's
+  members on the pull request page, so the CLI stops posting the sticky
+  "This pull request is part of a Mergify stack" table, and deletes the one an
+  older push left on each open member. Keyed off the registration the same way
+  the header is: a push that degrades keeps posting and updating the table,
+  because nothing else would be showing you the stack. The **revision history**
+  comment is untouched either way — GitHub renders nothing like it.
 - **Registering changes how the PRs merge.** While a stack is registered,
   GitHub refuses the classic merge endpoint
   (`PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` → 403) for
