@@ -1,22 +1,30 @@
-//! Per-PR upserters for the two sticky comments `stack push`
+//! Per-PR writers for the two sticky comments `stack push`
 //! maintains:
 //!
 //! - [`update_stack_comment_for_pull`] — the "this PR is part
 //!   of a stack" table (see [`crate::stack_comment`]). Skipped
 //!   when the stack has only one PR — a single-row table would
-//!   be noise.
+//!   be noise. Only reached by a push whose stack GitHub did not
+//!   register: a registered stack has GitHub's own UI listing
+//!   its members, and gets [`remove_stack_comment_for_pull`]
+//!   instead.
+//! - [`remove_stack_comment_for_pull`] — the same comment's
+//!   teardown, for the stacks GitHub now describes itself.
 //! - [`upsert_revision_history_comment`] — the "Revision
 //!   history" table (see [`crate::revision_history`]). The
 //!   revision-history body is pre-rendered by the push
 //!   orchestrator from the git-notes history (see
 //!   [`crate::revision_note`]); this module only diffs the
 //!   rendered body against the existing comment and writes it.
+//!   GitHub renders nothing like it, so nothing here replaces
+//!   it.
 //!
-//! Both walk the issue comments once, match on the header
+//! All three walk the issue comments once and match on the header
 //! (`StackComment::is_stack_comment` / `RevisionHistoryComment::
-//! is_revision_comment`), then choose between PATCH (existing
-//! found, body changed), no-op (existing found, body unchanged),
-//! and POST (no existing).
+//! is_revision_comment`). The upserters then choose between PATCH
+//! (existing found, body changed), no-op (existing found, body
+//! unchanged), and POST (no existing); the remover issues a DELETE
+//! for what it finds.
 //!
 //! Ported from
 //! `mergify_cli/stack/push.py::{_update_comment_for_pull,
@@ -64,6 +72,10 @@ fn comment_path(absolute_url: &str) -> Result<String, CliError> {
 
 /// Upsert the stack-comment for one PR.
 ///
+/// Callers must have established that GitHub is not describing
+/// this stack itself — see [`remove_stack_comment_for_pull`] for
+/// why, and [`crate::commands::push`] for where that is decided.
+///
 /// `total_pulls` is the count of live PRs in the stack (i.e.
 /// the number of `entries`). When it's 1, skip *creation* —
 /// a single-row "stack" table is noise on a non-stacked PR.
@@ -107,6 +119,41 @@ pub async fn update_stack_comment_for_pull(
 
     let _: Value = client.post(&path, &BodyOnly { body: &new_body }).await?;
     Ok(())
+}
+
+/// Take the stack comment down from one PR, if it is still there.
+///
+/// GitHub's native Stacks UI lists a registered stack's members on
+/// the pull request page itself, so our sticky table is a second
+/// copy of what the reader is already looking at and
+/// [`crate::commands::push`] stops writing it. Leaving the ones
+/// earlier pushes posted is not an option: nothing refreshes them
+/// any more, so each would go on showing the stack's shape as of
+/// the last pre-native push — a frozen table disagreeing with the
+/// live list beside it, which is worse than no table at all.
+///
+/// Returns whether a comment was found and deleted.
+pub async fn remove_stack_comment_for_pull(
+    client: &HttpClient,
+    user: &str,
+    repo: &str,
+    pull_number: u64,
+) -> Result<bool, CliError> {
+    let path = format!("/repos/{user}/{repo}/issues/{pull_number}/comments");
+    let comments: Vec<Comment> = client.get(&path).await?;
+
+    for comment in &comments {
+        if stack_comment::is_stack_comment(&comment.body) {
+            // 404 between the GET and the DELETE is somebody else
+            // having removed it — the end state we wanted.
+            client
+                .delete_if_exists(&comment_path(&comment.url)?)
+                .await?;
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Upsert the revision-history comment with a pre-rendered body.
@@ -277,6 +324,126 @@ mod tests {
         update_stack_comment_for_pull(&client(&server), "o", "r", 1, &entries, "feat", 1)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_stack_comment_deletes_ours_and_leaves_the_rest() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/repos/o/r/issues/1/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "url": format!("{}/repos/o/r/issues/comments/99", server.uri()),
+                    "body": "LGTM",
+                },
+                {
+                    "url": format!("{}/repos/o/r/issues/comments/100", server.uri()),
+                    "body": "This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):\nTABLE",
+                },
+                {
+                    "url": format!("{}/repos/o/r/issues/comments/101", server.uri()),
+                    "body": "### Revision history\n\nKEEP",
+                },
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // Only comment 100 has a DELETE stubbed: a DELETE aimed at
+        // the human comment or at the revision history would 404
+        // against the mock and fail the call.
+        Mock::given(method("DELETE"))
+            .and(wm_path("/repos/o/r/issues/comments/100"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let removed = remove_stack_comment_for_pull(&client(&server), "o", "r", 1)
+            .await
+            .unwrap();
+        assert!(removed);
+    }
+
+    #[tokio::test]
+    async fn remove_stack_comment_recognises_the_legacy_header() {
+        // Comments posted before the docs link went into the header
+        // are still ours to take down — the whole point of the
+        // removal is the backlog of pre-native pushes.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/repos/o/r/issues/1/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "url": format!("{}/repos/o/r/issues/comments/100", server.uri()),
+                    "body": "This pull request is part of a stack:\nTABLE",
+                },
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(wm_path("/repos/o/r/issues/comments/100"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(
+            remove_stack_comment_for_pull(&client(&server), "o", "r", 1)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_stack_comment_is_a_noop_when_there_is_none() {
+        // The steady state once this has shipped: nothing to delete,
+        // so no write request at all. No DELETE mock — one would 404.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/repos/o/r/issues/1/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "url": format!("{}/repos/o/r/issues/comments/101", server.uri()),
+                    "body": "### Revision history\n\nKEEP",
+                },
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let removed = remove_stack_comment_for_pull(&client(&server), "o", "r", 1)
+            .await
+            .unwrap();
+        assert!(!removed);
+    }
+
+    #[tokio::test]
+    async fn remove_stack_comment_treats_a_vanished_comment_as_removed() {
+        // Someone deleted it between our GET and our DELETE. That is
+        // the end state we were after, not a failure.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/repos/o/r/issues/1/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "url": format!("{}/repos/o/r/issues/comments/100", server.uri()),
+                    "body": "This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):\nTABLE",
+                },
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(wm_path("/repos/o/r/issues/comments/100"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(
+            remove_stack_comment_for_pull(&client(&server), "o", "r", 1)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

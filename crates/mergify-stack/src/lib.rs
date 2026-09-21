@@ -24,7 +24,9 @@
 //! - [`stack_comment`] — the "this PR is part of a stack"
 //!   sticky comment renderer + header recogniser. Pure
 //!   markdown/JSON formatting ported from
-//!   `mergify_cli/stack/push.py::StackComment`.
+//!   `mergify_cli/stack/push.py::StackComment`. Only reached
+//!   for a stack GitHub did not register natively — GitHub's
+//!   own Stacks UI is the member list everywhere else.
 //! - [`replay`] — full port of `mergify_cli/stack/replay.py`:
 //!   `git merge-tree` + `git diff-tree` to materialise the
 //!   amendment, then `POST /git/trees` + `POST /git/commits`

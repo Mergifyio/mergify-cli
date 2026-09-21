@@ -17,7 +17,10 @@
 //!   the first PR mutation and `POST /stacks` **after** the last one.
 //!   Getting that order wrong is what permanently closes a surviving
 //!   pull request (see `mergify_stack::native_stack`), and no unit
-//!   test on the module in isolation can catch it.
+//!   test on the module in isolation can catch it;
+//! - the two surfaces keyed off the registration's outcome — the
+//!   `Depends-On:` header and the sticky stack comment — must follow
+//!   the outcome and not the flag, in both directions.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -444,6 +447,221 @@ async fn depends_on_restored_when_native_registration_does_not_happen() {
     assert!(
         out.contains("Depends-On"),
         "the fallback should be stated, got: {out}",
+    );
+}
+
+/// The `url` GitHub puts on an issue comment, as an absolute URL —
+/// which is what the CLI has to turn back into a path before it can
+/// call the API with it.
+fn comment_url(server: &MockServer, id: u64) -> String {
+    format!("{}/repos/myorg/myrepo/issues/comments/{id}", server.uri())
+}
+
+/// Every `METHOD /path` the server saw against the issue-comments
+/// endpoints, which is where both stack-comment surfaces live.
+async fn comment_requests(server: &MockServer) -> Vec<String> {
+    request_log(server)
+        .await
+        .into_iter()
+        .filter(|r| r.contains("/issues/") && r.contains("comments"))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_stack_comment_is_posted_when_native_registration_succeeds() {
+    // GitHub's own Stacks UI lists the members on the pull request
+    // page, so the sticky table is a second copy of what the reader is
+    // already looking at — the same argument as the `Depends-On:`
+    // header one surface up.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let server = mock_github_creating(&[101, 102]).await;
+    Mock::given(method("POST"))
+        .and(wm_path("/repos/myorg/myrepo/stacks"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"number": 12})))
+        .mount(&server)
+        .await;
+
+    assert_success(&run_push(&local, &server.uri(), &[]));
+
+    let comments = comment_requests(&server).await;
+    assert!(
+        comments.iter().all(|r| r.starts_with("GET ")),
+        "a registered stack must have nothing written to its comments, got: {comments:#?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stack_comment_from_an_older_push_is_deleted_once_github_holds_the_stack() {
+    // The migration half. Every stack pushed before this behaviour
+    // shipped carries the table, and nothing refreshes it any more, so
+    // it would sit frozen at that push's membership under a live list
+    // that keeps moving. Take it down on the next push instead.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let server = mock_github_creating(&[101, 102]).await;
+    // Outranks `mock_github_creating`'s empty listing: wiremock breaks
+    // a tie between two matching mocks by mount order, and 1 beats the
+    // default 5 regardless of it.
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/repos/myorg/myrepo/issues/\d+/comments$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"url": comment_url(&server, 900), "body": "looks good to me"},
+            {
+                "url": comment_url(&server, 901),
+                "body": "This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):\n| # | Pull Request | Link | |\n",
+            },
+        ])))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    // Only ours is deletable: a DELETE aimed at comment 900 would 404
+    // here and fail the push.
+    Mock::given(method("DELETE"))
+        .and(wm_path("/repos/myorg/myrepo/issues/comments/901"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(wm_path("/repos/myorg/myrepo/stacks"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"number": 12})))
+        .mount(&server)
+        .await;
+
+    let output = run_push(&local, &server.uri(), &[]);
+    assert_success(&output);
+
+    let comments = comment_requests(&server).await;
+    assert!(
+        comments.iter().all(|r| !r.starts_with("POST ")),
+        "the comment is taken down, never rewritten, got: {comments:#?}",
+    );
+    let out = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    assert!(
+        out.contains("removed 2 stack comments"),
+        "the cleanup should be stated, got: {out}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_registered_stack_down_to_one_live_pull_request_still_loses_its_comment() {
+    // The stale-comment case the member count would hide. A stack
+    // whose members merge down to one open pull request keeps its
+    // registration — `appendable_tail` finds nothing to add, so GitHub
+    // goes on holding stack #7 — and that last pull request is still
+    // carrying the table it was given while the stack had several
+    // members. Counting pull requests before deciding to look would
+    // skip exactly this one, leaving a frozen list under GitHub's live
+    // one for ever.
+    //
+    // The count still gates the fallback upsert, and that costs
+    // nothing here: GitHub rejects a stack below two members, so a
+    // genuinely one-change stack is never registered and never reaches
+    // the removal at all.
+    let (_work, local, change_ids, remote_head) = repo_with_pushed_branches(1, 1);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/search/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "items": [{"number": 101}],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(wm_path("/repos/myorg/myrepo/pulls/101"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "number": 101,
+            "state": "open",
+            "merged_at": null,
+            "draft": false,
+            "title": "existing",
+            "body": "existing",
+            "head": {"ref": head_ref(&change_ids, 0), "sha": remote_head},
+            "base": {"ref": "main"},
+            "html_url": "https://github.com/myorg/myrepo/pull/101",
+            // What is left of a stack that was bigger: GitHub keeps
+            // the registration and infers the merged prefix itself.
+            "stack": {"id": 162_170, "number": 7, "position": 1, "size": 1},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(wm_path("/repos/myorg/myrepo/pulls/101/reviews"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(wm_path("/repos/myorg/myrepo/pulls/101"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/repos/myorg/myrepo/issues/\d+/comments$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+            "url": comment_url(&server, 901),
+            "body": "This pull request is part of a [Mergify stack](https://docs.mergify.com/stacks/):\n| # | Pull Request | Link | |\n",
+        }])))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(wm_path("/repos/myorg/myrepo/issues/comments/901"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = run_push(&local, &server.uri(), &[]);
+    assert_success(&output);
+
+    let out = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    assert!(
+        out.contains("GitHub stack #7 unchanged"),
+        "the registration must survive the shrink, or this is not the \
+         case under test, got: {out}",
+    );
+    assert!(
+        out.contains("removed 1 stack comment"),
+        "the last member's stale table is taken down, got: {out}",
+    );
+    // A POST here would be the opposite failure: writing the table
+    // back onto a pull request GitHub is already listing.
+    let comments = comment_requests(&server).await;
+    assert!(
+        comments.iter().all(|r| !r.starts_with("POST ")),
+        "nothing is written back, got: {comments:#?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stack_comment_stays_when_native_registration_does_not_happen() {
+    // The other direction, and the reason this is keyed off the
+    // outcome rather than the flag: a push that degraded has GitHub
+    // rendering nothing, so dropping the comment would leave the stack
+    // with no member list anywhere.
+    let (work, _) = build_stack_repo(2);
+    let local = work.path().join("local");
+    let server = mock_github_creating(&[101, 102]).await;
+    Mock::given(method("POST"))
+        .and(wm_path("/repos/myorg/myrepo/stacks"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+        .mount(&server)
+        .await;
+
+    assert_success(&run_push(&local, &server.uri(), &[]));
+
+    let comments = comment_requests(&server).await;
+    assert_eq!(
+        comments
+            .iter()
+            .filter(|r| r.starts_with("POST ") && r.ends_with("/comments"))
+            .count(),
+        2,
+        "both pull requests keep the table, got: {comments:#?}",
+    );
+    assert!(
+        comments.iter().all(|r| !r.starts_with("DELETE ")),
+        "nothing is taken down when nothing replaced it, got: {comments:#?}",
     );
 }
 

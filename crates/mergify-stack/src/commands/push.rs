@@ -18,14 +18,16 @@
 //! 9. Upsert each PR sequentially via [`crate::pr_upsert`] so
 //!    each `Depends-On: #<n>` header sees the predecessor's
 //!    freshly-created PR number.
-//! 10. Upsert stack comments, and render + upsert each prepared
-//!     revision-history comment, per PR via [`crate::comment_upsert`].
+//! 10. Render + upsert each prepared revision-history comment, per
+//!     PR via [`crate::comment_upsert`].
 //! 11. Tear down orphan branches.
 //! 12. Unless native registration is disabled (`--no-github-native`,
 //!     or git config `mergify-cli.stack-github-native=false`), bring
 //!     GitHub's native stack in line with what was just pushed, via
-//!     [`crate::native_stack`], and restore any `Depends-On:` header
-//!     step 9 left out if it did not take.
+//!     [`crate::native_stack`].
+//! 13. Settle what step 12 left open: restore any `Depends-On:` header
+//!     step 9 left out if the registration did not take, and either
+//!     take the sticky stack comment down or go on writing it.
 //!
 //! Step 12 has a conditional step 0. A registered stack blocks one
 //! thing: changing a PR's base. So a push that retargets a PR, or
@@ -44,6 +46,21 @@
 //! allowed to quietly not happen — so the headers are held and written
 //! back when it doesn't, rather than being dropped on the strength of
 //! that setting.
+//!
+//! Step 13 settles the sticky stack comment on the same bet, for the
+//! same reason: a registered stack is listed by GitHub on the pull
+//! request page, so our table of the same members is the redundant
+//! copy. What differs is which way the work goes. The header is
+//! *written back* when the bet fails, because an unregistered,
+//! unchained stack merges out of order. The comment is *taken down*
+//! when the bet lands, because nothing refreshes it once we stop
+//! writing it, and a table frozen at the shape of the last pre-native
+//! push is worse under a live list than no table at all. Its failure
+//! policy is the opposite one too — a comment that would not delete
+//! changes nothing about how the stack merges, so it is reported and
+//! retried on the next push rather than failing a push that has
+//! already done everything else.
+//!
 //! The bet is settled inside the push, so the only way to end up with
 //! neither the registration nor the headers is a push that *fails*
 //! between steps 9 and 12 — and re-running it settles the stack either
@@ -814,45 +831,6 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         entry.change.pull = Some(pull);
     }
 
-    // Stack comments (only when stack has > 1 PR — the upserter
-    // also guards on this but we pre-filter to avoid a useless
-    // GET when total_pulls == 1).
-    let entries: Vec<StackEntry> = planned
-        .locals
-        .iter()
-        .filter_map(stack_entry_from_planned)
-        .collect();
-    let total_pulls = entries.len();
-    if total_pulls > 1 {
-        let cidx = prog.add("queued");
-        prog.run(cidx, "updating stack comments", async {
-            for p in &planned.locals {
-                let Some(pull) = p.change.pull.as_ref() else {
-                    continue;
-                };
-                if pull.get("merged_at").is_some_and(|v| !v.is_null()) {
-                    continue;
-                }
-                let Some(number) = pull.get("number").and_then(Value::as_u64) else {
-                    continue;
-                };
-                comment_upsert::update_stack_comment_for_pull(
-                    opts.client,
-                    opts.user,
-                    opts.repo,
-                    number,
-                    &entries,
-                    &dest_branch,
-                    total_pulls,
-                )
-                .await?;
-            }
-            Ok::<(), CliError>(())
-        })
-        .await?;
-        prog.resolve(cidx, Mark::Done, Some("stack comments updated"));
-    }
-
     // Revision-history comments — rendered from the histories
     // prepared (and written as git notes) before the push.
     if !revision_histories.is_empty() {
@@ -1022,6 +1000,127 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
              `Depends-On:` headers and Mergify orders them."
                 .to_string(),
         );
+    }
+
+    // The stack comment, settled on the same bet as the `Depends-On:`
+    // headers above and for the same reason: a registered stack has
+    // GitHub listing its own members on the pull request page, so our
+    // sticky table is the redundant copy and this push does not write
+    // it. What it does instead is take down the ones earlier pushes
+    // left, because nothing refreshes them any more — a table frozen
+    // at the stack's shape as of the last pre-native push, sitting
+    // under the live list, is worse than no table. A push that did not
+    // register has nothing else describing the stack's shape, so it
+    // keeps the comment exactly as before.
+    //
+    // Only the fallback upsert is gated on the stack having more than
+    // one pull request. That gate is about cost — a one-change stack
+    // never got a comment, so looking for one is a GET per push that
+    // can only come back empty — and it is sound there because
+    // `update_stack_comment_for_pull` is the thing that would have
+    // written the comment in the first place.
+    //
+    // Applying it to the removal would take the PR's own guarantee
+    // away in the one case that needs it. A registered stack whose
+    // members merge down to a single open pull request keeps its
+    // registration (`appendable_tail` reports nothing to add, so the
+    // stack stands), so it arrives here registered with one live
+    // member — carrying the comment it was given while it still had
+    // several, now frozen under GitHub's live list. That is exactly
+    // the stale table this step exists to take down. It costs nothing
+    // in the steady state: GitHub rejects a stack below
+    // `native_stack::MIN_STACK_SIZE`, so a genuinely one-change stack
+    // is never registered and never reaches this branch at all.
+    //
+    // The case still not covered is a stack that shrank *and* lost its
+    // registration (GitHub dissolves a 2-member stack that drops to
+    // one). It leaves the same stale comment, and finding it would
+    // mean a GET on every single-change push for ever — the cost the
+    // gate above exists to avoid — to clean an artifact only stacks
+    // pushed before native registration shipped can have. Left as it
+    // was on `main`, where this gap already existed.
+    let entries: Vec<StackEntry> = planned
+        .locals
+        .iter()
+        .filter_map(stack_entry_from_planned)
+        .collect();
+    let total_pulls = entries.len();
+    if stack_is_registered || total_pulls > 1 {
+        // Merged pull requests are skipped, as the upsert always
+        // skipped them: a landed pull request is a closed record of a
+        // review, not part of the shape this push is describing, and
+        // that holds for taking a comment down as much as for
+        // rewriting one.
+        let live: Vec<u64> = planned
+            .locals
+            .iter()
+            .filter_map(|p| {
+                let pull = p.change.pull.as_ref()?;
+                if pull.get("merged_at").is_some_and(|v| !v.is_null()) {
+                    return None;
+                }
+                pull.get("number").and_then(Value::as_u64)
+            })
+            .collect();
+
+        if stack_is_registered {
+            let mut removed = 0usize;
+            let mut failure: Option<CliError> = None;
+            for number in &live {
+                match comment_upsert::remove_stack_comment_for_pull(
+                    opts.client,
+                    opts.user,
+                    opts.repo,
+                    *number,
+                )
+                .await
+                {
+                    Ok(true) => removed += 1,
+                    Ok(false) => {}
+                    // Unlike the `Depends-On:` restore above, this
+                    // changes nothing about how the stack merges — it
+                    // clears a surface GitHub now draws itself. Worth
+                    // one more attempt on the next push; never worth
+                    // failing a push that has already done everything.
+                    Err(e) => failure = failure.or(Some(e)),
+                }
+            }
+            // Only ever reported when there was something to report:
+            // in the steady state every stack comment is long gone and
+            // a row saying so on every push is a tombstone.
+            if removed > 0 {
+                let plural = if removed == 1 { "" } else { "s" };
+                prog.add_resolved(
+                    Mark::Noop,
+                    format!("removed {removed} stack comment{plural}"),
+                );
+            }
+            if let Some(e) = failure {
+                deferred_notes.push(format!(
+                    "Could not remove the stack comment GitHub's stack UI replaces; \
+                     the next push tries again. ({e})"
+                ));
+            }
+        } else {
+            let cidx = prog.add("queued");
+            prog.run(cidx, "updating stack comments", async {
+                for number in &live {
+                    comment_upsert::update_stack_comment_for_pull(
+                        opts.client,
+                        opts.user,
+                        opts.repo,
+                        *number,
+                        &entries,
+                        &dest_branch,
+                        total_pulls,
+                    )
+                    .await?;
+                }
+                Ok::<(), CliError>(())
+            })
+            .await?;
+            prog.resolve(cidx, Mark::Done, Some("stack comments updated"));
+        }
     }
 
     // Warnings stashed during the live block (a mid-block print would
