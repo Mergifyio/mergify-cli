@@ -8,7 +8,7 @@
 //! `<closest>`?" suggestion off clap's built-in Levenshtein
 //! distance.
 
-use std::env;
+use mergify_core::env;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -53,7 +53,7 @@ mod self_update;
 const VERSION: &str = env!("MERGIFY_CLI_VERSION");
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = env::args().skip(1).collect();
+    let argv: Vec<String> = std::env::args().skip(1).collect();
 
     // Test hook used by `test_binary_build.py` to verify the
     // wheel-installed binary produces UTF-8 output (especially on
@@ -2812,12 +2812,12 @@ enum ColorArg {
 /// `true` when `name` is exported to something other than the empty
 /// string, which is what <https://no-color.org> means by "present".
 ///
-/// The rule itself lives in `mergify_core::env::var_non_empty`, which
-/// is where it is documented and tested; spelling it out a second time
-/// here is how the color variables would drift away from every other
-/// variable this CLI reads.
+/// The rule itself lives in `mergify_core::env`, which is where it is
+/// documented and tested; spelling it out a second time here is how
+/// the color variables would drift away from every other variable
+/// this CLI reads.
 fn non_empty(name: &str) -> bool {
-    mergify_core::env::var_non_empty(name).is_some()
+    env::var_os_non_empty(name).is_some()
 }
 
 /// Whether the log subscriber may emit ANSI on stderr.
@@ -3984,8 +3984,9 @@ struct ScopesCliArgs {
     // `mergify_ci::scopes_detect::resolve_config_path` instead,
     // where empty correctly falls through to auto-detect. The
     // matching regression tests are
-    // `ci_scopes_parses_when_mergify_config_path_env_var_is_empty`
-    // (clap parse) and
+    // `no_argument_takes_its_value_from_the_environment` (asks the
+    // built `Command` whether *any* argument carries an `env`
+    // attribute, which covers this one) and
     // `resolve_config_path_treats_empty_env_var_as_unset`
     // (lower-level resolver).
     #[arg(long)]
@@ -4897,72 +4898,75 @@ mod tests {
         // or test the terminal the suite happens to run under.
     }
 
+    /// No argument anywhere in the tree may take its value from the
+    /// environment through clap's `env = "…"` attribute.
+    ///
+    /// Twice now that attribute broke a caller who exports the
+    /// variable empty. `gha-mergify-ci` sets `MERGIFY_CONFIG_PATH=""`
+    /// when the user pinned no path, and clap read the empty string
+    /// as a present-but-empty `--config`, aborting with "a value is
+    /// required for '--config'" (monorepo#33423). Same shape for
+    /// `MERGIFY_TEST_EXIT_CODE=""` and `--test-exit-code`: "cannot
+    /// parse integer from empty string". Env lookup belongs in the
+    /// resolver, where `mergify_core::env::var_non_empty` treats
+    /// empty as unset.
+    ///
+    /// This replaces two tests that each exported one variable empty
+    /// and parsed one argv. Asking the built `Command` covers every
+    /// argument rather than those two, and needs no process
+    /// environment to mutate.
     #[test]
-    fn ci_scopes_parses_when_mergify_config_path_env_var_is_empty() {
-        // Regression for monorepo#33423 / gha-mergify-ci:
-        // the action sets `MERGIFY_CONFIG_PATH=""` (empty) when
-        // the caller didn't pin a config path, expecting
-        // auto-detect. The previous `ScopesCliArgs::config`
-        // declaration used `env = "MERGIFY_CONFIG_PATH"` on
-        // clap's side, which interpreted the empty env value as
-        // a present-but-empty `--config` flag and exited parsing
-        // with `a value is required for '--config'`. The clap
-        // env hook has been dropped — env lookup lives inside
-        // `scopes_detect::resolve_config_path` where empty is
-        // correctly treated as unset. Pin that here so the hook
-        // can't sneak back in.
-        let parsed = temp_env::with_var("MERGIFY_CONFIG_PATH", Some(""), || {
-            CliRoot::try_parse_from([
-                "mergify".to_string(),
-                "ci".to_string(),
-                "scopes".to_string(),
-                "--write".to_string(),
-                "scopes.json".to_string(),
-            ])
-            .expect("argv parses with empty MERGIFY_CONFIG_PATH")
-        });
+    fn no_argument_takes_its_value_from_the_environment() {
+        fn walk(cmd: &clap::Command, path: &str, found: &mut Vec<String>) {
+            for arg in cmd.get_arguments() {
+                if let Some(var) = arg.get_env() {
+                    found.push(format!(
+                        "{path} {} <- {}",
+                        arg.get_id(),
+                        var.to_string_lossy()
+                    ));
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, &format!("{path} {}", sub.get_name()), found);
+            }
+        }
+
+        let mut found = Vec::new();
+        walk(&CliRoot::command(), "mergify", &mut found);
+        assert!(found.is_empty(), "clap env hooks found: {found:#?}");
+    }
+
+    /// The observable half of the rule above, for the two arguments
+    /// it was reported on.
+    ///
+    /// The walk asks clap whether an `env = "…"` hook is declared,
+    /// which is the spelling that caused both regressions but not the
+    /// only one: `default_value_t = std::env::var(…).unwrap_or_default()`
+    /// or a `value_parser` that reads the environment reproduce it
+    /// exactly and declare no hook. This asserts what the user sees
+    /// instead. It needs no environment of its own — with the
+    /// variable unset, any of those spellings still surfaces a
+    /// present-but-empty value where `None` is required.
+    #[test]
+    fn an_omitted_flag_stays_omitted() {
+        let parsed = CliRoot::try_parse_from(["mergify", "ci", "scopes", "--write", "scopes.json"])
+            .expect("argv parses");
         let Dispatch::Native(NativeCommand::CiScopes(opts)) = dispatch_from_parsed(parsed) else {
             panic!("ci scopes must dispatch natively");
         };
-        // `--config` was never supplied; the empty env var must
-        // not surface as a value (which would change the
-        // downstream resolver's branch).
         assert!(opts.config.is_none(), "got: {:?}", opts.config);
-    }
 
-    #[test]
-    fn ci_junit_process_parses_when_mergify_test_exit_code_env_var_is_empty() {
-        // Second instance of the same class of regression as
-        // `ci_scopes_parses_when_…`: `gha-mergify-ci` exports
-        // `MERGIFY_TEST_EXIT_CODE=""` when the previous step
-        // didn't produce a runner exit code. Previously the clap
-        // `env = "MERGIFY_TEST_EXIT_CODE"` attribute on
-        // `--test-exit-code` tried to parse `""` as `i32` and
-        // exited parsing with `invalid value '' for
-        // '--test-exit-code': cannot parse integer from empty
-        // string`. The clap env hook has been dropped — env
-        // lookup lives in `junit_process::command::resolve_test_exit_code`
-        // where empty is correctly treated as `None`. Pin that
-        // here so the hook can't sneak back in.
-        let parsed = temp_env::with_var("MERGIFY_TEST_EXIT_CODE", Some(""), || {
-            CliRoot::try_parse_from([
-                "mergify".to_string(),
-                "ci".to_string(),
-                "junit-process".to_string(),
-                "report.xml".to_string(),
-            ])
-            .expect("argv parses with empty MERGIFY_TEST_EXIT_CODE")
-        });
+        let parsed = CliRoot::try_parse_from(["mergify", "ci", "junit-process", "report.xml"])
+            .expect("argv parses");
         let Dispatch::Native(NativeCommand::CiJunitProcess(opts)) = dispatch_from_parsed(parsed)
         else {
             panic!("ci junit-process must dispatch natively");
         };
-        // `--test-exit-code` was never supplied; the empty env
-        // var must not surface as a value.
         assert!(
             opts.test_exit_code.is_none(),
             "got: {:?}",
-            opts.test_exit_code,
+            opts.test_exit_code
         );
     }
 
