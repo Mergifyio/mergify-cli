@@ -41,17 +41,18 @@ mod testing {
     /// Run `body` to completion with `MERGIFY_TOKEN` forced to
     /// `value`.
     ///
-    /// `temp_env` cannot wrap an `.await`, so the future is driven
-    /// inside the closure instead. Without this the wiring that
-    /// reads the variable is untestable, and untestable wiring is
-    /// wiring a future edit can delete with the suite still green:
-    /// asserting on the renderer alone proves only that the renderer
-    /// can print a note, never that anything asks it to.
+    /// The overlay is installed on this thread and the future is
+    /// driven on it, by a `current_thread` runtime built here.
+    /// Without this the wiring that reads the variable is
+    /// untestable, and untestable wiring is wiring a future edit can
+    /// delete with the suite still green: asserting on the renderer
+    /// alone proves only that the renderer can print a note, never
+    /// that anything asks it to.
     pub fn with_mergify_token<F: std::future::Future>(value: Option<&str>, body: F) -> F::Output {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        temp_env::with_var("MERGIFY_TOKEN", value, || runtime.block_on(body))
+        mergify_core::env::testing::with_var("MERGIFY_TOKEN", value, || runtime.block_on(body))
     }
 }
