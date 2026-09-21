@@ -1,5 +1,13 @@
-//! The "this PR is part of a stack" sticky comment Mergify posts
-//! on every PR in a stack.
+//! The "this PR is part of a stack" sticky comment, posted on
+//! every PR of a stack GitHub is **not** describing itself.
+//!
+//! Since GitHub's native Stacks UI renders the member list on the
+//! pull request page, a registered stack gets no comment from us —
+//! [`crate::commands::push`] posts this only when the registration
+//! did not happen (`--no-github-native`, a GitHub that does not
+//! have the feature, a chain GitHub would not accept), and takes
+//! down any comment it finds when it did. So this module renders
+//! the fallback surface, not the default one.
 //!
 //! Body has three parts:
 //!
@@ -9,13 +17,22 @@
 //!    rendered carrying a 👈 emoji.
 //! 3. A single-line HTML comment with the marker prefix
 //!    `<!-- mergify-stack-data: {…} -->` carrying the same data
-//!    as JSON. The marker is what lets `mergify stack checkout`
-//!    rebuild the stack from any PR without re-walking GitHub.
+//!    as JSON.
+//!
+//! Nothing in this CLI reads that marker (checked 2026-09-21).
+//! An earlier version of this docstring claimed `mergify stack
+//! checkout` rebuilt a stack from it; it does not, and there is no
+//! sign it ever did — [`crate::commands::checkout`] discovers a
+//! stack by chaining each PR's `head.ref` to the next one's
+//! `base.ref`, which has the advantage of working on stacks this
+//! CLI never touched. What the marker is for is readers outside
+//! this repo, which is why its wire shape is still pinned below.
 //!
 //! Ported from `mergify_cli/stack/push.py::StackComment`. Wire
 //! shape — header strings, JSON payload, compact one-line marker
 //! — is contract: existing comments on every Mergify-managed PR
-//! need to parse, and `stack checkout` reads the marker.
+//! need to parse, and the header is how the upserter and the
+//! remover recognise one of ours.
 
 use std::fmt::Write;
 
@@ -113,8 +130,8 @@ struct MarkerPayload<'a> {
 fn json_marker(entries: &[StackEntry], current_number: u64, stack_id: &str) -> String {
     // `is_current` is a JSON boolean — Python emits the result of
     // `int(...) == current_number` directly, which `json.dumps`
-    // serialises as `true`/`false`. Stack-comment readers (incl.
-    // `stack checkout`) expect a bool; an integer would break
+    // serialises as `true`/`false`. Out-of-tree readers (the
+    // browser extension) expect a bool; an integer would break
     // historic-comment parsing.
     let pulls = entries
         .iter()
@@ -221,7 +238,7 @@ mod tests {
         assert_eq!(parsed["pulls"][1]["number"], 2);
         assert_eq!(parsed["pulls"][1]["is_current"], false);
         // change_id / head_sha / base_branch / dest_branch carry
-        // through verbatim — `stack checkout` reads them.
+        // through verbatim — out-of-tree readers index on them.
         assert_eq!(
             parsed["pulls"][0]["change_id"],
             "Iaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
