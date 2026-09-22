@@ -40,9 +40,9 @@ use crate::git_refs::ReferencesSource;
 
 pub struct ScopesOptions<'a> {
     /// Explicit `--config <PATH>`. `None` triggers the
-    /// fallback chain (env var `MERGIFY_CONFIG_PATH`, then auto-
-    /// detection of `.mergify.yml` / `.mergify/config.yml` /
-    /// `.github/mergify.yml`).
+    /// fallback chain (env var `MERGIFY_CONFIG_PATH`, then the
+    /// auto-detection over
+    /// [`mergify_config::paths::DEFAULT_CONFIG_PATHS`]).
     pub config: Option<&'a Path>,
     /// Optional `--base`. Combined with `--head` to take the
     /// "manual" References branch.
@@ -78,7 +78,7 @@ pub fn run(opts: ScopesOptions<'_>, output: &mut dyn Output) -> Result<(), CliEr
         head,
         write,
     } = opts;
-    let config_path = resolve_config_path(config)?;
+    let config_path = resolve_config_path(config, output)?;
     let cfg = config::load(&config_path)?;
 
     let refs = resolve_refs(base, head, output)?;
@@ -111,13 +111,16 @@ pub fn run(opts: ScopesOptions<'_>, output: &mut dyn Output) -> Result<(), CliEr
     Ok(())
 }
 
-/// Auto-detection mirrors Python's
-/// `detector.get_mergify_config_path` (which is the same triple
-/// `.mergify.yml`, `.mergify/config.yml`, `.github/mergify.yml`
-/// that `mergify config validate` uses), with `MERGIFY_CONFIG_PATH`
-/// honored ahead of it. Empty env var falls back to auto-detect
-/// — matches Python.
-fn resolve_config_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
+/// Auto-detection defers to [`mergify_config::paths`], so
+/// `ci scopes` searches exactly what `mergify config validate`
+/// searches — including the duplicate-configuration warning.
+/// `MERGIFY_CONFIG_PATH` is honored ahead of it; an empty value
+/// falls back to auto-detect, which is what the `gha-mergify-ci`
+/// action relies on.
+fn resolve_config_path(
+    explicit: Option<&Path>,
+    output: &mut dyn Output,
+) -> Result<PathBuf, CliError> {
     if let Some(path) = explicit {
         if path.is_file() {
             return Ok(path.to_path_buf());
@@ -136,7 +139,7 @@ fn resolve_config_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
         }
         return Ok(p);
     }
-    mergify_config::paths::resolve_config_path(None)
+    mergify_config::paths::resolve_config_path(None, output)
 }
 
 /// `(base, head)` resolution mirrors Python's branch in
@@ -310,7 +313,9 @@ mod tests {
 
     #[test]
     fn resolve_config_path_errors_on_missing_explicit() {
-        let err = resolve_config_path(Some(Path::new("/no/such/file.yml"))).unwrap_err();
+        let mut captured = Captured::human();
+        let err = resolve_config_path(Some(Path::new("/no/such/file.yml")), &mut captured.output)
+            .unwrap_err();
         assert!(matches!(err, CliError::Configuration(_)));
         assert!(err.to_string().contains("does not exist"));
     }
@@ -328,8 +333,9 @@ mod tests {
         // so this function owns the lookup — and the empty branch
         // here must fall through to autodetect rather than report
         // a malformed env var.
+        let mut captured = Captured::human();
         let result = env::testing::with_var("MERGIFY_CONFIG_PATH", Some(""), || {
-            resolve_config_path(None)
+            resolve_config_path(None, &mut captured.output)
         });
         // Either autodetect found a real config (cargo test runs
         // from a workspace that contains `.mergify.yml`, so this is
@@ -352,9 +358,10 @@ mod tests {
         // value that doesn't exist, the error must name the env
         // var + the bogus path so the user can spot the typo
         // without having to dig.
+        let mut captured = Captured::human();
         let err =
             env::testing::with_var("MERGIFY_CONFIG_PATH", Some("/no/such/.mergify.yml"), || {
-                resolve_config_path(None).unwrap_err()
+                resolve_config_path(None, &mut captured.output).unwrap_err()
             });
         let msg = err.to_string();
         assert!(msg.contains("MERGIFY_CONFIG_PATH="), "got: {msg}");

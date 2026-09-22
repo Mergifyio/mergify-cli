@@ -3,8 +3,7 @@
 //!
 //! The command:
 //! 1. Resolves the config file (explicit `--config-file` or the
-//!    first of `.mergify.yml`, `.mergify/config.yml`,
-//!    `.github/mergify.yml`).
+//!    first candidate in [`crate::paths::DEFAULT_CONFIG_PATHS`]).
 //! 2. Parses it as YAML.
 //! 3. Fetches `https://docs.mergify.com/mergify-configuration-schema.json`.
 //! 4. Validates the config against the schema using the
@@ -36,7 +35,7 @@ const SCHEMA_PATH: &str = "/mergify-configuration-schema.json";
 /// user provided one; otherwise the command searches the default
 /// locations.
 pub async fn run(explicit_path: Option<&Path>, output: &mut dyn Output) -> Result<(), CliError> {
-    let config_path = resolve_config_path(explicit_path)?;
+    let config_path = resolve_config_path(explicit_path, output)?;
     let config_value = load_yaml(&config_path)?;
 
     output.status(&format!("Fetching schema from {SCHEMA_HOST}…"))?;

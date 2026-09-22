@@ -18,10 +18,16 @@ mergify config simulate PULL_REQUEST_URL             # Simulate actions on a PR
 
 ## Configuration File Detection
 
-Mergify CLI auto-detects the configuration file from standard locations:
-- `.mergify.yml`
-- `.mergify/config.yml`
-- `.github/mergify.yml`
+Mergify CLI auto-detects the configuration file from standard locations, in
+this order — the first one that exists wins:
+- `.mergify.yml`, then `.mergify.yaml`
+- `.mergify/config.yml`, then `.mergify/config.yaml`
+- `.github/mergify.yml`, then `.github/mergify.yaml`
+
+Both extensions are read at every location, and `.yml` wins when a location
+carries both. A repository holding more than one configuration file gets a
+warning on stderr naming the file in use and the ones ignored — the engine
+applies the same order, so the CLI reads whatever production reads.
 
 Override with `--config-file` / `-f`:
 ```bash
