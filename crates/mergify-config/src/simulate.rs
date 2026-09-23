@@ -50,7 +50,7 @@ pub struct SimulateOptions<'a> {
 
 /// Run the `config simulate` command.
 pub async fn run(opts: SimulateOptions<'_>, output: &mut dyn Output) -> Result<(), CliError> {
-    let config_path = resolve_config_path(opts.config_file)?;
+    let config_path = resolve_config_path(opts.config_file, output)?;
     let mergify_yml = std::fs::read_to_string(&config_path).map_err(|e| {
         CliError::Configuration(format!("cannot read {}: {e}", config_path.display()))
     })?;

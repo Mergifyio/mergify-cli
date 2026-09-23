@@ -3831,11 +3831,28 @@ struct InternalStackRemoteChangesArgs {
     author: String,
 }
 
+/// `--config-file`'s long help. Same reason as
+/// [`SCOPES_CONFIG_HELP`]: the list of searched paths belongs to the
+/// resolver, not to a doc comment that can fall behind it.
+static CONFIG_FILE_HELP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Path to the Mergify configuration file.\n\nWhen omitted, the first of these that \
+         exists is used: {}. A repository carrying more than one gets a warning on stderr \
+         naming the file in use and the ones ignored.",
+        mergify_config::paths::DEFAULT_CONFIG_PATHS.join(", "),
+    )
+});
+
 #[derive(clap::Args)]
 struct ConfigArgs {
     /// Path to the Mergify configuration file (auto-detected if not
     /// provided).
-    #[arg(long = "config-file", short = 'f', global = true)]
+    #[arg(
+        long = "config-file",
+        short = 'f',
+        global = true,
+        long_help = CONFIG_FILE_HELP.as_str(),
+    )]
     config_file: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -3967,12 +3984,20 @@ struct GitRefsCliArgs {
 #[derive(clap::Args)]
 struct QueueInfoCliArgs {}
 
+/// `--config`'s long help, built from the resolver's own search
+/// list so the two cannot drift apart. clap wants a `&'static str`;
+/// a `LazyLock` is what turns a runtime `join` into one.
+static SCOPES_CONFIG_HELP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Path to YAML config file.\n\nFalls back to the MERGIFY_CONFIG_PATH environment \
+         variable, then auto-detects the first of these that exists: {}.",
+        mergify_config::paths::DEFAULT_CONFIG_PATHS.join(", "),
+    )
+});
+
 #[derive(clap::Args)]
 struct ScopesCliArgs {
-    /// Path to YAML config file. Falls back to the
-    /// `MERGIFY_CONFIG_PATH` env var, then auto-detects
-    /// `.mergify.yml`, `.mergify/config.yml`, or
-    /// `.github/mergify.yml`.
+    /// Path to YAML config file (auto-detected when omitted).
     //
     // The env var lookup is intentionally *not* delegated to
     // clap's `env = ...` attribute: callers (notably the
@@ -3989,7 +4014,7 @@ struct ScopesCliArgs {
     // attribute, which covers this one) and
     // `resolve_config_path_treats_empty_env_var_as_unset`
     // (lower-level resolver).
-    #[arg(long)]
+    #[arg(long, long_help = SCOPES_CONFIG_HELP.as_str())]
     config: Option<PathBuf>,
 
     /// Base git reference to use to look for changed files.
