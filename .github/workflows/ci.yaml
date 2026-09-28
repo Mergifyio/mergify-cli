@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b # v1.50.1
+      - uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
 
   # Smoke build the full release wheel matrix on every PR so a
   # cross-compile or platform-specific maturin failure is caught
