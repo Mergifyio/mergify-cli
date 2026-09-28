@@ -610,7 +610,7 @@ expression: schema
               }
             ],
             "commands": [],
-            "longAbout": "Give the list of scopes impacted by changed files.\n\nCompute the configured scopes impacted by the files changed between two git references, using your Mergify configuration. Print them, or write them to a file with --write for a later \"mergify ci scopes-send\".",
+            "longAbout": "Give the list of scopes impacted by changed files.\n\nCompute the configured scopes impacted by the files changed between two git references, using your Mergify configuration. On a merge queue draft pull request, return instead the scopes the merge queue decided for the batch, read from its git note, plus the merge queue scope. Print them, or write them to a file with --write for a later \"mergify ci scopes-send\".",
             "name": "scopes",
             "path": [
               "mergify",

@@ -4,9 +4,13 @@
 //! The command is locally evaluated (no Mergify API call): it
 //! loads the YAML config, figures out the `(base, head)` git
 //! refs, diffs them for changed files, and walks each file
-//! through every scope's include/exclude globs. The output is a
-//! list of "touched" scopes plus a handful of CI-environment
-//! side effects:
+//! through every scope's include/exclude globs. On a merge-queue
+//! draft whose engine git note carries the batch's scopes, it
+//! skips the diff and returns those instead: the queue already
+//! decided them from each batched pull request, including scopes
+//! a pull request's CI reported rather than matched from files.
+//! The output is a list of "touched" scopes plus a handful of
+//! CI-environment side effects:
 //!
 //! - `$GITHUB_OUTPUT` — JSON dict `{scope: "true"|"false"}` under
 //!   the `scopes` key, written as a multi-line heredoc.
@@ -82,9 +86,39 @@ pub fn run(opts: ScopesOptions<'_>, output: &mut dyn Output) -> Result<(), CliEr
     let cfg = config::load(&config_path)?;
 
     let refs = resolve_refs(base, head, output)?;
-    emit_refs_header(&refs, output)?;
+    run_on_refs(&cfg, &refs, write, output)
+}
 
-    let (all_scopes, mut scopes_hit, by_scope) = detect_scopes(&cfg.scopes, &refs, output)?;
+/// Everything `run` does once the config is loaded and the refs
+/// resolved; split out so tests can hand it merge-queue refs
+/// without a git note to read them from.
+fn run_on_refs(
+    cfg: &config::MergifyConfig,
+    refs: &References,
+    write: Option<&Path>,
+    output: &mut dyn Output,
+) -> Result<(), CliError> {
+    emit_refs_header(refs, output)?;
+
+    let (all_scopes, mut scopes_hit, by_scope) = match &refs.batch_scopes {
+        Some(batch) => {
+            output.status("Scopes decided by the merge queue for this batch")?;
+            let all: std::collections::BTreeSet<String> = declared_scopes(&cfg.scopes)
+                .union(&batch.scopes)
+                .cloned()
+                .collect();
+            // A barrier impacts every scope, so every scope is tested,
+            // not just the concrete ones its pulls named.
+            let hit = if batch.all_scopes {
+                output.status("The batch is a merge queue barrier, selecting all scopes")?;
+                all.clone()
+            } else {
+                batch.scopes.clone()
+            };
+            (all, hit, std::collections::BTreeMap::new())
+        }
+        None => detect_scopes(&cfg.scopes, refs, output)?,
+    };
 
     // Merge-queue scope is additive: it's part of `all_scopes`
     // unconditionally and gets added to `scopes_hit` only when the
@@ -101,8 +135,8 @@ pub fn run(opts: ScopesOptions<'_>, output: &mut dyn Output) -> Result<(), CliEr
 
     outputs::maybe_write_github_outputs(&all_scopes, &scopes_hit)?;
     outputs::maybe_write_buildkite_metadata(&all_scopes, &scopes_hit)?;
-    outputs::maybe_write_github_step_summary(&refs, &all_scopes, &scopes_hit)?;
-    outputs::maybe_write_buildkite_annotation(&refs, &all_scopes, &scopes_hit);
+    outputs::maybe_write_github_step_summary(refs, &all_scopes, &scopes_hit)?;
+    outputs::maybe_write_buildkite_annotation(refs, &all_scopes, &scopes_hit);
 
     if let Some(write_path) = write {
         write_detected_scopes(write_path, &scopes_hit)?;
@@ -159,6 +193,7 @@ fn resolve_refs(
             base: base.map(ToString::to_string),
             head: head.unwrap_or("HEAD").to_string(),
             source: ReferencesSource::Manual,
+            batch_scopes: None,
         });
     }
     git_refs::detect(output, &git_refs::real_notes_reader)
@@ -173,6 +208,16 @@ fn emit_refs_header(refs: &References, output: &mut dyn Output) -> std::io::Resu
     }
     output.status(&format!("Head: {head}", head = refs.head))?;
     output.status(&format!("Source: {source}", source = refs.source.as_str()))
+}
+
+/// The scopes `.mergify.yml` declares, which the outputs list
+/// even when not hit. Only a `files` source declares any: `manual`
+/// scopes exist once some CI reports them.
+fn declared_scopes(scopes_cfg: &config::Scopes) -> std::collections::BTreeSet<String> {
+    match &scopes_cfg.source {
+        Some(config::Source::Files(files)) => files.files.keys().cloned().collect(),
+        Some(config::Source::Manual(_)) | None => std::collections::BTreeSet::new(),
+    }
 }
 
 type DetectResult = (
@@ -196,7 +241,7 @@ fn detect_scopes(
                 .to_string(),
         )),
         Some(config::Source::Files(files)) => {
-            let all: BTreeSet<String> = files.files.keys().cloned().collect();
+            let all = declared_scopes(scopes_cfg);
 
             // No base → "select all" branch, no git diff needed.
             // Matches Python's `if references.base is None`.
@@ -208,7 +253,7 @@ fn detect_scopes(
             let changed = changed_files::git_changed_files(None, base, &refs.head)?;
             output.status("Changed files detected:")?;
             for f in &changed {
-                output.status(&format!("- {}", display_path(f)))?;
+                output.status(&format!("- {}", display_untrusted(f)))?;
             }
             let matchers = matching::compile(&files.files)?;
             let matching::MatchResult { hit, by_scope } =
@@ -218,7 +263,7 @@ fn detect_scopes(
     }
 }
 
-/// Render a repo path for a log line.
+/// Render a repo path, or a scope name a CI reported, for a log line.
 ///
 /// `git_changed_files` returns paths as git holds them, and a
 /// filename may legally contain a newline or an ANSI escape. Echoed
@@ -230,7 +275,7 @@ fn detect_scopes(
 /// (`café.txt` stays `café.txt`) while neutralizing the control
 /// characters, which is exactly what git's own `core.quotePath`
 /// output did for us before this module started passing `-z`.
-fn display_path(path: &str) -> String {
+fn display_untrusted(path: &str) -> String {
     path.escape_debug().to_string()
 }
 
@@ -257,12 +302,15 @@ fn emit_scopes_listing(
     output.emit(&(), &mut |w: &mut dyn Write| {
         writeln!(w, "Scopes touched:")?;
         for s in hit {
-            writeln!(w, "- {s}")?;
+            // A merge-queue batch's scopes can be names a CI reported,
+            // which the engine does not constrain to the config's
+            // scope-name pattern: same hazard as a path.
+            writeln!(w, "- {}", display_untrusted(s))?;
             if actions_debug && let Some(files) = by_scope.get(s) {
                 let mut files: Vec<&String> = files.iter().collect();
                 files.sort();
                 for f in files {
-                    writeln!(w, "    {}", display_path(f))?;
+                    writeln!(w, "    {}", display_untrusted(f))?;
                 }
             }
         }
@@ -294,21 +342,24 @@ mod tests {
     use mergify_test_support::Captured;
 
     #[test]
-    fn display_path_neutralizes_workflow_command_injection() {
+    fn display_untrusted_neutralizes_workflow_command_injection() {
         // Since `git_changed_files` passes `-z`, git no longer
         // escapes control characters for us, and a filename may
         // legally hold a newline. Echoed raw, the runner would read
         // the second line as a workflow command and annotate a
         // passing job with a fabricated error.
         let evil = "critical/evil\n::error::pwned.txt";
-        let rendered = display_path(evil);
+        let rendered = display_untrusted(evil);
         assert!(!rendered.contains('\n'), "got: {rendered}");
         assert!(rendered.contains("\\n::error::"), "got: {rendered}");
         // An ANSI escape can't repaint the operator's terminal.
-        assert_eq!(display_path("a\u{1b}[31mb"), "a\\u{1b}[31mb");
+        assert_eq!(display_untrusted("a\u{1b}[31mb"), "a\\u{1b}[31mb");
         // Ordinary printable Unicode stays readable — the listing
         // is for humans reading a CI log.
-        assert_eq!(display_path("critical/caché.txt"), "critical/caché.txt");
+        assert_eq!(
+            display_untrusted("critical/caché.txt"),
+            "critical/caché.txt"
+        );
     }
 
     #[test]
@@ -499,5 +550,110 @@ mod tests {
         // But `scopes_hit` only includes it when the refs source
         // is MergeQueue, which isn't the case here.
         assert_eq!(raw, r#"{"scopes":["a","b"]}"#);
+    }
+
+    fn merge_queue_refs(batch: &[&str]) -> References {
+        References {
+            base: Some("cafef00dcafef00dcafef00dcafef00dcafef00d".into()),
+            head: "HEAD".into(),
+            source: ReferencesSource::MergeQueue,
+            batch_scopes: Some(git_refs::BatchScopes {
+                scopes: batch.iter().map(|s| (*s).to_string()).collect(),
+                all_scopes: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn merge_queue_barrier_selects_every_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg: config::MergifyConfig = serde_yaml_ng::from_str(
+            "scopes:\n  source:\n    files:\n      a:\n        include: ['*']\n      c:\n        include: ['*']\n",
+        )
+        .unwrap();
+        let mut refs = merge_queue_refs(&["reported"]);
+        refs.batch_scopes.as_mut().unwrap().all_scopes = true;
+        let write = tmp.path().join("detected.json");
+        let mut cap = Captured::human();
+        env::testing::with_no_vars(|| {
+            run_on_refs(&cfg, &refs, Some(&write), &mut cap.output).unwrap();
+        });
+        assert_eq!(
+            std::fs::read_to_string(&write).unwrap(),
+            r#"{"scopes":["a","c","merge-queue","reported"]}"#,
+        );
+    }
+
+    #[test]
+    fn merge_queue_batch_scopes_replace_the_diff_in_every_output() {
+        // The refs point at a base that does not exist, so a diff
+        // would fail the run: reaching the outputs proves none ran.
+        // `c` is declared but not in the batch, `reported` is in the
+        // batch but not declared (a scope some CI reported).
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg: config::MergifyConfig = serde_yaml_ng::from_str(
+            "scopes:\n  source:\n    files:\n      a:\n        include: ['*']\n      c:\n        include: ['*']\n",
+        )
+        .unwrap();
+        let gha = tmp.path().join("gha_output");
+        let write = tmp.path().join("detected.json");
+        let mut cap = Captured::human();
+        env::testing::with_vars([("GITHUB_OUTPUT", Some(gha.to_str().unwrap()))], || {
+            run_on_refs(
+                &cfg,
+                &merge_queue_refs(&["a", "reported"]),
+                Some(&write),
+                &mut cap.output,
+            )
+            .unwrap();
+        });
+        assert_eq!(
+            std::fs::read_to_string(&write).unwrap(),
+            r#"{"scopes":["a","merge-queue","reported"]}"#,
+        );
+        let gha = std::fs::read_to_string(&gha).unwrap();
+        assert!(
+            gha.contains(
+                r#"{"a": "true", "c": "false", "merge-queue": "true", "reported": "true"}"#
+            ),
+            "got: {gha}",
+        );
+        assert!(!cap.stderr().contains("Changed files"), "{}", cap.stderr());
+    }
+
+    #[test]
+    fn merge_queue_batch_scopes_serve_a_manual_source() {
+        // `manual` has nothing to diff against, so off the merge
+        // queue it refuses; on a batch the queue already knows.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg: config::MergifyConfig =
+            serde_yaml_ng::from_str("scopes:\n  source:\n    manual: null\n").unwrap();
+        let write = tmp.path().join("detected.json");
+        let mut cap = Captured::human();
+        env::testing::with_no_vars(|| {
+            run_on_refs(&cfg, &merge_queue_refs(&[]), Some(&write), &mut cap.output).unwrap();
+        });
+        assert_eq!(
+            std::fs::read_to_string(&write).unwrap(),
+            r#"{"scopes":["merge-queue"]}"#,
+        );
+    }
+
+    #[test]
+    fn batch_scope_names_cannot_inject_a_workflow_command() {
+        let cfg = config::MergifyConfig::default();
+        let mut cap = Captured::human();
+        env::testing::with_no_vars(|| {
+            run_on_refs(
+                &cfg,
+                &merge_queue_refs(&["x\n::error::pwned"]),
+                None,
+                &mut cap.output,
+            )
+            .unwrap();
+        });
+        let stdout = cap.stdout();
+        assert!(!stdout.lines().any(|l| l.starts_with("::")), "{stdout:?}");
+        assert!(stdout.contains(r"x\n::error::pwned"), "{stdout:?}");
     }
 }

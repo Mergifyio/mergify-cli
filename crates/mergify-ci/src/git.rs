@@ -20,7 +20,7 @@ use std::process::Stdio;
 /// into a generic value rather than a fixed struct so the whole payload
 /// is preserved — every field, including any the engine adds later.
 /// Both `queue_info` (which prints the whole note) and `git_refs`
-/// (which deserializes it into a typed view to pull `checking_base_sha`)
+/// (which pulls `checking_base_sha` and the batch scopes out of it)
 /// read it through here.
 ///
 /// Returns `None` when there's no note at `rev`, or the body isn't a

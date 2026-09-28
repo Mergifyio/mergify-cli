@@ -80,6 +80,22 @@ pub fn maybe_write_buildkite_metadata(
     Ok(())
 }
 
+/// Render a scope name as a Markdown table cell's code span.
+///
+/// A merge-queue batch's scopes can be names a CI reported, which
+/// the engine only caps in length: a newline, `|` or backtick in one
+/// would otherwise end the table or the span and let the name write
+/// its own Markdown into the step summary and the Buildkite
+/// annotation.
+fn markdown_code(scope: &str) -> String {
+    let escaped = scope.escape_debug().to_string().replace('|', "\\|");
+    if escaped.contains('`') {
+        format!("`` {escaped} ``")
+    } else {
+        format!("`{escaped}`")
+    }
+}
+
 fn build_summary_markdown(
     refs: &References,
     all: &BTreeSet<String>,
@@ -101,7 +117,7 @@ fn build_summary_markdown(
     md.push_str("\n\n| 🎯 Scope | ✅ Match |\n|:--|:--|\n");
     for scope in all {
         let emoji = if hit.contains(scope) { "✅" } else { "❌" };
-        let _ = writeln!(&mut md, "| `{scope}` | {emoji} |");
+        let _ = writeln!(&mut md, "| {} | {emoji} |", markdown_code(scope));
     }
     md
 }
@@ -204,7 +220,27 @@ mod tests {
             base: base.map(ToString::to_string),
             head: head.to_string(),
             source,
+            batch_scopes: None,
         }
+    }
+
+    #[test]
+    fn summary_table_cannot_be_broken_out_of_by_a_reported_scope_name() {
+        // Reported names are only length-capped by the engine.
+        let evil = "x` |\n## All checks passed";
+        let all: BTreeSet<String> = [evil.to_string(), "ok".to_string()].into();
+        let hit = all.clone();
+        let md = build_summary_markdown(
+            &refs(None, "HEAD", ReferencesSource::MergeQueue),
+            &all,
+            &hit,
+        );
+        assert!(!md.lines().any(|l| l.starts_with("## All")), "{md}");
+        assert!(
+            md.contains(r"| `` x` \|\n## All checks passed `` | ✅ |"),
+            "{md}"
+        );
+        assert!(md.contains("| `ok` | ✅ |"), "{md}");
     }
 
     #[test]
