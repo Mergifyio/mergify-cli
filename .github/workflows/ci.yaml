@@ -17,7 +17,7 @@ concurrency:
 jobs:
   rust:
     timeout-minutes: 10
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -47,7 +47,7 @@ jobs:
   msrv:
     name: cargo check (MSRV)
     timeout-minutes: 15
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Resolve MSRV from Cargo.toml
@@ -76,7 +76,7 @@ jobs:
   cargo-deny:
     name: cargo-deny
     timeout-minutes: 10
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
@@ -88,7 +88,7 @@ jobs:
   typos:
     name: typos
     timeout-minutes: 5
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
@@ -118,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -178,7 +178,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [ubuntu-26.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -191,10 +191,10 @@ jobs:
           key: install-${{ matrix.os }}
 
       - name: Install shellcheck (Linux only)
-        if: matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'ubuntu-26.04'
         run: sudo apt-get install -y --no-install-recommends shellcheck
       - name: Lint install.sh
-        if: matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'ubuntu-26.04'
         run: shellcheck install.sh
 
       # Build the binary the same way the release path does, then
@@ -338,7 +338,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-26.04, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -448,7 +448,7 @@ jobs:
       - smoke-test-binary
       - install-script-smoke
       - self-update-smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Verify all jobs succeeded
         uses: Mergifyio/gha-mergify-ci@5e8176734bc525c7fd8b2e812f0fa47246f601b7 # v25

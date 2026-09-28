@@ -75,7 +75,7 @@ jobs:
   compute-tag:
     name: resolve release tag
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
@@ -147,7 +147,7 @@ jobs:
     name: create draft release with binaries
     if: github.event_name == 'workflow_dispatch'
     needs: [compute-tag, build-wheels-for-draft]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       # `gh release create` writes the release.
       contents: write
@@ -229,7 +229,7 @@ jobs:
       # Dump the CLI schema straight off the released binary so the
       # docs site renders the command reference from the same artifact
       # it ships — it can't drift from the binary. The x86_64 Linux
-      # wheel's binary runs natively on the ubuntu-24.04 runner. Stable
+      # wheel's binary runs natively on the ubuntu-26.04 runner. Stable
       # filename (the version is carried inside, under `cli.version`)
       # so docs tooling can fetch it off the latest release without
       # resolving the tag. Not added to SHA256SUMS — that file is the
@@ -289,7 +289,7 @@ jobs:
   assert-binaries-present:
     name: assert binary assets attached
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -347,7 +347,7 @@ jobs:
   publish:
     name: publish to PyPI
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs:
       - assert-binaries-present
       - build-wheels-for-publish
