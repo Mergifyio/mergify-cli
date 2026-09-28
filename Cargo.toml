@@ -47,7 +47,7 @@ jsonschema = { version = "0.56", default-features = false }
 # a container has no D-Bus session — and the store falls back to a
 # 0600 file, which is why no keychain failure is fatal.
 keyring = "4"
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace"] }
 prost = "0.14"
 quick-xml = "0.42"
 regex = "1"
