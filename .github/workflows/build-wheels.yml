@@ -14,7 +14,7 @@ name: build wheels
 # Windows x64. Add new targets here when a new platform is on the
 # support matrix — both CI and release pick it up automatically.
 #
-# Linux arm64 uses a native `ubuntu-24.04-arm` runner instead of
+# Linux arm64 uses a native `ubuntu-26.04-arm` runner instead of
 # cross-compiling: `ring`'s ARM-asm build script needs the C
 # compiler to define `__ARM_ARCH`, which the cross-gcc inside the
 # manylinux Docker image doesn't, and a native runner sidesteps the
@@ -54,9 +54,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-26.04-arm
             target: aarch64-unknown-linux-gnu
           - os: macos-15
             target: x86_64-apple-darwin
@@ -160,7 +160,7 @@ jobs:
   build-sdist:
     name: build sdist
     timeout-minutes: 10
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
