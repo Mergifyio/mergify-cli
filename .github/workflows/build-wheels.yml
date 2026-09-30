@@ -10,15 +10,19 @@ name: build wheels
 #     wheel version is stamped from `$GITHUB_REF` and the artifacts
 #     are uploaded for the publish job to push to PyPI.
 #
-# Targets: Linux x64 + arm64 (manylinux), macOS x64 + arm64,
-# Windows x64. Add new targets here when a new platform is on the
-# support matrix — both CI and release pick it up automatically.
+# Targets: Linux x64 + arm64 (manylinux and musllinux), macOS x64 +
+# arm64, Windows x64. Add new targets here when a new platform is on
+# the support matrix — both CI and release pick it up automatically.
 #
-# Linux arm64 uses a native `ubuntu-26.04-arm` runner instead of
-# cross-compiling: `ring`'s ARM-asm build script needs the C
-# compiler to define `__ARM_ARCH`, which the cross-gcc inside the
-# manylinux Docker image doesn't, and a native runner sidesteps the
-# problem entirely.
+# Linux arm64 (glibc and musl) uses a native `ubuntu-26.04-arm`
+# runner instead of cross-compiling: `ring`'s ARM-asm build script
+# needs the C compiler to define `__ARM_ARCH`, which the cross-gcc
+# inside the manylinux Docker image doesn't, and a native runner
+# sidesteps the problem entirely.
+#
+# The musllinux wheels are for PyPI only: `release.yml` does not turn
+# them into GitHub Release binaries, since `install.sh` and
+# `self-update` only resolve the glibc targets.
 
 on:
   workflow_call:
@@ -56,14 +60,28 @@ jobs:
         include:
           - os: ubuntu-26.04
             target: x86_64-unknown-linux-gnu
+            manylinux: auto
           - os: ubuntu-26.04-arm
             target: aarch64-unknown-linux-gnu
+            manylinux: auto
+          # Alpine and other musl distros: pip can't install a
+          # manylinux (glibc) wheel there, so without these they
+          # would fall back to building from source.
+          - os: ubuntu-26.04
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+          - os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
           - os: macos-15
             target: x86_64-apple-darwin
+            manylinux: auto
           - os: macos-15
             target: aarch64-apple-darwin
+            manylinux: auto
           - os: windows-2025
             target: x86_64-pc-windows-msvc
+            manylinux: auto
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -119,10 +137,11 @@ jobs:
         with:
           target: ${{ matrix.target }}
           # `manylinux: auto` picks the most-compatible glibc the
-          # target supports; `--strip` shaves debug symbols off the
-          # bundled binary.
+          # target supports, `musllinux_1_2` builds the musl legs; it
+          # is ignored on macOS and Windows. `--strip` shaves debug
+          # symbols off the bundled binary.
           args: --release --strip --out target/wheels
-          manylinux: auto
+          manylinux: ${{ matrix.manylinux }}
           sccache: true
           # Forward MERGIFY_RELEASE_VERSION into the manylinux Docker
           # container. On Linux maturin-action runs the build inside a
@@ -145,6 +164,17 @@ jobs:
         run: |
           python -m pip install --quiet twine
           twine check --strict target/wheels/*.whl
+
+      # The musl legs are the only ones built on a libc their runner
+      # doesn't have, so `ci.yaml`'s smoke-test-binary can't reach
+      # them. Install the wheel with pip in an Alpine container and
+      # run it, which also proves pip accepts the musllinux tag.
+      - name: Smoke-test the wheel on Alpine
+        if: matrix.manylinux == 'musllinux_1_2'
+        shell: bash
+        run: |
+          docker run --rm -v "${PWD}/target/wheels:/wheels:ro" python:3.14-alpine \
+            sh -euc 'pip install --quiet --no-index --find-links /wheels mergify-cli && mergify --version'
 
       # Only upload artifacts when the caller actually needs them
       # (release.yml downloads them in its publish job). PR smoke
