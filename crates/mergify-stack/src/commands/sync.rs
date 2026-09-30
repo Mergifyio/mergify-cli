@@ -63,7 +63,7 @@ pub struct Options<'a> {
     pub quiet: bool,
     /// Remote changes already fetched by the caller (the `stack push`
     /// pre-flight). When `Some`, `run` reuses them instead of
-    /// re-running the search + per-PR GETs that `get_remote_changes`
+    /// re-running the per-branch PR lookups that `get_remote_changes`
     /// does. `None` for the standalone `stack sync` command.
     pub prefetched_remote_changes: Option<Vec<remote_changes::RemoteChange>>,
     /// Skip the `git fetch <remote> <base>` pre-rebase. Set by
@@ -96,6 +96,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     let trunk_ref = format!("{remote}/{base_branch}");
     let base_commit_sha = compute_base_commit_sha(&repo_dir, &trunk_ref, &dest_branch)?;
 
+    let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
     let remote_changes = match &opts.prefetched_remote_changes {
         Some(changes) => changes.clone(),
         None => {
@@ -105,12 +106,11 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
                 opts.repo,
                 &stack_prefix,
                 Some(opts.author),
+                &local,
             )
             .await?
         }
     };
-
-    let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
     let status = sync_status::classify(
         dest_branch.clone(),
         trunk_ref.clone(),

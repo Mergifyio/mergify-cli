@@ -212,8 +212,8 @@ enum NativeCommand {
     InternalStackLocalCommits(InternalStackLocalCommitsOpts),
     /// `_internal stack-remote-changes --github-server URL --token T
     /// --user U --repo R --stack-prefix P --author A` — Python
-    /// migration helper. Searches GitHub for the open + merged PRs
-    /// belonging to the stack, groups them by Change-Id, prints a
+    /// migration helper. Looks up the open + merged PRs on the
+    /// stack's live branches, groups them by Change-Id, prints a
     /// JSON array of `{change_id, pull}` records. Wire format is
     /// not stable.
     InternalStackRemoteChanges(InternalStackRemoteChangesOpts),
@@ -2712,7 +2712,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 Ok(mergify_core::ExitCode::Success)
             }
             NativeCommand::InternalStackRemoteChanges(opts) => {
-                // Search GitHub for PRs belonging to the stack and
+                // Look up the PRs on the stack's live branches and
                 // group them by Change-Id, printed as a JSON array of
                 // `{change_id, pull}` records for whoever invoked this
                 // hidden command.
@@ -2734,6 +2734,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                     &opts.repo,
                     &opts.stack_prefix,
                     Some(opts.author.as_str()),
+                    &[],
                 )
                 .await?;
                 let json = serde_json::to_string(&changes).map_err(|e| {
@@ -3068,11 +3069,10 @@ enum InternalSubcommand {
     /// extraction. Not a stable user-facing surface.
     #[command(name = "stack-local-commits")]
     StackLocalCommits(InternalStackLocalCommitsArgs),
-    /// Search GitHub for the open + merged PRs belonging to a
-    /// stack and group them by `Change-Id`. Used by the Python
-    /// side of `mergify stack <cmd>` during migration to
-    /// centralise the GitHub search + per-PR fetch + change-id
-    /// regrouping. Not a stable user-facing surface.
+    /// Look up the open + merged PRs on a stack's live branches
+    /// and group them by `Change-Id`. A debugging aid: it has no
+    /// local stack, so a merged PR whose branch was deleted is not
+    /// found. Not a stable user-facing surface.
     #[command(name = "stack-remote-changes")]
     StackRemoteChanges(InternalStackRemoteChangesArgs),
     /// Self-invocation target for the rebase-family stack
@@ -3821,12 +3821,12 @@ struct InternalStackRemoteChangesArgs {
     /// Repository name.
     #[arg(long)]
     repo: String,
-    /// Stack branch prefix (e.g. `stack/main` — the search query
-    /// becomes `head:<prefix>/`).
+    /// Stack branch prefix (e.g. `stack/main` — the branches
+    /// looked up are `<prefix>/<slug>--<change-id>`).
     #[arg(long = "stack-prefix")]
     stack_prefix: String,
-    /// PR author to filter on. Limits the search to PRs the
-    /// current user owns — `mergify stack` only manages its own.
+    /// PR author to filter on. Keeps only PRs the current user
+    /// opened — `mergify stack` only manages its own.
     #[arg(long)]
     author: String,
 }
