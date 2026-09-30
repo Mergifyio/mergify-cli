@@ -55,8 +55,8 @@ gh run list --workflow=release.yml --limit 1
 gh run watch <run-id> --exit-status
 ```
 
-It builds the five-target wheel matrix, extracts the `mergify` binary from each
-wheel, packages the archives + `SHA256SUMS`, dumps `cli-schema.json`, signs the
+It builds the seven-target wheel matrix, extracts the `mergify` binary from each
+wheel except the two musllinux ones (those only go to PyPI), packages the archives + `SHA256SUMS`, dumps `cli-schema.json`, signs the
 binaries with build provenance, and creates the **draft** release with notes
 generated from the PRs merged since the previous tag.
 
