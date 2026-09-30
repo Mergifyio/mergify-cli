@@ -153,6 +153,8 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 
 The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`.
 
+On a merge queue draft pull request, scopes are not computed from changed files: the command reads the engine's git note for the batch and returns the scopes the merge queue decided (the batch's scopes plus each batched pull request's scopes, including scopes a pull request's CI reported), plus the merge queue scope. A batch the note marks as a barrier (`all_scopes: true`) selects every scope. This also works with a `manual` scopes source. Without a note, or with a note that has no `scopes` list, it falls back to diffing files.
+
 A renamed file counts against **both** of its paths, same as the engine: `git mv critical/guard.txt ignored/guard.txt` touches `critical` and `ignored`.
 
 ## Scopes Send (`scopes-send`)
