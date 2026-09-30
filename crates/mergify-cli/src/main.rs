@@ -3943,8 +3943,10 @@ enum CiSubcommand {
     ///
     /// Compute the configured scopes impacted by the files changed
     /// between two git references, using your Mergify configuration.
-    /// Print them, or write them to a file with --write for a later
-    /// "mergify ci scopes-send".
+    /// On a merge queue draft pull request, return instead the scopes
+    /// the merge queue decided for the batch, read from its git note,
+    /// plus the merge queue scope. Print them, or write them to a file
+    /// with --write for a later "mergify ci scopes-send".
     Scopes(ScopesCliArgs),
     /// Upload JUnit XML reports and ignore failed tests with
     /// Mergify's CI Insights Quarantine.

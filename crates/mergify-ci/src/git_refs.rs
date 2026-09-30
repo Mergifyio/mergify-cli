@@ -28,6 +28,7 @@
 //! base/head/source.
 
 use mergify_core::env;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::process::Command;
 
@@ -80,16 +81,29 @@ pub struct References {
     pub base: Option<String>,
     pub head: String,
     pub source: ReferencesSource,
+    /// The scopes the merge queue decided for this batch, read off
+    /// the engine's git note: see [`batch_scopes`]. `None` everywhere
+    /// else, the pull request body included, which anyone opening a
+    /// pull request titled `merge queue: ` writes.
+    pub batch_scopes: Option<BatchScopes>,
 }
 
-/// Trait-object-compatible hook for reading the merge-queue checking
-/// base SHA from the engine's git note.
+/// What the merge queue decided a batch covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchScopes {
+    pub scopes: BTreeSet<String>,
+    /// The batch is a merge-queue barrier: it impacts every scope,
+    /// whatever `scopes` names.
+    pub all_scopes: bool,
+}
+
+/// Trait-object-compatible hook for reading the engine's merge-queue
+/// git note for `(branch, head_sha)`, as its whole payload.
 ///
-/// git-refs only needs that one field, so the reader yields it directly
-/// rather than a half-populated struct. The real implementation shells
-/// out to `git`; tests inject a stub so detection can exercise the
-/// note-driven branches without touching a real repository.
-pub type NotesReader<'a> = &'a dyn Fn(&str, &str) -> Option<String>;
+/// The real implementation shells out to `git`; tests inject a stub
+/// so detection can exercise the note-driven branches without
+/// touching a real repository.
+pub type NotesReader<'a> = &'a dyn Fn(&str, &str) -> Option<serde_json::Value>;
 
 #[derive(Serialize)]
 struct JsonOutput<'a> {
@@ -163,6 +177,7 @@ pub fn detect(
             base: Some("HEAD^".to_string()),
             head: "HEAD".to_string(),
             source: ReferencesSource::FallbackLastCommit,
+            batch_scopes: None,
         });
     };
 
@@ -179,6 +194,7 @@ pub fn detect(
             base: None,
             head: "HEAD".to_string(),
             source: ReferencesSource::GithubEventOther,
+            batch_scopes: None,
         });
     }
 
@@ -194,12 +210,14 @@ fn detect_from_buildkite(notes_reader: NotesReader<'_>) -> Option<References> {
     }
     let commit = env::var_non_empty("BUILDKITE_COMMIT").unwrap_or_else(|| "HEAD".to_string());
     if let Some(branch) = env::var_non_empty("BUILDKITE_BRANCH")
-        && let Some(base) = notes_reader(&branch, &commit)
+        && let Some(note) = notes_reader(&branch, &commit)
+        && let Some(base) = checking_base_sha(&note)
     {
         return Some(References {
             base: Some(base),
             head: commit,
             source: ReferencesSource::MergeQueue,
+            batch_scopes: batch_scopes(&note),
         });
     }
     let base_branch = env::var_non_empty("BUILDKITE_PULL_REQUEST_BASE_BRANCH")?;
@@ -207,6 +225,7 @@ fn detect_from_buildkite(notes_reader: NotesReader<'_>) -> Option<References> {
         base: Some(base_branch),
         head: commit,
         source: ReferencesSource::BuildkitePullRequest,
+        batch_scopes: None,
     })
 }
 
@@ -224,12 +243,14 @@ fn detect_from_pull_request_event(
     if let Some(pr) = &event.pull_request
         && let Some(head_ref) = &pr.head
         && let Some(branch) = head_ref.r#ref.as_deref()
-        && let Some(base) = notes_reader(branch, &head_ref.sha)
+        && let Some(note) = notes_reader(branch, &head_ref.sha)
+        && let Some(base) = checking_base_sha(&note)
     {
         return Ok(Some(References {
             base: Some(base),
             head,
             source: ReferencesSource::MergeQueue,
+            batch_scopes: batch_scopes(&note),
         }));
     }
 
@@ -245,6 +266,7 @@ fn detect_from_pull_request_event(
                     base: Some(base),
                     head,
                     source: ReferencesSource::MergeQueue,
+                    batch_scopes: None,
                 }));
             }
             Some(rejected) => output.status(&format!(
@@ -265,6 +287,7 @@ fn detect_from_pull_request_event(
             base: Some(base.sha.clone()),
             head,
             source: ReferencesSource::GithubEventPullRequest,
+            batch_scopes: None,
         }));
     }
 
@@ -275,6 +298,7 @@ fn detect_from_pull_request_event(
             base: Some(default_branch.clone()),
             head,
             source: ReferencesSource::GithubEventPullRequest,
+            batch_scopes: None,
         }));
     }
 
@@ -293,6 +317,7 @@ fn detect_from_push_event(event: &GitHubEvent) -> Option<References> {
             base: Some(before.to_string()),
             head,
             source: ReferencesSource::GithubEventPush,
+            batch_scopes: None,
         });
     }
 
@@ -304,19 +329,17 @@ fn detect_from_push_event(event: &GitHubEvent) -> Option<References> {
         base: Some(default_branch),
         head: "HEAD".to_string(),
         source: ReferencesSource::GithubEventPush,
+        batch_scopes: None,
     })
 }
 
 /// Production implementation of [`NotesReader`]. Shells out to
 /// `git fetch` + `git notes show` and swallows any failure as `None`
 /// so callers can transparently fall through to other detection
-/// paths.
-///
-/// `read_note` returns the note's full payload; we pull just
-/// `checking_base_sha` out of it, so a note that lacks the field falls
-/// through to the other detection paths.
+/// paths. A note that lacks `checking_base_sha` falls through the
+/// same way.
 #[must_use]
-pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<String> {
+pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<serde_json::Value> {
     let notes_ref_short = format!("mergify/{branch}");
     let notes_ref = format!("refs/notes/{notes_ref_short}");
 
@@ -330,7 +353,7 @@ pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<String> {
         return None;
     }
 
-    checking_base_sha(&crate::git::read_note(&notes_ref_short, head_sha)?)
+    crate::git::read_note(&notes_ref_short, head_sha)
 }
 
 /// Whether `value` is a full git object name: 40 lowercase hex
@@ -379,6 +402,45 @@ fn checking_base_sha(note: &serde_json::Value) -> Option<String> {
         serde_json::Value::String(s) => Some(s.clone()),
         _ => None,
     }
+}
+
+/// The scopes the merge queue decided for the batch: the note's
+/// `scopes` (the batch's own set) unioned with every
+/// `pull_requests[].scopes`, so a pull whose scopes grew after the
+/// batch was composed is still tested for them.
+///
+/// `all_scopes` is the note's barrier flag, read strictly: anything
+/// but `true` is not a barrier, which is what a note that does not
+/// carry it means.
+///
+/// `None` when `scopes` is missing, which is what an engine predating
+/// the field writes, or when it or a pull's `scopes` is not a list
+/// of strings: the caller then diffs files as it always did, rather
+/// than test a batch without a pull's scopes. A present but empty list is a
+/// batch that touches no scope, and is returned as such.
+fn batch_scopes(note: &serde_json::Value) -> Option<BatchScopes> {
+    fn strings(value: &serde_json::Value) -> Option<Vec<String>> {
+        value
+            .as_array()?
+            .iter()
+            .map(|v| v.as_str().map(ToString::to_string))
+            .collect()
+    }
+    let mut scopes: BTreeSet<String> = strings(note.get("scopes")?)?.into_iter().collect();
+    for pull in note
+        .get("pull_requests")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(pull_scopes) = pull.get("scopes") {
+            scopes.extend(strings(pull_scopes)?);
+        }
+    }
+    Some(BatchScopes {
+        scopes,
+        all_scopes: note.get("all_scopes") == Some(&serde_json::Value::Bool(true)),
+    })
 }
 
 /// Render an untrusted scalar for a warning: `{:?}`-escaped, and cut
@@ -502,7 +564,7 @@ mod tests {
     const MQ_BASE: &str = "cafef00dcafef00dcafef00dcafef00dcafef00d";
     const NOTE_BASE: &str = "0badc0de0badc0de0badc0de0badc0de0badc0de";
 
-    fn no_notes(_branch: &str, _sha: &str) -> Option<String> {
+    fn no_notes(_branch: &str, _sha: &str) -> Option<serde_json::Value> {
         None
     }
 
@@ -821,7 +883,7 @@ mod tests {
         );
         let note_reader = |branch: &str, sha: &str| {
             if branch == "mq/main/0" && sha == "mq-head" {
-                Some(NOTE_BASE.to_string())
+                Some(serde_json::json!({"checking_base_sha": NOTE_BASE}))
             } else {
                 None
             }
@@ -836,6 +898,114 @@ mod tests {
             || detect(&mut cap.output, &note_reader).unwrap(),
         );
         assert_eq!(refs.base.as_deref(), Some(NOTE_BASE));
+    }
+
+    #[test]
+    fn batch_scopes_unions_the_batch_with_every_pull() {
+        use serde_json::json;
+        let set = |v: &[&str]| BatchScopes {
+            scopes: v.iter().map(|s| (*s).to_string()).collect(),
+            all_scopes: false,
+        };
+        assert_eq!(
+            batch_scopes(&json!({
+                "scopes": ["a"],
+                "pull_requests": [{"number": 1, "scopes": ["a", "b"]}, {"number": 2}],
+            })),
+            Some(set(&["a", "b"])),
+        );
+        // A batch touching no scope is an answer, not a missing one.
+        assert_eq!(
+            batch_scopes(&json!({"scopes": [], "pull_requests": []})),
+            Some(set(&[]))
+        );
+        assert_eq!(
+            batch_scopes(&json!({"scopes": [], "all_scopes": true})),
+            Some(BatchScopes {
+                scopes: BTreeSet::new(),
+                all_scopes: true
+            })
+        );
+        assert_eq!(
+            batch_scopes(&json!({"scopes": [], "all_scopes": "true"})),
+            Some(set(&[]))
+        );
+        // An engine predating the field, or a payload we can't read:
+        // diff files as before.
+        assert_eq!(batch_scopes(&json!({"pull_requests": []})), None);
+        assert_eq!(batch_scopes(&json!({"scopes": "a"})), None);
+        assert_eq!(batch_scopes(&json!({"scopes": ["a", 1]})), None);
+        assert_eq!(
+            batch_scopes(&json!({"scopes": ["a"], "pull_requests": [{"scopes": [1e10]}]})),
+            None
+        );
+    }
+
+    #[test]
+    fn mq_note_carries_batch_scopes_but_body_does_not() {
+        // The body is written by whoever opens a pull request titled
+        // `merge queue: `, so only the engine's note decides scopes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_event(
+            &dir,
+            &serde_json::json!({
+                "pull_request": {
+                    "title": "merge queue: batch",
+                    "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\nscopes: [body]\n```"),
+                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                },
+            }),
+        );
+        let note_reader = |_: &str, _: &str| {
+            Some(serde_json::json!({
+                "checking_base_sha": NOTE_BASE,
+                "scopes": ["a"],
+                "pull_requests": [{"number": 1, "scopes": ["a"]}, {"number": 2, "scopes": ["b"]}],
+            }))
+        };
+        let vars = [
+            ("GITHUB_EVENT_NAME", Some("pull_request")),
+            ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
+            ("BUILDKITE", None),
+        ];
+        let mut cap = Captured::human();
+        let refs = env::testing::with_vars(vars, || detect(&mut cap.output, &note_reader).unwrap());
+        assert_eq!(
+            refs.batch_scopes,
+            Some(BatchScopes {
+                scopes: ["a".to_string(), "b".to_string()].into(),
+                all_scopes: false,
+            })
+        );
+        let refs = env::testing::with_vars(vars, || detect(&mut cap.output, &no_notes).unwrap());
+        assert_eq!(refs.source, ReferencesSource::MergeQueue);
+        assert_eq!(refs.batch_scopes, None);
+    }
+
+    #[test]
+    fn buildkite_mq_note_carries_batch_scopes() {
+        let note_reader = |branch: &str, sha: &str| {
+            (branch == "mq/main/0" && sha == "mq-head")
+                .then(|| serde_json::json!({"checking_base_sha": NOTE_BASE, "scopes": ["a"]}))
+        };
+        let mut cap = Captured::human();
+        let refs = env::testing::with_vars(
+            [
+                ("BUILDKITE", Some("true")),
+                ("BUILDKITE_PULL_REQUEST", Some("7")),
+                ("BUILDKITE_COMMIT", Some("mq-head")),
+                ("BUILDKITE_BRANCH", Some("mq/main/0")),
+            ],
+            || detect(&mut cap.output, &note_reader).unwrap(),
+        );
+        assert_eq!(refs.base.as_deref(), Some(NOTE_BASE));
+        assert_eq!(
+            refs.batch_scopes,
+            Some(BatchScopes {
+                scopes: ["a".to_string()].into(),
+                all_scopes: false,
+            })
+        );
     }
 
     #[test]
@@ -891,6 +1061,7 @@ mod tests {
             base: Some("b".into()),
             head: "h".into(),
             source: ReferencesSource::GithubEventPush,
+            batch_scopes: None,
         };
         let mut cap = Captured::human();
         emit(&refs, Format::Text, &mut cap.output).unwrap();
@@ -906,6 +1077,7 @@ mod tests {
             base: None,
             head: "HEAD".into(),
             source: ReferencesSource::GithubEventOther,
+            batch_scopes: None,
         };
         let mut cap = Captured::human();
         emit(&refs, Format::Text, &mut cap.output).unwrap();
@@ -919,6 +1091,7 @@ mod tests {
             base: Some("main".into()),
             head: "has space".into(),
             source: ReferencesSource::MergeQueue,
+            batch_scopes: None,
         };
         let mut cap = Captured::human();
         emit(&refs, Format::Shell, &mut cap.output).unwrap();
@@ -934,6 +1107,7 @@ mod tests {
             base: None,
             head: "HEAD".into(),
             source: ReferencesSource::GithubEventOther,
+            batch_scopes: None,
         };
         let mut cap = Captured::human();
         emit(&refs, Format::Json, &mut cap.output).unwrap();
@@ -958,6 +1132,7 @@ mod tests {
             base: Some(format!("{MQ_BASE}\nevil=1")),
             head: NOTE_BASE.into(),
             source: ReferencesSource::MergeQueue,
+            batch_scopes: None,
         };
         env::testing::with_var("GITHUB_OUTPUT", Some(path.to_str().unwrap()), || {
             write_github_output(&refs).unwrap();
