@@ -187,6 +187,13 @@ jobs:
           mkdir -p dist
           for dir in artifacts/wheel-*; do
             target="${dir#artifacts/wheel-}"
+            # The musllinux wheels exist for `pip install` on Alpine;
+            # the release binaries stay the glibc set that
+            # `install.sh`, `self-update` and the asset assertion
+            # below expect.
+            if [[ "${target}" == *-musl ]]; then
+              continue
+            fi
             whl=$(ls "${dir}"/*.whl | head -1)
             workdir=$(mktemp -d)
             # Pick the binary name up-front from the target — every

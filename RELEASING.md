@@ -17,10 +17,11 @@ before the maintainer clicks Publish.
    release commit off an older branch.
 3. Click **Run workflow**.
 
-The workflow builds the wheel matrix (Linux x86_64/aarch64, macOS
-x86_64/aarch64, Windows x86_64), extracts the `mergify` binary out
-of each, packages `mergify-<version>-<target>.{tar.gz,zip}` +
-`SHA256SUMS`, dumps the CLI schema to `cli-schema.json` (rendered
+The workflow builds the wheel matrix (Linux x86_64/aarch64 for both
+glibc and musl, macOS x86_64/aarch64, Windows x86_64), extracts the
+`mergify` binary out of each glibc/macOS/Windows wheel (the musl
+wheels only go to PyPI), packages
+`mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`, dumps the CLI schema to `cli-schema.json` (rendered
 by the docs site into the command reference), and runs `gh release
 create <tag> --draft --generate-notes` to create the release with
 the assets attached and notes auto-generated from PRs merged since
