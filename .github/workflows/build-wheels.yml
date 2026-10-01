@@ -129,7 +129,7 @@ jobs:
           grep '^version = ' pyproject.toml
           # Propagate the tag into the maturin build so `mergify
           # --version` reports it. `Cargo.toml` stays at `0.0.0`
-          # (cargo's semver rejects the 4-component calver), and
+          # (the tag is the version's single source of truth), and
           # `crates/mergify-cli/build.rs` re-exports this env var
           # as a `rustc-env` for the binary's `VERSION` const.
           echo "MERGIFY_RELEASE_VERSION=${VERSION}" >> "${GITHUB_ENV}"

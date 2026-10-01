@@ -11,7 +11,7 @@ name: release
 #
 # Stage 1 — prepare-draft (`workflow_dispatch`):
 #   Maintainer opens Actions → "release" → "Run workflow" → enters
-#   the tag (e.g. `2026.6.12.1`). The workflow builds the wheel
+#   the tag (e.g. `2026.10.1`) or leaves it empty. The workflow builds the wheel
 #   matrix, extracts the binary from each wheel, packages
 #   `mergify-<version>-<target>.{tar.gz,zip}` + `SHA256SUMS`, dumps
 #   the CLI schema to `cli-schema.json`, and creates the GitHub
@@ -37,10 +37,10 @@ on:
     inputs:
       tag:
         description: |
-          Release tag to publish (e.g. `2026.6.12.1`). Leave empty
-          to auto-pick `YYYY.M.D.<next>` where `<next>` is one past
-          the highest existing tag for today's UTC date (1 if no
-          release has shipped today yet).
+          Release tag to publish, `YYYY.M.N` (e.g. `2026.10.1`).
+          Leave empty to auto-pick `YYYY.M.<next>` where `<next>` is
+          one past the highest version taken this UTC month (1 if
+          no release has shipped this month yet).
         required: false
         type: string
         default: ''
@@ -55,18 +55,17 @@ on:
   release:
     types: [published]
 
-# Serialize runs that could collide on the same tag. Auto-tag
-# dispatches share the `auto` group key — two near-simultaneous
-# clicks of "Run workflow" with an empty tag would otherwise both
-# resolve the same `YYYY.M.D.<next>` before either created the
-# release, and one would 422 on `gh release create` for a
-# duplicate tag. Explicit-tag and `release: published` runs key off
-# the tag itself so unrelated releases run in parallel. Don't
+# Every dispatch shares one group, whatever its tag: an auto run and
+# an explicit one naming the version auto would pick (or two auto
+# runs) could otherwise resolve the same `YYYY.M.<next>` side by
+# side and race to create the same draft. Releases are rare enough
+# that queueing them costs nothing. `release: published` runs key
+# off their tag — the version is fixed by then. Don't
 # cancel-in-progress: a release run end-to-end is the only correct
 # outcome — partial completion would leave a wheel mismatch with
 # the PyPI publish.
 concurrency:
-  group: release-${{ github.event_name }}-${{ inputs.tag || github.event.release.tag_name || 'auto' }}
+  group: release-${{ github.event_name == 'release' && github.event.release.tag_name || 'dispatch' }}
   cancel-in-progress: false
 
 jobs:
@@ -76,60 +75,70 @@ jobs:
     name: resolve release tag
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
+    permissions:
+      # checkout + the tag list, and the release list: GitHub only
+      # lists draft releases to a token that can push, and a pending
+      # draft holds its version without any tag existing yet.
+      contents: write
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # `git tag -l` needs the full tag list to find today's
-          # highest counter.
+          # `git tag -l` needs the full tag list to find this
+          # month's highest counter.
           fetch-depth: 0
           fetch-tags: true
 
       # Either honour an explicit `tag` input or synthesise
-      # `YYYY.M.D.<next>` from today's UTC date and the existing
-      # tag list. Both paths validate the result against the
-      # calver shape so a typo doesn't drift through the matrix
-      # and produce a wheel with a garbage version string.
+      # `YYYY.M.<next>` from this UTC month and the versions already
+      # taken. Three components because npm only takes SemVer and
+      # the CLI releases under one version with the npm, PyPI and
+      # RubyGems clients. Both paths validate the final shape so a
+      # typo doesn't drift through the matrix, and refuse a version
+      # already taken before the builds rather than at
+      # `gh release create`.
       - id: resolve
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
+          # A version is taken once a tag names it (the release was
+          # published) or a release does (including a draft still
+          # awaiting review, whose tag only appears on publish).
+          taken="$( { git tag -l; gh api --paginate "repos/${REPO}/releases" --jq '.[].tag_name'; } | sort -u)"
           if [ -n "${INPUT_TAG}" ]; then
               tag="${INPUT_TAG}"
               echo "Using explicit tag: ${tag}"
           else
-              # `%-m` / `%-d` drop the leading zero — matches the
-              # historic calver style (`2026.6.5.1`, not
-              # `2026.06.05.01`). UTC so the rollover is the same
+              # `%-m` drops the leading zero (`2026.9`, not
+              # `2026.09`). UTC so the rollover is the same
               # regardless of which maintainer triggers the run.
-              today=$(date -u +'%Y.%-m.%-d')
-              # Each pipe stage can fail loudly under `pipefail`
-              # *except* `grep` returning 1 on a no-match — that's
-              # the legitimate "no release shipped today yet"
-              # path and must collapse to an empty `last_n`.
-              # Swallow only that one exit with `{ … || true; }`.
-              last_n=$(git tag -l "${today}.*" \
-                  | { grep -E "^${today//./\\.}\\.[0-9]+$" || true; } \
+              month="$(date -u +'%Y.%-m')"
+              # `grep` exiting 1 on no match is the legitimate
+              # "nothing shipped this month yet" path — swallow only
+              # that, keeping pipefail otherwise. The anchored
+              # pattern keeps the old 4-component `YYYY.M.D.N` tags
+              # out of the count.
+              last_n="$(echo "${taken}" \
+                  | { grep -E "^${month//./\\.}\\.[0-9]+$" || true; } \
                   | awk -F. '{print $NF}' \
                   | sort -n \
-                  | tail -1)
-              if [ -z "${last_n}" ]; then
-                  next=1
-              else
-                  next=$((last_n + 1))
-              fi
-              tag="${today}.${next}"
+                  | tail -1)"
+              tag="${month}.$(( ${last_n:-0} + 1 ))"
               echo "Auto-computed tag: ${tag}"
           fi
           # Final shape check — `gh release create` would accept
-          # any string, so the validation lives here. Catches
-          # typos in the explicit-tag path and any future bug in
-          # the date arithmetic.
-          if ! [[ "${tag}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]+$ ]]; then
-              echo "::error::tag '${tag}' doesn't match the YYYY.M.D.N calver shape"
+          # any string, and npm would refuse a fourth component.
+          if ! [[ "${tag}" =~ ^[0-9]{4}\.(1[0-2]|[1-9])\.[1-9][0-9]*$ ]]; then
+              echo "::error::tag '${tag}' doesn't match the YYYY.M.N calver shape"
+              exit 1
+          fi
+          if grep -qxF "${tag}" <<<"${taken}"; then
+              echo "::error::${tag} is already taken by a tag or a release (a pending draft included); publish or delete it first"
               exit 1
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"

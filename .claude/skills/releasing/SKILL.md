@@ -10,7 +10,10 @@ to bump in any file** — `pyproject.toml` and `Cargo.toml` keep their placehold
 versions and the workflow stamps the tag in at build time. Never open a "release
 prep" PR.
 
-Versions are calver: `YYYY.M.D.N` (no zero padding, `N` starts at 1 each UTC day).
+Versions are calver: `YYYY.M.N` (no zero padding, `N` counts releases within the
+UTC month from 1, e.g. `2026.10.1`). Three components so the version is valid
+SemVer for npm, since the CLI shares its version with the test-framework
+clients. Releases before October 2026 used `YYYY.M.D.N`.
 
 `RELEASING.md` at the repo root is the human-facing runbook and explains *why*
 the flow is shaped this way (GitHub's immutable-releases policy). Read it when
@@ -40,9 +43,9 @@ git log --oneline $(git describe --tags --abbrev=0)..origin/main    # what ships
 Trigger it:
 
 ```shell
-gh workflow run release.yml                  # auto-picks YYYY.M.D.<next>
+gh workflow run release.yml                  # auto-picks YYYY.M.<next>
 # or, only when a specific version is needed:
-gh workflow run release.yml -f tag=2026.9.4.1 -f target_commitish=<sha>
+gh workflow run release.yml -f tag=2026.10.1 -f target_commitish=<sha>
 ```
 
 Leave `tag` empty unless the user asked for a specific version; leave

@@ -298,7 +298,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// `asset_name` in `SHA256SUMS`. Mirrors `install.sh` exactly: the
 /// line must split as `<hash> <name>` on whitespace where the
 /// second field equals `asset_name` *literally* (not `ends_with`,
-/// so `mergify-2099.1.1.1-fooX-target.tar.gz` can't accidentally pass the
+/// so `mergify-2099.1.1-fooX-target.tar.gz` can't accidentally pass the
 /// check for `target.tar.gz`), and the hash field must be 64 hex
 /// chars. Both layers fail closed.
 fn verify_checksum(archive: &[u8], asset_name: &str, sums: &str) -> Result<(), CliError> {
@@ -481,12 +481,12 @@ mod tests {
     #[test]
     fn select_asset_matches_versioned_name() {
         let assets = [
-            asset("mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz"),
-            asset("mergify-2099.1.1.1-aarch64-apple-darwin.tar.gz"),
+            asset("mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz"),
+            asset("mergify-2099.1.1-aarch64-apple-darwin.tar.gz"),
             asset("SHA256SUMS"),
         ];
         let found = select_asset(&assets, "aarch64-apple-darwin", "tar.gz").unwrap();
-        assert_eq!(found.name, "mergify-2099.1.1.1-aarch64-apple-darwin.tar.gz");
+        assert_eq!(found.name, "mergify-2099.1.1-aarch64-apple-darwin.tar.gz");
     }
 
     #[test]
@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn select_asset_errors_when_platform_absent() {
         let assets = [
-            asset("mergify-2099.1.1.1-x86_64-pc-windows-msvc.zip"),
+            asset("mergify-2099.1.1-x86_64-pc-windows-msvc.zip"),
             asset("SHA256SUMS"),
         ];
         let err = select_asset(&assets, "aarch64-apple-darwin", "tar.gz").unwrap_err();
@@ -518,8 +518,8 @@ mod tests {
         // Two assets with the same target suffix — refuse rather
         // than silently grabbing the first.
         let assets = [
-            asset("mergify-2099.1.1.1-x86_64-apple-darwin.tar.gz"),
-            asset("mergify-2099.1.1.2-x86_64-apple-darwin.tar.gz"),
+            asset("mergify-2099.1.1-x86_64-apple-darwin.tar.gz"),
+            asset("mergify-2099.1.2-x86_64-apple-darwin.tar.gz"),
         ];
         let err = select_asset(&assets, "x86_64-apple-darwin", "tar.gz").unwrap_err();
         assert!(
@@ -534,10 +534,10 @@ mod tests {
         let mut h = Sha256::new();
         h.update(&archive);
         let hash = hex_encode(&h.finalize());
-        let sums = format!("{hash}  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz\n");
+        let sums = format!("{hash}  mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz\n");
         verify_checksum(
             &archive,
-            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz",
             &sums,
         )
         .unwrap();
@@ -547,10 +547,10 @@ mod tests {
     fn verify_checksum_rejects_mismatch() {
         let archive = fixture_archive();
         let wrong = "0".repeat(64);
-        let sums = format!("{wrong}  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz\n");
+        let sums = format!("{wrong}  mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz\n");
         let err = verify_checksum(
             &archive,
-            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz",
             &sums,
         )
         .unwrap_err();
@@ -559,10 +559,10 @@ mod tests {
 
     #[test]
     fn verify_checksum_rejects_missing_entry() {
-        let sums = "deadbeef  mergify-2099.1.1.1-aarch64-apple-darwin.tar.gz\n";
+        let sums = "deadbeef  mergify-2099.1.1-aarch64-apple-darwin.tar.gz\n";
         let err = verify_checksum(
             &[],
-            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz",
             sums,
         )
         .unwrap_err();
@@ -573,7 +573,7 @@ mod tests {
     fn verify_checksum_does_not_accept_suffix_match() {
         // Regression for the pre-fix `ends_with` lookup: a sibling
         // asset whose name *ends in* `asset_name` (here
-        // `mergify-2099.1.1.1-x86_64-pc-windows-msvc.zip` ending in
+        // `mergify-2099.1.1-x86_64-pc-windows-msvc.zip` ending in
         // `.zip`) could be matched and pass even when the requested
         // asset wasn't in the file. The literal second-field match
         // must reject this.
@@ -581,7 +581,7 @@ mod tests {
         let mut h = Sha256::new();
         h.update(&archive);
         let hash = hex_encode(&h.finalize());
-        let sums = format!("{hash}  mergify-2099.1.1.1-x86_64-pc-windows-msvc.zip\n");
+        let sums = format!("{hash}  mergify-2099.1.1-x86_64-pc-windows-msvc.zip\n");
         let err = verify_checksum(&archive, "msvc.zip", &sums).unwrap_err();
         assert!(
             err.to_string().contains("no checksum entry"),
@@ -600,10 +600,10 @@ mod tests {
         let mut h = Sha256::new();
         h.update(&archive);
         let hash = hex_encode(&h.finalize());
-        let sums = format!("{hash}  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz extra\n");
+        let sums = format!("{hash}  mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz extra\n");
         let err = verify_checksum(
             &archive,
-            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz",
             &sums,
         )
         .unwrap_err();
@@ -618,10 +618,10 @@ mod tests {
         // Right asset name, wrong-shape hash. install.sh validates
         // the same way so a corrupted SHA256SUMS can't slip past
         // sha256sum's warn-but-pass behaviour; mirror it here.
-        let sums = "bogus  mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz\n";
+        let sums = "bogus  mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz\n";
         let err = verify_checksum(
             &[],
-            "mergify-2099.1.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "mergify-2099.1.1-x86_64-unknown-linux-gnu.tar.gz",
             sums,
         )
         .unwrap_err();
