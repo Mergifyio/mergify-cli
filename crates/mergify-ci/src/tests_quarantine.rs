@@ -274,8 +274,8 @@ struct AddQuarantineResponse {
 /// id with the minimal [`QuarantineListItem`], while `quarantined`
 /// reads the full [`QuarantinedTest`] for display.
 #[derive(Deserialize)]
-struct QuarantineList<T> {
-    quarantined_tests: Vec<T>,
+pub(crate) struct QuarantineList<T> {
+    pub(crate) quarantined_tests: Vec<T>,
 }
 
 #[derive(Deserialize)]

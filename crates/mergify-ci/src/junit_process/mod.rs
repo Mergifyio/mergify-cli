@@ -25,7 +25,7 @@ pub mod upload;
 
 pub use command::{JunitProcessOptions, run};
 pub use junit::{Failure, InvalidJunitXml, ParseResult, TestCase, TestStatus};
-pub use quarantine::{QuarantineFailed, QuarantineResult, QuarantinedTests};
+pub use quarantine::{QuarantineFailed, QuarantineResult};
 pub use spans::{BuiltTraces, UploadMetadata, build_traces};
 pub use split::{Chunk, SplitOutcome, split_request};
 pub use upload::{

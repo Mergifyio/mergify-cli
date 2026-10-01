@@ -474,12 +474,10 @@ fn blocking_fallback(cases: &[TestCase]) -> QuarantineResult {
         .filter(|c| c.status.is_failure())
         .cloned()
         .collect();
-    let count = failing.len();
     QuarantineResult {
         non_quarantined: failing.clone(),
         failing,
         quarantined: Vec::new(),
-        failing_not_quarantined_count: count,
     }
 }
 
@@ -493,8 +491,8 @@ fn quarantine_failure_message(
             "Treating {nb_failures}/{nb_failures} failures as blocking"
         ));
     }
-    if result.failing_not_quarantined_count > 0 {
-        let count = result.failing_not_quarantined_count;
+    if !result.non_quarantined.is_empty() {
+        let count = result.non_quarantined.len();
         let total = result.failing.len();
         let quarantined = total - count;
         return Some(format!("{quarantined}/{total} failures quarantined"));
@@ -940,7 +938,6 @@ mod tests {
             failing: vec![case("a", TestStatus::Failed), case("b", TestStatus::Failed)],
             non_quarantined: vec![case("a", TestStatus::Failed), case("b", TestStatus::Failed)],
             quarantined: vec![],
-            failing_not_quarantined_count: 2,
         };
         let msg = quarantine_failure_message(&result, 2, true);
         // Pythonic phrasing: "Treating X/X failures as blocking".
@@ -953,7 +950,6 @@ mod tests {
             failing: vec![case("a", TestStatus::Failed), case("b", TestStatus::Failed)],
             quarantined: vec![case("a", TestStatus::Failed)],
             non_quarantined: vec![case("b", TestStatus::Failed)],
-            failing_not_quarantined_count: 1,
         };
         // 1/2 still blocking → message says "1/2 quarantined".
         let msg = quarantine_failure_message(&result, 2, false);
@@ -966,7 +962,6 @@ mod tests {
             failing: vec![case("a", TestStatus::Failed)],
             quarantined: vec![case("a", TestStatus::Failed)],
             non_quarantined: vec![],
-            failing_not_quarantined_count: 0,
         };
         // Every failure quarantined → no failure message.
         assert_eq!(quarantine_failure_message(&result, 1, false), None);
@@ -1202,11 +1197,10 @@ mod tests {
         // the wire shape is already covered by `quarantine.rs` and
         // `upload.rs` unit tests.
         async fn mount_mocks(server: &MockServer) {
-            Mock::given(method("POST"))
-                .and(path("/v1/ci/owner/repositories/repo/quarantines/check"))
+            Mock::given(method("GET"))
+                .and(path("/v1/ci/owner/repositories/repo/quarantines"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "quarantined_tests_names": [],
-                    "non_quarantined_tests_names": [],
+                    "quarantined_tests": [],
                 })))
                 .mount(server)
                 .await;
@@ -1494,11 +1488,10 @@ mod tests {
         #[tokio::test]
         async fn partial_fan_out_reports_the_session_as_incomplete() {
             let server = MockServer::start().await;
-            Mock::given(method("POST"))
-                .and(path("/v1/ci/owner/repositories/repo/quarantines/check"))
+            Mock::given(method("GET"))
+                .and(path("/v1/ci/owner/repositories/repo/quarantines"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "quarantined_tests_names": [],
-                    "non_quarantined_tests_names": [],
+                    "quarantined_tests": [],
                 })))
                 .mount(&server)
                 .await;
@@ -1976,11 +1969,10 @@ mod tests {
         // Mount a quarantine mock that says "nothing quarantined"
         // and a traces mock that answers `upload_status`.
         async fn mount_mocks_with_upload_status(server: &MockServer, upload_status: u16) {
-            Mock::given(method("POST"))
-                .and(path("/v1/ci/owner/repositories/repo/quarantines/check"))
+            Mock::given(method("GET"))
+                .and(path("/v1/ci/owner/repositories/repo/quarantines"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "quarantined_tests_names": [],
-                    "non_quarantined_tests_names": [],
+                    "quarantined_tests": [],
                 })))
                 .mount(server)
                 .await;
