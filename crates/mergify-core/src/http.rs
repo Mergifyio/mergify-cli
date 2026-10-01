@@ -107,8 +107,9 @@ pub struct Page<T> {
 enum OnTerminalError {
     /// Render it into a [`CliError`]. The default.
     Fail,
-    /// 404 short-circuits to `Ok(None)`; everything else fails.
-    NotFoundIsNone,
+    /// The given status short-circuits to `Ok(None)`; everything
+    /// else fails.
+    StatusIsNone(u16),
     /// Hand the response back unread so the caller can decode a
     /// protocol-defined error body.
     ReturnResponse,
@@ -245,18 +246,50 @@ impl Client {
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<Page<T>, CliError> {
+        // `OnTerminalError::Fail` never returns `None`;
+        // `Option::expect` documents that invariant.
+        Ok(self
+            .fetch_page(path, query, OnTerminalError::Fail)
+            .await?
+            .expect("fetch_page returned None despite OnTerminalError::Fail"))
+    }
+
+    /// [`Self::get_page`], but return `None` when the server answers
+    /// `status` — for an endpoint where that status is a routine
+    /// caller branch (e.g. 402: the feature is not in the plan).
+    pub async fn get_page_unless<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        status: u16,
+    ) -> Result<Option<Page<T>>, CliError> {
+        self.fetch_page(path, query, OnTerminalError::StatusIsNone(status))
+            .await
+    }
+
+    async fn fetch_page<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        terminal: OnTerminalError,
+    ) -> Result<Option<Page<T>>, CliError> {
         let mut url = self.join(path)?;
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query.iter().copied());
         }
-        let resp = self.execute_request(self.inner.get(url)).await?;
+        let Some(resp) = self
+            .execute_with_retry(self.inner.get(url), terminal, None)
+            .await?
+        else {
+            return Ok(None);
+        };
         let next_cursor = resp
             .headers()
             .get(reqwest::header::LINK)
             .and_then(|value| value.to_str().ok())
             .and_then(next_cursor_from_link);
         let body = self.decode_json(resp).await?;
-        Ok(Page { body, next_cursor })
+        Ok(Some(Page { body, next_cursor }))
     }
 
     /// GET `path`, decoding the JSON body as `T` on success and as
@@ -438,9 +471,13 @@ impl Client {
     /// as taking no body should be sent none, not a JSON `null`.
     pub async fn post_empty_if_exists(&self, path: &str) -> Result<(), CliError> {
         let url = self.join(path)?;
-        self.execute_with_retry(self.inner.post(url), OnTerminalError::NotFoundIsNone, None)
-            .await
-            .map(drop)
+        self.execute_with_retry(
+            self.inner.post(url),
+            OnTerminalError::StatusIsNone(StatusCode::NOT_FOUND.as_u16()),
+            None,
+        )
+        .await
+        .map(drop)
     }
 
     /// PUT `body` as JSON to `path` and deserialize the JSON
@@ -603,11 +640,6 @@ impl Client {
                     if status.is_success() {
                         return Ok(Some(resp));
                     }
-                    if terminal == OnTerminalError::NotFoundIsNone
-                        && status == StatusCode::NOT_FOUND
-                    {
-                        return Ok(None);
-                    }
                     // Inspect rate-limit headers before the body is
                     // read. GitHub signals secondary/abuse limits with
                     // 429, or 403 carrying `Retry-After` / an exhausted
@@ -618,6 +650,13 @@ impl Client {
                         || (status == StatusCode::FORBIDDEN && rate_limit.is_some());
                     let retryable = (status.is_server_error() || rate_limited)
                         && attempt + 1 < self.retry.max_attempts;
+                    let protocol_answer = !retryable && !status.is_server_error() && !rate_limited;
+                    // After the retry decision: a server failure or a
+                    // throttle is never a routine absence.
+                    if protocol_answer && terminal == OnTerminalError::StatusIsNone(status.as_u16())
+                    {
+                        return Ok(None);
+                    }
                     // Terminal, and the caller wants the body: hand the
                     // response over unread. Reading it here to render a
                     // message would consume the very bytes the caller
@@ -640,11 +679,7 @@ impl Client {
                     // "the credential was refused" would tell the user
                     // their credential is revoked — `auth status`
                     // does exactly that.
-                    if !retryable
-                        && !status.is_server_error()
-                        && !rate_limited
-                        && terminal == OnTerminalError::ReturnResponse
-                    {
+                    if protocol_answer && terminal == OnTerminalError::ReturnResponse {
                         return Ok(Some(resp));
                     }
                     last_message = error_message(status, resp).await;
@@ -719,8 +754,12 @@ impl Client {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<Option<reqwest::Response>, CliError> {
-        self.execute_with_retry(builder, OnTerminalError::NotFoundIsNone, None)
-            .await
+        self.execute_with_retry(
+            builder,
+            OnTerminalError::StatusIsNone(StatusCode::NOT_FOUND.as_u16()),
+            None,
+        )
+        .await
     }
 
     /// Send a request that cares only about the HTTP status.
@@ -731,7 +770,11 @@ impl Client {
         builder: reqwest::RequestBuilder,
     ) -> Result<DeleteOutcome, CliError> {
         match self
-            .execute_with_retry(builder, OnTerminalError::NotFoundIsNone, None)
+            .execute_with_retry(
+                builder,
+                OnTerminalError::StatusIsNone(StatusCode::NOT_FOUND.as_u16()),
+                None,
+            )
             .await?
         {
             Some(_) => Ok(DeleteOutcome::Deleted),
@@ -2037,6 +2080,42 @@ mod tests {
         let page: Page<Foo> = client.get_page("/paged", &[]).await.unwrap();
         assert_eq!(page.body, Foo { bar: 2 });
         assert_eq!(page.next_cursor, None);
+    }
+
+    #[tokio::test]
+    async fn get_page_unless_returns_none_on_the_given_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/paged"))
+            .respond_with(ResponseTemplate::new(402))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let page: Option<Page<Foo>> = client.get_page_unless("/paged", &[], 402).await.unwrap();
+        assert!(page.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_page_unless_still_retries_and_fails_a_server_error() {
+        // A 5xx is the server failing, never a routine absence, even
+        // when the caller names it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/paged"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let client = fast_client(&server, ApiFlavor::Mergify);
+        let err = client
+            .get_page_unless::<Foo>("/paged", &[], 503)
+            .await
+            .err()
+            .expect("a 5xx must fail");
+        assert!(matches!(err, CliError::MergifyApi(_)));
     }
 
     #[tokio::test]

@@ -6,32 +6,27 @@
 //! tests still block.
 //!
 //! Endpoint shape:
-//! `POST {api_url}/v1/ci/{owner}/repositories/{repo}/quarantines/check`
+//! `GET {api_url}/v1/ci/{owner}/repositories/{repo}/quarantines?branch=...`
+//! returns, one cursor-paginated page at a time,
 //! ```json
-//! { "tests_names": [...], "branch": "..." }
-//! ```
-//! returns
-//! ```json
-//! { "quarantined_tests_names": [...], "non_quarantined_tests_names": [...] }
+//! { "quarantined_tests": [{ "test_name": "..." }, ...] }
 //! ```
 
 use std::collections::BTreeSet;
 
 use mergify_core::{ApiFlavor, CliError, HttpClient};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use url::Url;
 
 use crate::detector;
 use crate::junit_process::junit::TestCase;
+use crate::tests_quarantine::QuarantineList;
 
-/// What the quarantine API told us about a set of failing test
-/// case names — sets so membership checks are O(log n) when we
-/// later tag each span.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct QuarantinedTests {
-    pub quarantined: BTreeSet<String>,
-    pub non_quarantined: BTreeSet<String>,
-}
+/// Page size requested from the quarantine list endpoint.
+const PER_PAGE: &str = "100";
+
+/// Status the API answers when quarantine is not in the plan.
+const PAYMENT_REQUIRED: u16 = 402;
 
 /// Cross-cutting view of a `junit-process` run: which case names
 /// failed, which the backend says are currently quarantined, and
@@ -43,19 +38,11 @@ pub struct QuarantinedTests {
 pub struct QuarantineResult {
     /// Every failing test case (status = Failed or Errored).
     pub failing: Vec<TestCase>,
-    /// Subset of `failing` whose names appear in the
-    /// `quarantined_tests_names` API response.
+    /// Subset of `failing` currently quarantined on the branch.
     pub quarantined: Vec<TestCase>,
-    /// Subset of `failing` the API explicitly reported as
-    /// non-quarantined. May be a strict subset of
-    /// `failing - quarantined` when the API silently dropped some
-    /// names; we trust the API's split rather than reconstructing
-    /// it locally, to match Python.
+    /// Subset of `failing` not quarantined on the branch. Empty →
+    /// CI passes, non-empty → CI fails.
     pub non_quarantined: Vec<TestCase>,
-    /// Count of failing tests that are NOT quarantined. This is
-    /// what determines the final exit code: zero → CI passes,
-    /// non-zero → CI fails.
-    pub failing_not_quarantined_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +61,7 @@ impl std::error::Error for QuarantineFailed {}
 /// Find every test case in `cases` whose status is a failure
 /// (`Failed` or `Errored`). Mirrors Python's filter; the spans
 /// inheriting this property are tagged `cicd.test.quarantined`
-/// at the `spans` layer based on the result of [`check`].
+/// at the `spans` layer based on the result of [`fetch`].
 fn failing_cases(cases: &[TestCase]) -> Vec<TestCase> {
     cases
         .iter()
@@ -83,70 +70,71 @@ fn failing_cases(cases: &[TestCase]) -> Vec<TestCase> {
         .collect()
 }
 
-/// Query the Mergify CI Insights quarantine API for the names in
-/// `failing_names` against the given branch. Returns the API's
-/// own split — we do NOT reconstruct `non_quarantined =
-/// failing - quarantined` locally, to match Python's behavior.
-///
-/// `failing_names` may contain duplicates if the `JUnit` input has
-/// the same test name reported by multiple suites; that's fine —
-/// the API treats names as a set.
-pub async fn check(
+/// Fetch the names of every test quarantined on `branch`, following
+/// the cursor pagination until the last page. A repository without
+/// the feature in its plan (402) has nothing quarantined.
+pub async fn fetch(
     api_url: &Url,
     token: &str,
     repository: &str,
     branch: &str,
-    failing_names: &[String],
-) -> Result<QuarantinedTests, QuarantineFailed> {
-    let (owner, repo) = detector::split_owner_repo(repository).map_err(|e| QuarantineFailed {
-        message: e.to_string(),
-    })?;
+) -> Result<BTreeSet<String>, QuarantineFailed> {
+    let failed = |message: String| QuarantineFailed { message };
+    let (owner, repo) =
+        detector::split_owner_repo(repository).map_err(|e| failed(e.to_string()))?;
+    let client = HttpClient::new(api_url.clone(), token, ApiFlavor::Mergify)
+        .map_err(|e| failed(e.to_string()))?;
 
-    let client = HttpClient::new(api_url.clone(), token, ApiFlavor::Mergify).map_err(|e| {
-        QuarantineFailed {
-            message: e.to_string(),
+    let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines");
+    let mut quarantined = BTreeSet::new();
+    let mut seen_cursors = BTreeSet::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut query = vec![("branch", branch), ("per_page", PER_PAGE)];
+        if let Some(cursor) = &cursor {
+            query.push(("cursor", cursor));
         }
-    })?;
+        let Some(page) = client
+            .get_page_unless::<QuarantineList<QuarantinedTestName>>(&path, &query, PAYMENT_REQUIRED)
+            .await
+            .map_err(|e| failed(e.to_string()))?
+        else {
+            return Ok(BTreeSet::new());
+        };
+        quarantined.extend(page.body.quarantined_tests.into_iter().map(|t| t.test_name));
 
-    let path = format!("/v1/ci/{owner}/repositories/{repo}/quarantines/check");
-    let body = CheckRequest {
-        tests_names: failing_names,
-        branch,
-    };
-
-    let resp: CheckResponse = client
-        .post(&path, &body)
-        .await
-        .map_err(|e| QuarantineFailed {
-            message: e.to_string(),
-        })?;
-
-    Ok(QuarantinedTests {
-        quarantined: resp.quarantined_tests_names.into_iter().collect(),
-        non_quarantined: resp.non_quarantined_tests_names.into_iter().collect(),
-    })
+        let Some(next) = page.next_cursor else {
+            return Ok(quarantined);
+        };
+        // A cursor pointing back to a fetched page would loop forever;
+        // a partial list would silently un-quarantine tests.
+        if !seen_cursors.insert(next.clone()) {
+            return Err(failed(
+                "quarantine pagination cycled back to a fetched page".to_string(),
+            ));
+        }
+        cursor = Some(next);
+    }
 }
 
 /// Categorize the failing test cases into quarantined and
-/// non-quarantined buckets, given the API's verdict. The result
+/// non-quarantined buckets, given the branch's quarantined names. The result
 /// keeps the failing-cases list intact so the CLI can render the
 /// "X/Y failures quarantined" summary without re-walking the
 /// original `JUnit` input.
 #[must_use]
-pub fn categorize(failing: Vec<TestCase>, verdict: &QuarantinedTests) -> QuarantineResult {
+pub fn categorize(
+    failing: Vec<TestCase>,
+    quarantined_names: &BTreeSet<String>,
+) -> QuarantineResult {
     let mut quarantined = Vec::new();
     let mut non_quarantined = Vec::new();
-    let mut failing_not_quarantined_count = 0;
 
     for case in &failing {
-        let is_quarantined = verdict.quarantined.contains(&case.name);
-        if is_quarantined {
+        if quarantined_names.contains(&case.name) {
             quarantined.push(case.clone());
         } else {
-            failing_not_quarantined_count += 1;
-            if verdict.non_quarantined.contains(&case.name) {
-                non_quarantined.push(case.clone());
-            }
+            non_quarantined.push(case.clone());
         }
     }
 
@@ -154,7 +142,6 @@ pub fn categorize(failing: Vec<TestCase>, verdict: &QuarantinedTests) -> Quarant
         failing,
         quarantined,
         non_quarantined,
-        failing_not_quarantined_count,
     }
 }
 
@@ -173,9 +160,8 @@ pub async fn check_failing(
     if failing.is_empty() {
         return Ok(QuarantineResult::default());
     }
-    let names: Vec<String> = failing.iter().map(|c| c.name.clone()).collect();
-    let verdict = check(api_url, token, repository, branch, &names).await?;
-    Ok(categorize(failing, &verdict))
+    let quarantined_names = fetch(api_url, token, repository, branch).await?;
+    Ok(categorize(failing, &quarantined_names))
 }
 
 /// Lift a [`QuarantineFailed`] into the shared [`CliError`] so
@@ -188,16 +174,9 @@ impl From<QuarantineFailed> for CliError {
     }
 }
 
-#[derive(Serialize)]
-struct CheckRequest<'a> {
-    tests_names: &'a [String],
-    branch: &'a str,
-}
-
 #[derive(Deserialize)]
-struct CheckResponse {
-    quarantined_tests_names: Vec<String>,
-    non_quarantined_tests_names: Vec<String>,
+struct QuarantinedTestName {
+    test_name: String,
 }
 
 #[cfg(test)]
@@ -205,7 +184,7 @@ mod tests {
     use super::*;
     use crate::junit_process::junit::{Failure, TestStatus};
     use std::time::Duration;
-    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn case(name: &str, status: TestStatus) -> TestCase {
@@ -220,6 +199,24 @@ mod tests {
         }
     }
 
+    fn names(cases: &[TestCase]) -> Vec<&str> {
+        cases.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    fn page(test_names: &[&str]) -> serde_json::Value {
+        let tests: Vec<_> = test_names
+            .iter()
+            .map(|name| serde_json::json!({ "test_name": name }))
+            .collect();
+        serde_json::json!({ "quarantined_tests": tests })
+    }
+
+    fn link(cursor: &str) -> String {
+        format!(
+            "<https://api.example/v1/ci/owner/repositories/repo/quarantines?cursor={cursor}>; rel=\"next\""
+        )
+    }
+
     #[test]
     fn categorize_buckets_quarantined_separately() {
         let failing = vec![
@@ -227,78 +224,99 @@ mod tests {
             case("b", TestStatus::Errored),
             case("c", TestStatus::Failed),
         ];
-        let verdict = QuarantinedTests {
-            quarantined: ["a".to_string()].into_iter().collect(),
-            non_quarantined: ["b".to_string(), "c".to_string()].into_iter().collect(),
-        };
-        let r = categorize(failing, &verdict);
-        assert_eq!(
-            r.quarantined.iter().map(|c| &c.name).collect::<Vec<_>>(),
-            vec!["a"]
-        );
-        assert_eq!(
-            r.non_quarantined
-                .iter()
-                .map(|c| &c.name)
-                .collect::<Vec<_>>(),
-            vec!["b", "c"]
-        );
+        let quarantined_names = ["a".to_string(), "unrelated".to_string()]
+            .into_iter()
+            .collect();
+        let r = categorize(failing, &quarantined_names);
+        assert_eq!(names(&r.quarantined), vec!["a"]);
+        assert_eq!(names(&r.non_quarantined), vec!["b", "c"]);
         // 2 failures not quarantined — drives the non-zero exit code.
-        assert_eq!(r.failing_not_quarantined_count, 2);
-    }
-
-    #[test]
-    fn categorize_counts_unknown_as_not_quarantined() {
-        // The API may omit names it doesn't recognize (e.g. typo,
-        // never seen before). Python treats those as failures that
-        // weren't quarantined → must count toward
-        // `failing_not_quarantined_count` even though they're not
-        // explicitly listed in `non_quarantined_tests_names`.
-        let failing = vec![case("x", TestStatus::Failed)];
-        let verdict = QuarantinedTests::default();
-        let r = categorize(failing, &verdict);
-        assert!(r.quarantined.is_empty());
-        assert!(r.non_quarantined.is_empty());
-        assert_eq!(r.failing_not_quarantined_count, 1);
+        assert_eq!(r.non_quarantined.len(), 2);
     }
 
     #[tokio::test]
-    async fn check_posts_to_owner_scoped_path() {
+    async fn fetch_follows_pagination_to_completion() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/ci/owner/repositories/repo/quarantines/check"))
+        Mock::given(method("GET"))
+            .and(path("/v1/ci/owner/repositories/repo/quarantines"))
             .and(header("Authorization", "Bearer secret"))
-            .and(body_json(serde_json::json!({
-                "tests_names": ["t1", "t2"],
-                "branch": "main",
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "quarantined_tests_names": ["t1"],
-                "non_quarantined_tests_names": ["t2"],
-            })))
+            .and(query_param("branch", "main"))
+            .and(query_param("per_page", "100"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", link("c2").as_str())
+                    .set_body_json(page(&["t1"])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/ci/owner/repositories/repo/quarantines"))
+            .and(query_param("branch", "main"))
+            .and(query_param("per_page", "100"))
+            .and(query_param("cursor", "c2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page(&["t2"])))
+            .expect(1)
             .mount(&server)
             .await;
 
         let api_url = Url::parse(&server.uri()).unwrap();
-        let verdict = check(
-            &api_url,
-            "secret",
-            "owner/repo",
-            "main",
-            &["t1".to_string(), "t2".to_string()],
-        )
-        .await
-        .expect("API call succeeds");
-        assert_eq!(verdict.quarantined.len(), 1);
-        assert!(verdict.quarantined.contains("t1"));
-        assert!(verdict.non_quarantined.contains("t2"));
+        let quarantined = fetch(&api_url, "secret", "owner/repo", "main")
+            .await
+            .expect("API call succeeds");
+        assert_eq!(
+            quarantined,
+            ["t1".to_string(), "t2".to_string()].into_iter().collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_surfaces_pagination_cycle_as_quarantine_failed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/ci/owner/repositories/repo/quarantines"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", link("loop").as_str())
+                    .set_body_json(page(&["t1"])),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let api_url = Url::parse(&server.uri()).unwrap();
+        let err = fetch(&api_url, "tok", "owner/repo", "main")
+            .await
+            .expect_err("a cycle must not return a partial list");
+        assert_eq!(
+            err.message,
+            "quarantine pagination cycled back to a fetched page"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_treats_payment_required_as_nothing_quarantined() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/ci/owner/repositories/repo/quarantines"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("upgrade your plan"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api_url = Url::parse(&server.uri()).unwrap();
+        let quarantined = fetch(&api_url, "tok", "owner/repo", "main")
+            .await
+            .expect("402 is not a failure");
+        assert!(quarantined.is_empty());
     }
 
     #[tokio::test]
     async fn check_failing_short_circuits_when_no_failures() {
         // Empty failing list → no HTTP call, no QuarantineResult to
-        // categorize. Mirrors Python's early return. If the function
-        // accidentally tried to POST, the bogus URL would fail.
+        // categorize. If the function accidentally tried to fetch,
+        // the bogus URL would fail.
         let api_url = Url::parse("http://127.0.0.1:1").unwrap();
         let cases = vec![
             case("ok", TestStatus::Passed),
@@ -308,18 +326,18 @@ mod tests {
             .await
             .expect("must short-circuit");
         assert!(r.failing.is_empty());
-        assert_eq!(r.failing_not_quarantined_count, 0);
+        assert!(r.non_quarantined.is_empty());
     }
 
     #[tokio::test]
-    async fn check_surfaces_non_200_as_quarantine_failed() {
+    async fn fetch_surfaces_non_200_as_quarantine_failed() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(503).set_body_string("backend down"))
             .mount(&server)
             .await;
         let api_url = Url::parse(&server.uri()).unwrap();
-        let err = check(&api_url, "tok", "owner/repo", "main", &["t".to_string()])
+        let err = fetch(&api_url, "tok", "owner/repo", "main")
             .await
             .expect_err("503 must surface as QuarantineFailed");
         assert!(
