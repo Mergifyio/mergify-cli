@@ -105,12 +105,44 @@ async fn start_mock_with_no_prs() -> wiremock::MockServer {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/search/issues"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})))
-        .mount(&server)
-        .await;
+    mount_discovery(&server, None).await;
     server
+}
+
+/// Mock the stack discovery. `merged` is a PR merged from the bottom
+/// commit, whose branch GitHub then deleted — the usual state after a
+/// merge: no branch is left under the stack prefix, and the PR is
+/// only found by the branch name its local commit implies
+/// (`commit--<change-id>` for "Commit A"). Every other lookup finds nothing.
+async fn mount_discovery(server: &wiremock::MockServer, merged: Option<serde_json::Value>) {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, ResponseTemplate};
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/repos/myorg/myrepo/git/matching-refs/heads/stack/tester/feature/",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(server)
+        .await;
+    if let Some(mut pull) = merged {
+        let head = format!("myorg:{}", pull["head"]["ref"].as_str().unwrap());
+        pull["user"] = serde_json::json!({"login": "tester"});
+        Mock::given(method("GET"))
+            .and(path("/repos/myorg/myrepo/pulls"))
+            .and(query_param("head", head))
+            .and(query_param("state", "all"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([pull])))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/repos/myorg/myrepo/pulls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .with_priority(10)
+        .mount(server)
+        .await;
 }
 
 fn run_mergify(local: &Path, server_uri: &str, args: &[&str]) -> std::process::Output {
@@ -168,8 +200,7 @@ async fn sync_dry_run_reports_up_to_date_when_no_merged_prs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sync_dry_run_lists_merged_commits() {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::MockServer;
 
     let (work, commits) = build_stack_repo(2);
     let local = work.path().join("local");
@@ -177,26 +208,19 @@ async fn sync_dry_run_lists_merged_commits() {
     let first_cid = commits[0].1.clone();
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/search/issues"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "items": [{"number": 42}],
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/repos/myorg/myrepo/pulls/42"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_discovery(
+        &server,
+        Some(serde_json::json!({
             "number": 42,
             "title": "Commit A",
             "state": "closed",
             "merged_at": "2025-01-01T00:00:00Z",
-            "head": {"sha": first_sha, "ref": format!("stack/tester/feature/feat-a--{}", &first_cid[1..9])},
+            "head": {"sha": first_sha, "ref": format!("stack/tester/feature/commit--{}", &first_cid[1..9])},
             "base": {"ref": "main"},
             "html_url": "https://github.com/myorg/myrepo/pull/42",
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
 
     let output = run_mergify(
         &local,
@@ -233,8 +257,7 @@ async fn sync_dry_run_lists_merged_commits() {
 /// remove — the abort we guard against with `--reapply-cherry-picks`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sync_drops_squash_merged_commit_with_matching_patch() {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::MockServer;
 
     let (work, commits) = build_stack_repo(2);
     let local = work.path().join("local");
@@ -253,26 +276,19 @@ async fn sync_drops_squash_merged_commit_with_matching_patch() {
     run_in(&local, &["checkout", "-q", "feature"]);
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/search/issues"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "items": [{"number": 42}],
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/repos/myorg/myrepo/pulls/42"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_discovery(
+        &server,
+        Some(serde_json::json!({
             "number": 42,
             "title": "Commit A",
             "state": "closed",
             "merged_at": "2025-01-01T00:00:00Z",
-            "head": {"sha": a_sha, "ref": format!("stack/tester/feature/feat-a--{}", &a_cid[1..9])},
+            "head": {"sha": a_sha, "ref": format!("stack/tester/feature/commit--{}", &a_cid[1..9])},
             "base": {"ref": "main"},
             "html_url": "https://github.com/myorg/myrepo/pull/42",
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
 
     let output = run_mergify(
         &local,

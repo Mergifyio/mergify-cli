@@ -20,9 +20,11 @@
 //!
 //! 1. Resolve the target into a stack branch (+ `owner/repo`,
 //!    which a PR URL carries).
-//! 2. Search GitHub for the stack's PRs (via
+//! 2. Look up the stack's PRs (via
 //!    [`crate::remote_changes::get_remote_changes`], with no
-//!    `author:` filter — a branch name is unique within a repo).
+//!    author filter — a branch name is unique within a repo). Only
+//!    open PRs make the chain, and an open PR's branch always
+//!    exists, so no local commits are needed to find them.
 //! 3. Link open PRs into a single chain via their `head.ref` →
 //!    `base.ref` pointers, find the root (the PR whose `base.ref`
 //!    is *outside* the stack — i.e. doesn't start with the stack
@@ -192,7 +194,8 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     };
 
     let remote_changes =
-        remote_changes::get_remote_changes(opts.client, &owner, &repo, &stack_branch, None).await?;
+        remote_changes::get_remote_changes(opts.client, &owner, &repo, &stack_branch, None, &[])
+            .await?;
 
     let chain = build_chain(&remote_changes, &stack_branch)?;
     if chain.is_empty() {
@@ -458,17 +461,10 @@ mod tests {
     async fn run_no_stacked_prs_returns_no_stacked_prs() {
         use mergify_core::ApiFlavor;
         use url::Url;
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::MockServer;
 
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/search/issues"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})),
-            )
-            .mount(&server)
-            .await;
+        mount_discovery(&server, "stack/author/my-branch", &[]).await;
 
         let client = HttpClient::new(
             Url::parse(&server.uri()).unwrap(),
@@ -496,46 +492,37 @@ mod tests {
     async fn run_dry_run_returns_chain_without_touching_git() {
         use mergify_core::ApiFlavor;
         use url::Url;
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::MockServer;
 
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/search/issues"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "items": [{"number": 1}, {"number": 2}],
-            })))
-            .mount(&server)
-            .await;
         // Head refs use the new-format `<slug>--<hex8>` shape so
         // `extract_from_branch_segment` accepts them and the
         // remote_changes pipeline doesn't filter them out.
-        Mock::given(method("GET"))
-            .and(path("/repos/user/repo/pulls/1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "number": 1,
-                "title": "feat: A",
-                "html_url": "https://github.com/user/repo/pull/1",
-                "state": "open",
-                "base": {"ref": "main"},
-                "head": {"ref": "stack/author/my-branch/feat-a--aaaaaaaa"},
-                "merged_at": null,
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/repos/user/repo/pulls/2"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "number": 2,
-                "title": "feat: B",
-                "html_url": "https://github.com/user/repo/pull/2",
-                "state": "open",
-                "base": {"ref": "stack/author/my-branch/feat-a--aaaaaaaa"},
-                "head": {"ref": "stack/author/my-branch/feat-b--bbbbbbbb"},
-                "merged_at": null,
-            })))
-            .mount(&server)
-            .await;
+        mount_discovery(
+            &server,
+            "stack/author/my-branch",
+            &[
+                serde_json::json!({
+                    "number": 1,
+                    "title": "feat: A",
+                    "html_url": "https://github.com/user/repo/pull/1",
+                    "state": "open",
+                    "base": {"ref": "main"},
+                    "head": {"ref": "stack/author/my-branch/feat-a--aaaaaaaa"},
+                    "merged_at": null,
+                }),
+                serde_json::json!({
+                    "number": 2,
+                    "title": "feat: B",
+                    "html_url": "https://github.com/user/repo/pull/2",
+                    "state": "open",
+                    "base": {"ref": "stack/author/my-branch/feat-a--aaaaaaaa"},
+                    "head": {"ref": "stack/author/my-branch/feat-b--bbbbbbbb"},
+                    "merged_at": null,
+                }),
+            ],
+        )
+        .await;
 
         let client = HttpClient::new(
             Url::parse(&server.uri()).unwrap(),
@@ -577,22 +564,14 @@ mod tests {
     #[tokio::test]
     async fn run_strips_changeid_suffix_from_a_pasted_leaf_ref() {
         // The user pastes a leaf branch ref verbatim, current
-        // `<slug>--<8 hex>` naming included. The search has to be
-        // issued against the stack stem, not the leaf.
+        // `<slug>--<8 hex>` naming included. The branches have to be
+        // listed under the stack stem, not the leaf.
         use mergify_core::ApiFlavor;
         use url::Url;
-        use wiremock::matchers::{method, path, query_param_contains};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::MockServer;
 
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/search/issues"))
-            .and(query_param_contains("q", "head:stack/author/my-branch/"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})),
-            )
-            .mount(&server)
-            .await;
+        mount_discovery(&server, "stack/author/my-branch", &[]).await;
 
         let client = HttpClient::new(
             Url::parse(&server.uri()).unwrap(),
@@ -719,7 +698,7 @@ mod tests {
         // the full root→leaf chain, not just that PR and below.
         use mergify_core::ApiFlavor;
         use url::Url;
-        use wiremock::matchers::{method, path, query_param};
+        use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         fn pr_body(number: u64, base: &str, head: &str) -> serde_json::Value {
@@ -731,6 +710,7 @@ mod tests {
                 "base": {"ref": base},
                 "head": {"ref": head},
                 "merged_at": null,
+                "user": {"login": "someone-else"},
             })
         }
 
@@ -747,18 +727,10 @@ mod tests {
         ];
 
         let server = MockServer::start().await;
-        // No `author:` qualifier — checkout reaches anyone's stack.
-        Mock::given(method("GET"))
-            .and(path("/search/issues"))
-            .and(query_param(
-                "q",
-                "repo:user/repo is:pull-request head:stack/author/my-branch/",
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "items": [{"number": 1}, {"number": 2}, {"number": 3}],
-            })))
-            .mount(&server)
-            .await;
+        // No author filter — checkout reaches anyone's stack, so PRs
+        // opened by someone else still make the chain.
+        mount_discovery(&server, stack, &bodies).await;
+        // The PR URL is resolved to its stack branch first.
         for (i, body) in bodies.iter().enumerate() {
             Mock::given(method("GET"))
                 .and(path(format!("/repos/user/repo/pulls/{}", i + 1)))
@@ -807,6 +779,42 @@ mod tests {
         }
     }
 
+    /// Mount the stack discovery for `stack_branch`: each of `pulls`
+    /// listed as a live branch under it, and returned by the lookup
+    /// on its own `head.ref`. The branches must be listed exactly
+    /// once, under the stack stem.
+    async fn mount_discovery(
+        server: &wiremock::MockServer,
+        stack_branch: &str,
+        pulls: &[serde_json::Value],
+    ) {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let head_ref = |pull: &serde_json::Value| pull["head"]["ref"].as_str().unwrap().to_string();
+        let refs: Vec<_> = pulls
+            .iter()
+            .map(|pull| serde_json::json!({"ref": format!("refs/heads/{}", head_ref(pull))}))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/user/repo/git/matching-refs/heads/{stack_branch}/"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(refs))
+            .expect(1)
+            .mount(server)
+            .await;
+        for pull in pulls {
+            Mock::given(method("GET"))
+                .and(path("/repos/user/repo/pulls"))
+                .and(query_param("head", format!("user:{}", head_ref(pull))))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([pull])))
+                .expect(1)
+                .mount(server)
+                .await;
+        }
+    }
+
     /// Mount a two-PR stack under `stack_branch` and return the
     /// client pointed at it. The server has to outlive the call,
     /// so it comes back with the client.
@@ -834,13 +842,9 @@ mod tests {
         ];
 
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/search/issues"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "items": [{"number": 1}, {"number": 2}],
-            })))
-            .mount(&server)
-            .await;
+        mount_discovery(&server, stack_branch, &bodies).await;
+        // A pull-request URL target is resolved to its stack branch
+        // through the PR itself.
         for (i, body) in bodies.iter().enumerate() {
             Mock::given(method("GET"))
                 .and(path(format!("/repos/user/repo/pulls/{}", i + 1)))

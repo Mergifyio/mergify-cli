@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use wiremock::matchers::{method, path as wm_path, path_regex};
+use wiremock::matchers::{method, path as wm_path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn mergify_binary() -> PathBuf {
@@ -120,18 +120,49 @@ fn build_stack_repo(n_commits: usize) -> (tempfile::TempDir, Vec<String>) {
     (workdir, change_ids)
 }
 
+/// Mock the stack discovery a push starts with: `pulls` are the PRs
+/// already open, each listed as a live branch under the stack prefix
+/// and returned by the lookup on its own `head.ref`. Any other lookup
+/// — a local commit with no PR yet — finds nothing. Each PR is given
+/// the `user.login` the push filters on (`--author tester`).
+async fn mount_discovery(server: &MockServer, pulls: &[serde_json::Value]) {
+    let head_ref = |pull: &serde_json::Value| pull["head"]["ref"].as_str().unwrap().to_string();
+    let refs: Vec<_> = pulls
+        .iter()
+        .map(|pull| serde_json::json!({"ref": format!("refs/heads/{}", head_ref(pull))}))
+        .collect();
+    Mock::given(method("GET"))
+        .and(wm_path(
+            "/repos/myorg/myrepo/git/matching-refs/heads/stack/tester/feature/",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(refs))
+        .mount(server)
+        .await;
+    for pull in pulls {
+        let mut listed = pull.clone();
+        listed["user"] = serde_json::json!({"login": "tester"});
+        Mock::given(method("GET"))
+            .and(wm_path("/repos/myorg/myrepo/pulls"))
+            .and(query_param("head", format!("myorg:{}", head_ref(pull))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([listed])))
+            .mount(server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(wm_path("/repos/myorg/myrepo/pulls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .with_priority(10)
+        .mount(server)
+        .await;
+}
+
 /// Mock GitHub for a push that creates `pr_numbers.len()` brand-new
-/// PRs: an empty search (nothing on the remote yet), a POST that
-/// hands out the numbers in order, and the comment endpoints the
-/// stack comment needs.
+/// PRs: nothing on the remote yet, a POST that hands out the numbers
+/// in order, and the comment endpoints the stack comment needs.
 async fn mock_github_creating(pr_numbers: &[u64]) -> MockServer {
     let server = MockServer::start().await;
 
-    Mock::given(method("GET"))
-        .and(wm_path("/search/issues"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})))
-        .mount(&server)
-        .await;
+    mount_discovery(&server, &[]).await;
 
     // One POST mock per PR, mounted newest-first so wiremock's
     // last-mounted-wins ordering hands out the numbers bottom-to-top
@@ -198,22 +229,11 @@ async fn mock_github_updating_a_stacked_pair(
     head_sha: &str,
 ) -> MockServer {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(wm_path("/search/issues"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "items": [{"number": 101}, {"number": 102}],
-        })))
-        .mount(&server)
-        .await;
-    for (i, number) in [101_u64, 102].iter().enumerate() {
-        let (head, base) = if i == 0 {
-            (bottom_ref, "main")
-        } else {
-            (top_ref, top_base)
-        };
-        Mock::given(method("GET"))
-            .and(wm_path(format!("/repos/myorg/myrepo/pulls/{number}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    let pulls: Vec<_> = [(101_u64, bottom_ref, "main"), (102, top_ref, top_base)]
+        .iter()
+        .enumerate()
+        .map(|(i, (number, head, base))| {
+            serde_json::json!({
                 "number": number,
                 "state": "open",
                 "merged_at": null,
@@ -224,9 +244,11 @@ async fn mock_github_updating_a_stacked_pair(
                 "base": {"ref": base},
                 "html_url": format!("https://github.com/myorg/myrepo/pull/{number}"),
                 "stack": {"id": 162_170, "number": 7, "position": i + 1, "size": 2},
-            })))
-            .mount(&server)
-            .await;
+            })
+        })
+        .collect();
+    mount_discovery(&server, &pulls).await;
+    for number in [101_u64, 102] {
         Mock::given(method("GET"))
             .and(wm_path(format!(
                 "/repos/myorg/myrepo/pulls/{number}/reviews"
@@ -561,16 +583,9 @@ async fn a_registered_stack_down_to_one_live_pull_request_still_loses_its_commen
     // the removal at all.
     let (_work, local, change_ids, remote_head) = repo_with_pushed_branches(1, 1);
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(wm_path("/search/issues"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "items": [{"number": 101}],
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(wm_path("/repos/myorg/myrepo/pulls/101"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_discovery(
+        &server,
+        &[serde_json::json!({
             "number": 101,
             "state": "open",
             "merged_at": null,
@@ -583,9 +598,9 @@ async fn a_registered_stack_down_to_one_live_pull_request_still_loses_its_commen
             // What is left of a stack that was bigger: GitHub keeps
             // the registration and infers the merged prefix itself.
             "stack": {"id": 162_170, "number": 7, "position": 1, "size": 1},
-        })))
-        .mount(&server)
-        .await;
+        })],
+    )
+    .await;
     Mock::given(method("GET"))
         .and(wm_path("/repos/myorg/myrepo/pulls/101/reviews"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
