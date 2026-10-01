@@ -126,7 +126,7 @@ pub struct Options<'a> {
     /// `(remote, branch)` of the trunk.
     pub trunk: (&'a str, &'a str),
     /// GitHub login of the author whose PRs the stack belongs
-    /// to. Used both for the search filter in `remote_changes`
+    /// to. Used both for the author filter in `remote_changes`
     /// and for `branch_prefix` fallback resolution.
     pub author: &'a str,
     /// PR branch prefix (typically `stack/<user>`); empty
@@ -203,7 +203,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         format!("{prefix}/{dest_branch}", prefix = opts.branch_prefix)
     };
 
-    // The pre-flight — trunk + notes fetch, the PR search, the rebase
+    // The pre-flight — trunk + notes fetch, the PR lookup, the rebase
     // decision — is several network round-trips with nothing to show,
     // the stretch that used to look frozen. Drive one spinner row
     // through it, resolving to a kept summary line so it never blinks
@@ -232,10 +232,15 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
     let trunk_ref = format!("{remote}/{base_branch}");
     let base_commit_sha = compute_base_commit_sha(&repo_dir, &trunk_ref, &dest_branch)?;
 
-    // `get_remote_changes` fetches each PR sequentially. Publish the
-    // number it's on into a shared cell; the spinner's tick loop reads
-    // it each frame so the label tracks each pull (owner/repo#id)
-    // while the glyph keeps spinning smoothly.
+    // Read before the discovery: a merged PR whose branch was deleted
+    // is only found under the branch name a local commit implies.
+    let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
+
+    // `get_remote_changes` looks each stack branch up sequentially.
+    // Publish how far it is into a shared cell (`done << 32 | total`,
+    // one atomic so the pair is never torn); the spinner's tick loop
+    // reads it each frame so the label tracks the lookups while the
+    // glyph keeps spinning smoothly.
     let reading = Arc::new(AtomicU64::new(0));
     let reading_writer = Arc::clone(&reading);
     let fetch_pulls = remote_changes::get_remote_changes_reporting(
@@ -244,16 +249,22 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
         opts.repo,
         &stack_prefix,
         Some(opts.author),
-        move |number| reading_writer.store(number, Ordering::Relaxed),
+        &local,
+        move |done, total| {
+            let packed =
+                (u64::try_from(done).unwrap_or(0) << 32) | u64::try_from(total).unwrap_or(0);
+            reading_writer.store(packed, Ordering::Relaxed);
+        },
     );
     let (owner, repo_name) = (opts.user, opts.repo);
     let remote_changes_data = prog
         .run_reporting(pf, "reading pull requests", fetch_pulls, move || {
-            let n = reading.load(Ordering::Relaxed);
-            (n != 0).then(|| format!("reading {owner}/{repo_name}#{n}"))
+            let packed = reading.load(Ordering::Relaxed);
+            let (done, total) = (packed >> 32, packed & u64::from(u32::MAX));
+            (total != 0)
+                .then(|| format!("reading {owner}/{repo_name} pull requests ({done}/{total})"))
         })
         .await?;
-    let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
 
     let planner_opts = PlannerOpts {
         stack_prefix: &stack_prefix,
@@ -326,7 +337,7 @@ pub async fn run(opts: &Options<'_>) -> Result<Outcome, CliError> {
             quiet: true,
             // The pre-flight already fetched the trunk and the remote
             // PRs; hand them through so the rebase doesn't repeat the
-            // search + per-PR GETs.
+            // per-branch PR lookups.
             prefetched_remote_changes: Some(remote_changes_data.clone()),
             skip_trunk_fetch: true,
         };

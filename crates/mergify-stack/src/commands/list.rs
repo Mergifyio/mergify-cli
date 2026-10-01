@@ -107,21 +107,22 @@ pub async fn run(opts: &Options<'_>) -> Result<StackListOutput, CliError> {
         )));
     }
 
+    let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
     let remote_changes = remote_changes::get_remote_changes(
         opts.client,
         opts.user,
         opts.repo,
         &stack_prefix,
         Some(opts.author),
+        &local,
     )
     .await?;
-    let local = local_commits::read(&repo_dir, &base_commit_sha, "HEAD")?;
     let classified = changes::classify(&local, remote_changes)?;
 
     let mut entries = Vec::with_capacity(classified.locals.len());
     for local in &classified.locals {
-        let (status, pull_number, pull_url, mergeable) = match &local.pull {
-            None => ("no_pr".to_string(), None, None, None),
+        let (status, pull_number, pull_url) = match &local.pull {
+            None => ("no_pr".to_string(), None, None),
             Some(pull) => {
                 let merged = pull.get("merged_at").is_some_and(|v| !v.is_null());
                 let draft = pull.get("draft").and_then(Value::as_bool).unwrap_or(false);
@@ -137,8 +138,7 @@ pub async fn run(opts: &Options<'_>) -> Result<StackListOutput, CliError> {
                     .get("html_url")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                let mergeable = pull.get("mergeable").and_then(Value::as_bool);
-                (status.to_string(), pull_number, pull_url, mergeable)
+                (status.to_string(), pull_number, pull_url)
             }
         };
         entries.push(StackListEntry {
@@ -152,7 +152,7 @@ pub async fn run(opts: &Options<'_>) -> Result<StackListOutput, CliError> {
             ci_checks: Vec::new(),
             review_status: "unknown".to_string(),
             reviews: Vec::new(),
-            mergeable,
+            mergeable: None,
         });
     }
 
@@ -176,7 +176,10 @@ pub async fn run(opts: &Options<'_>) -> Result<StackListOutput, CliError> {
 
 /// Per-PR fan-out: for each entry with a pull, fetch
 /// `/check-runs` + `/reviews` and fold them into the entry's
-/// `ci_*` / `review_*` fields. Sequential rather than concurrent
+/// `ci_*` / `review_*` fields, plus the PR itself for `mergeable`
+/// unless it merged — the discovery payloads come from the
+/// pull-request list endpoint, which never carries it (`None` while
+/// GitHub is still computing it). Sequential rather than concurrent
 /// since GitHub's secondary rate limit kicks in around ~80
 /// concurrent calls on the same endpoint pool — and a typical
 /// stack has well under that.
@@ -215,6 +218,13 @@ async fn fetch_pr_details(
         let (review_status, review_list) = compute_review_status(&reviews);
         entries[i].review_status = review_status.to_string();
         entries[i].reviews = review_list;
+
+        if entries[i].status != "merged" {
+            let full: Value = client
+                .get(&format!("/repos/{user}/{repo}/pulls/{pull_number}"))
+                .await?;
+            entries[i].mergeable = full.get("mergeable").and_then(Value::as_bool);
+        }
     }
     Ok(())
 }
