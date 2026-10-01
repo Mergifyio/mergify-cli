@@ -165,9 +165,7 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          # Skip `wheel-sdist` (single dash); each wheel artifact is
-          # `wheel-<target>` with multiple dashes in the target.
-          pattern: wheel-*-*
+          pattern: wheel-*
           path: artifacts
 
       # Each `wheel-<target>` artifact is a maturin-built wheel with
@@ -365,19 +363,29 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          # `wheel-*` covers both `wheel-<target>` artifacts and
-          # `wheel-sdist` — PyPI gets both.
           pattern: wheel-*
           merge-multiple: true
           path: dist
 
-      - name: Confirm collected artifacts
-        run: ls -la dist
+      # Everything in `dist` goes to PyPI, so this is the last place
+      # to stop an sdist: maturin vendors the whole workspace into
+      # one, and uploading it would publish the full CLI source.
+      # Anything but a wheel fails the job before the upload.
+      - name: Check only wheels are collected
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la dist
+          mapfile -t others < <(find dist -type f ! -name '*.whl' -printf '%f\n')
+          if (( ${#others[@]} > 0 )); then
+            echo "::error::refusing to publish non-wheel files: ${others[*]}"
+            exit 1
+          fi
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist
-          # Mint PEP 740 attestations for the wheels/sdist via the
+          # Mint PEP 740 attestations for the wheels via the
           # same Trusted Publishing identity (id-token: write above).
           attestations: true
