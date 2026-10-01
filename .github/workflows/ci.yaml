@@ -223,11 +223,11 @@ jobs:
               *windows*) ext="zip";    bin="mergify.exe" ;;
               *)         ext="tar.gz"; bin="mergify"     ;;
           esac
-          asset="mergify-2099.1.1.1-${target}.${ext}"
+          asset="mergify-2099.1.1-${target}.${ext}"
           mkdir -p fixture/release
           # install.sh resolves the version from latest-release.json (fixture
           # mode) before building the per-version asset name.
-          echo '{"tag_name":"2099.1.1.1"}' > fixture/release/latest-release.json
+          echo '{"tag_name":"2099.1.1"}' > fixture/release/latest-release.json
           if [ "${ext}" = "zip" ]; then
               # Pack with python's zipfile rather than betting on a
               # `zip` binary in git-bash; python is already required
@@ -297,7 +297,7 @@ jobs:
           set -euo pipefail
           target=$(rustc -vV | awk '/^host:/ {print $2}')
           case "${target}" in *windows*) ext=zip ;; *) ext=tar.gz ;; esac
-          asset="mergify-2099.1.1.1-${target}.${ext}"
+          asset="mergify-2099.1.1-${target}.${ext}"
           # Keep a clean copy so the malformed test below can write
           # its own bad version without losing the original.
           cp fixture/release/SHA256SUMS fixture/release/SHA256SUMS.orig
@@ -367,7 +367,7 @@ jobs:
           target=$(rustc -vV | awk '/^host:/ {print $2}')
           echo "Building fixture for target: ${target}"
           mkdir -p fixture/su
-          asset="mergify-2099.1.1.1-${target}.tar.gz"
+          asset="mergify-2099.1.1-${target}.tar.gz"
           tar -C target/release -czf "fixture/su/${asset}" mergify
           (cd fixture/su && shasum -a 256 "${asset}" > SHA256SUMS)
           # Pretend a far-future release is available so the
@@ -375,7 +375,7 @@ jobs:
           base="http://127.0.0.1:8766"
           cat > fixture/su/latest-release.json <<JSON
           {
-            "tag_name": "2099.1.1.1",
+            "tag_name": "2099.1.1",
             "assets": [
               {"name": "${asset}", "browser_download_url": "${base}/${asset}"},
               {"name": "SHA256SUMS", "browser_download_url": "${base}/SHA256SUMS"}
@@ -402,7 +402,7 @@ jobs:
           out=$(MERGIFY_BASE_URL=http://127.0.0.1:8766 target/release/mergify self-update --check)
           echo "$out"
           echo "$out" | grep -q 'Current: 0.0.0'
-          echo "$out" | grep -q 'Latest:  2099.1.1.1'
+          echo "$out" | grep -q 'Latest:  2099.1.1'
 
       - name: self-update happy path swaps the binary
         shell: bash
@@ -421,7 +421,7 @@ jobs:
           cp target/release/mergify /tmp/mergify-su-tamper
           before=$(shasum -a 256 /tmp/mergify-su-tamper | awk '{print $1}')
           # Replace SHA256SUMS with a wrong-but-well-formed hash.
-          printf '%064d  mergify-2099.1.1.1-%s.tar.gz\n' 0 "${target}" > fixture/su/SHA256SUMS
+          printf '%064d  mergify-2099.1.1-%s.tar.gz\n' 0 "${target}" > fixture/su/SHA256SUMS
           ! MERGIFY_BASE_URL=http://127.0.0.1:8766 /tmp/mergify-su-tamper self-update \
               > /tmp/su-tamper.log 2>&1
           grep -q 'checksum mismatch' /tmp/su-tamper.log

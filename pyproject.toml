@@ -3,11 +3,9 @@ name = "mergify_cli"
 # `version` is a placeholder. The release workflow stamps it from
 # the git tag (`$GITHUB_REF`) right before maturin runs — keeps the
 # git tag as the source of truth for PyPI versioning, the same way
-# hatch-vcs did pre-port. Cargo.toml stays at "0.0.0" because Cargo
-# SemVer rejects the 4-component calver format the project uses
-# (`2026.4.23.1`); `mergify --version` from the Rust binary will
-# report the placeholder until versioning becomes Rust-native end-
-# to-end.
+# hatch-vcs did pre-port. Cargo.toml stays at "0.0.0" too; the
+# binary's `mergify --version` gets the tag through
+# `MERGIFY_RELEASE_VERSION` (see `crates/mergify-cli/build.rs`).
 version = "0.0.0"
 description = "Mergify CLI is a tool that automates the creation and management of stacked pull requests on GitHub and handles CI results upload"
 authors = [{ name = "Mergify Team", email = "hello@mergify.com" }]

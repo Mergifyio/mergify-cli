@@ -1,7 +1,7 @@
 //! Plumb the release version through to the binary.
 //!
-//! Cargo's semver rejects the project's 4-component calver
-//! (`2026.4.23.1`), so `Cargo.toml` is pinned at the `0.0.0`
+//! The release tag (calver, `2026.10.1`) is the source of truth
+//! for the version, so `Cargo.toml` is pinned at the `0.0.0`
 //! placeholder and the real version comes in via the
 //! `MERGIFY_RELEASE_VERSION` env var the release workflow sets
 //! from `$GITHUB_REF`. This script normalises that input into a
