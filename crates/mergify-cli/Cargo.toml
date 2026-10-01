@@ -24,6 +24,7 @@ mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
 mergify-events = { path = "../mergify-events" }
 mergify-freeze = { path = "../mergify-freeze" }
+mergify-json-merge = { path = "../mergify-json-merge" }
 mergify-queue = { path = "../mergify-queue" }
 mergify-stack = { path = "../mergify-stack" }
 # Shared TTY/color palette — the binary resolves `--color` once at

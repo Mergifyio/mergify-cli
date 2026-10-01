@@ -172,6 +172,14 @@ Every command group maps to a section of the
   maintenance. [Docs](https://docs.mergify.com/merge-protections/freeze/)
 - **`mergify config`** — Validate your configuration and simulate actions
   before you merge. [Docs](https://docs.mergify.com/configuration/file-format/#validating-with-the-cli)
+- **`mergify merge-driver`** — Git merge drivers that merge by file
+  format instead of by line, falling back to git's line merge when they
+  cannot. `json` merges JSON structurally, keeping ours' formatting:
+
+  ```shell
+  git config merge.json.driver "mergify merge-driver json --marker-size %L --path %P %A %O %B"
+  echo '*.json merge=json' >> .gitattributes
+  ```
 - **`mergify self-update`** — Update the CLI to the latest release.
 - **`mergify completions <shell>`** — Print a shell completion script
   ([see below](#shell-completions)).

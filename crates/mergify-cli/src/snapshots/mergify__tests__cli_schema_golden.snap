@@ -2448,6 +2448,129 @@ expression: schema
         "usage": "mergify freeze [OPTIONS] <COMMAND>"
       },
       {
+        "about": "Git merge drivers that resolve conflicts by file format",
+        "aliases": [],
+        "args": [],
+        "commands": [
+          {
+            "about": "Merge a JSON file by structure instead of by line",
+            "aliases": [],
+            "args": [
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Conflict-marker length for the line-merge fallback (git's `%L`)",
+                "id": "marker_size",
+                "kind": "option",
+                "long": "marker-size",
+                "longHelp": "Conflict-marker length for the line-merge fallback (git's `%L`)",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": [
+                  "N"
+                ]
+              },
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Path being merged (git's `%P`), named in messages",
+                "id": "path",
+                "kind": "option",
+                "long": "path",
+                "longHelp": "Path being merged (git's `%P`), named in messages",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": false,
+                "short": null,
+                "valueHint": null,
+                "valueNames": [
+                  "PATH"
+                ]
+              },
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Our version (git's `%A`), overwritten with the result",
+                "id": "ours",
+                "kind": "positional",
+                "long": null,
+                "longHelp": "Our version (git's `%A`), overwritten with the result",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": true,
+                "short": null,
+                "valueHint": "anyPath",
+                "valueNames": [
+                  "OURS"
+                ]
+              },
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "The merge base (git's `%O`); empty when both sides added the file",
+                "id": "base",
+                "kind": "positional",
+                "long": null,
+                "longHelp": "The merge base (git's `%O`); empty when both sides added the file",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": true,
+                "short": null,
+                "valueHint": "anyPath",
+                "valueNames": [
+                  "BASE"
+                ]
+              },
+              {
+                "default": null,
+                "env": null,
+                "global": false,
+                "help": "Their version (git's `%B`)",
+                "id": "theirs",
+                "kind": "positional",
+                "long": null,
+                "longHelp": "Their version (git's `%B`)",
+                "numArgs": "1",
+                "possibleValues": [],
+                "required": true,
+                "short": null,
+                "valueHint": "anyPath",
+                "valueNames": [
+                  "THEIRS"
+                ]
+              }
+            ],
+            "commands": [],
+            "longAbout": "Merge a JSON file by structure instead of by line.\n\nTwo edits to different keys, or to different elements of an array, merge even when they sit on neighbouring lines. The result keeps ours' formatting and key order, with theirs' changes spliced in as theirs wrote them. It declines — and falls back to `git merge-file`, leaving conflict markers — when both sides changed the same value differently, when one side changed a key the other deleted, and when both inserted into the same place in an array. Configure it with `git config merge.json.driver \"mergify merge-driver json --marker-size %L --path %P %A %O %B\"` and `*.json merge=json` in `.gitattributes`.",
+            "name": "json",
+            "path": [
+              "mergify",
+              "merge-driver",
+              "json"
+            ],
+            "source": "native",
+            "subcommandRequired": false,
+            "usage": "mergify merge-driver json [OPTIONS] <OURS> <BASE> <THEIRS>"
+          }
+        ],
+        "longAbout": "Git merge drivers that resolve conflicts by file format.\n\nCommands git runs in place of its line merge for the paths a `merge` attribute assigns them, configured with `git config merge.<name>.driver \"mergify merge-driver <format> %A %O %B\"`. Each one merges by structure where it can and falls back to git's own line merge, conflict markers included, where it cannot.",
+        "name": "merge-driver",
+        "path": [
+          "mergify",
+          "merge-driver"
+        ],
+        "source": "native",
+        "subcommandRequired": true,
+        "usage": "mergify merge-driver [OPTIONS] <COMMAND>"
+      },
+      {
         "about": "Create and maintain stacked pull requests",
         "aliases": [],
         "args": [],

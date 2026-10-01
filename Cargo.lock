@@ -1800,6 +1800,7 @@ dependencies = [
  "mergify-core",
  "mergify-events",
  "mergify-freeze",
+ "mergify-json-merge",
  "mergify-queue",
  "mergify-stack",
  "mergify-tui",
@@ -1883,6 +1884,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "wiremock",
+]
+
+[[package]]
+name = "mergify-json-merge"
+version = "0.0.0"
+dependencies = [
+ "mergify-core",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

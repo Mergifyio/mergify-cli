@@ -124,6 +124,7 @@ const NATIVE_COMMANDS: &[(&str, &str)] = &[
     ("freeze", "create"),
     ("freeze", "update"),
     ("freeze", "delete"),
+    ("merge-driver", "json"),
     ("stack", "checkout"),
     ("stack", "drop"),
     ("stack", "edit"),
@@ -294,6 +295,9 @@ enum NativeCommand {
     /// `mergify self-update [--force] [--check]` — replace the
     /// running binary with the latest release.
     SelfUpdate(self_update::Options),
+    /// `mergify merge-driver json <ours> <base> <theirs>` — run by git
+    /// as a merge driver.
+    MergeDriverJson(MergeDriverJsonCli),
 }
 
 struct StackEditOpts {
@@ -720,7 +724,8 @@ fn init_tracing(verbose: u8, debug: bool, color: mergify_tui::ColorChoice) {
     let directives = format!(
         "warn,mergify_cli={level},mergify_core={level},mergify_stack={level},\
          mergify_ci={level},mergify_queue={level},mergify_freeze={level},\
-         mergify_config={level},mergify_tui={level},mergify_auth={level}"
+         mergify_config={level},mergify_tui={level},mergify_auth={level},\
+         mergify_json_merge={level}"
     );
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(directives));
     let _ = tracing_subscriber::fmt()
@@ -814,6 +819,9 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
             StackSubcommand::Setup(cli) => Dispatch::Native(NativeCommand::StackSetup(cli.into())),
         },
         Subcommands::SelfUpdate(cli) => Dispatch::Native(NativeCommand::SelfUpdate(cli.into())),
+        Subcommands::MergeDriver(MergeDriverArgs {
+            command: MergeDriverSubcommand::Json(cli),
+        }) => Dispatch::Native(NativeCommand::MergeDriverJson(cli)),
         Subcommands::Completions(cli) => Dispatch::Native(NativeCommand::Completions(cli.shell)),
         Subcommands::Internal(InternalArgs {
             command:
@@ -2564,6 +2572,16 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                 self_update::run(&opts).await?;
                 Ok(mergify_core::ExitCode::Success)
             }
+            NativeCommand::MergeDriverJson(cli) => {
+                mergify_json_merge::run(&mergify_json_merge::DriverOptions {
+                    ours: &cli.ours,
+                    base: &cli.base,
+                    theirs: &cli.theirs,
+                    marker_size: cli.marker_size,
+                    path: cli.path.as_deref(),
+                })?;
+                Ok(mergify_core::ExitCode::Success)
+            }
             NativeCommand::InternalRebaseTodoRewrite(opts) => {
                 let action = match opts.action {
                     InternalRebaseAction::Edit => {
@@ -2911,6 +2929,16 @@ enum Subcommands {
     /// the merge queue from merging — for release windows, incidents,
     /// or code freezes.
     Freeze(FreezeArgs),
+    /// Git merge drivers that resolve conflicts by file format.
+    ///
+    /// Commands git runs in place of its line merge for the paths a
+    /// `merge` attribute assigns them, configured with
+    /// `git config merge.<name>.driver "mergify merge-driver <format>
+    /// %A %O %B"`. Each one merges by structure where it can and falls
+    /// back to git's own line merge, conflict markers included, where
+    /// it cannot.
+    #[command(name = "merge-driver")]
+    MergeDriver(MergeDriverArgs),
     /// Create and maintain stacked pull requests.
     ///
     /// Manage a stack of dependent branches and their pull requests:
@@ -4593,6 +4621,51 @@ enum AuthSubcommand {
 }
 
 #[derive(clap::Args)]
+struct MergeDriverArgs {
+    #[command(subcommand)]
+    command: MergeDriverSubcommand,
+}
+
+#[derive(Subcommand)]
+enum MergeDriverSubcommand {
+    /// Merge a JSON file by structure instead of by line.
+    ///
+    /// Two edits to different keys, or to different elements of an
+    /// array, merge even when they sit on neighbouring lines. The
+    /// result keeps ours' formatting and key order, with theirs'
+    /// changes spliced in as theirs wrote them. It declines — and falls
+    /// back to `git merge-file`, leaving conflict markers — when both
+    /// sides changed the same value differently, when one side changed
+    /// a key the other deleted, and when both inserted into the same
+    /// place in an array. Configure it with
+    /// `git config merge.json.driver "mergify merge-driver json
+    /// --marker-size %L --path %P %A %O %B"` and `*.json merge=json`
+    /// in `.gitattributes`.
+    Json(MergeDriverJsonCli),
+}
+
+#[derive(clap::Args)]
+struct MergeDriverJsonCli {
+    /// Conflict-marker length for the line-merge fallback (git's `%L`).
+    #[arg(long, value_name = "N")]
+    marker_size: Option<u32>,
+
+    /// Path being merged (git's `%P`), named in messages.
+    #[arg(long, value_name = "PATH")]
+    path: Option<String>,
+
+    /// Our version (git's `%A`), overwritten with the result.
+    ours: PathBuf,
+
+    /// The merge base (git's `%O`); empty when both sides added the
+    /// file.
+    base: PathBuf,
+
+    /// Their version (git's `%B`).
+    theirs: PathBuf,
+}
+
+#[derive(clap::Args)]
 struct FreezeArgs {
     /// Mergify token. Falls back to ``MERGIFY_TOKEN``, then the
     /// credential ``mergify auth login`` stored for this API URL,
@@ -4769,6 +4842,7 @@ mod tests {
                 "queue",
                 "events",
                 "freeze",
+                "merge-driver",
                 "stack",
                 "self-update",
                 "completions"
