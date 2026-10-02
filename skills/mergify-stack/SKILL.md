@@ -92,7 +92,7 @@ Use `mergify stack sync` to bring your stack up to date. It fetches the latest t
 
 Use `mergify stack list` to see which commits have been pushed, which PRs they map to, and whether the stack is up to date with the remote. It also shows CI status, review status, and merge conflicts for each PR. Use `--verbose` for detailed check names and reviewer names. Use `--json` when you need to parse the output programmatically — it includes full CI check details and review data.
 
-## GitHub-native stacks (experimental, on by default)
+## GitHub-native stacks (on by default)
 
 `mergify stack push` registers the stack with GitHub's own Stacks API by
 default, so GitHub renders it as a stack. Opt out per invocation with
