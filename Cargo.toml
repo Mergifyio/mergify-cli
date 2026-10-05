@@ -35,7 +35,6 @@ dirs = "7"
 flate2 = "1"
 getrandom = "0.4"
 glob = "0.3"
-globset = "0.4"
 iana-time-zone = "0.1"
 jsonschema = { version = "0.58", default-features = false }
 # OS credential store for the token `mergify auth login` mints. The
