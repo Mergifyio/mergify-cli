@@ -21,6 +21,9 @@ const FETCHED_REF_PREFIX: &str = "refs/mergify-cli/fetched/";
 
 const COMMITS_BATCH_SIZE: u64 = 100;
 
+/// The remote `ensure_history` deepens from.
+const REMOTE: &str = "origin";
+
 fn is_sha(ref_: &str) -> bool {
     // Only full 40-char SHAs — abbreviated SHAs would false-match
     // branch names like "deadbeef" and cause `git fetch` to treat
@@ -52,8 +55,23 @@ fn fetch_arg(ref_: &str) -> Option<String> {
         // `git fetch origin <branch>` only updates `FETCH_HEAD`;
         // use an explicit refspec so the branch becomes a real
         // local ref we can name later.
-        Some(format!("+{ref_}:{}", local_ref(ref_)))
+        Some(format!("+{}:{}", remote_name(ref_), local_ref(ref_)))
     }
+}
+
+/// The name `REMOTE` knows `ref_` by. A remote-tracking name like
+/// `origin/main` exists only in a clone, so asking the remote for it
+/// fails with "couldn't find remote ref". That is what a depth-1
+/// CI checkout runs into, as it has no `refs/remotes/origin/main`
+/// to resolve locally either. Only the `origin/` prefix is
+/// stripped: `feature/x` is a branch, not a remote.
+fn remote_name(ref_: &str) -> &str {
+    ref_.strip_prefix("refs/remotes/")
+        .or_else(|| ref_.strip_prefix("remotes/"))
+        .unwrap_or(ref_)
+        .strip_prefix(REMOTE)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(ref_)
 }
 
 /// Base `git` command, rooted at `repo_dir` via `-C` when one is
@@ -100,6 +118,31 @@ fn has_merge_base(repo_dir: Option<&Path>, base: &str, head: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// The commits a shallow clone's history stops at, empty for a full
+/// clone. Read from the `shallow` file rather than asked of
+/// `rev-parse --is-shallow-repository`, which git before 2.15
+/// echoes back instead of answering.
+fn shallow_boundary(repo_dir: Option<&Path>) -> Result<Vec<String>, CliError> {
+    let path = run_git(repo_dir, &["rev-parse", "--git-path", "shallow"])?;
+    let path = Path::new(path.trim());
+    let path = repo_dir.map_or_else(|| path.to_path_buf(), |dir| dir.join(path));
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(content.lines().map(str::to_string).collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(CliError::wrap(
+            format!("could not read {}", path.display()),
+            e,
+        )),
+    }
+}
+
+fn is_ancestor(repo_dir: Option<&Path>, commit: &str, of: &str) -> bool {
+    git_cmd(repo_dir)
+        .args(["merge-base", "--is-ancestor", commit, of])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 fn commits_count(repo_dir: Option<&Path>) -> Result<u64, CliError> {
     let out = run_git(repo_dir, &["rev-list", "--count", "--all"])?;
     let count = out.trim();
@@ -109,7 +152,7 @@ fn commits_count(repo_dir: Option<&Path>) -> Result<u64, CliError> {
 }
 
 fn fetch(repo_dir: Option<&Path>, depth_flag: &str, fetch_args: &[String]) -> Result<(), CliError> {
-    let mut args: Vec<&str> = vec!["fetch", "--no-tags", depth_flag, "origin"];
+    let mut args: Vec<&str> = vec!["fetch", "--no-tags", depth_flag, REMOTE];
     if !fetch_args.is_empty() {
         args.push("--");
         for fa in fetch_args {
@@ -146,7 +189,21 @@ pub fn ensure_history(
     let mut last_count = commits_count(repo_dir)?;
     while !has_merge_base(repo_dir, &local_base, &local_head) {
         depth = depth.saturating_mul(2);
-        fetch(repo_dir, &format!("--deepen={depth}"), &fetch_args)?;
+        // `--deepen` only moves the boundary of what the fetch asks
+        // for. A HEAD-relative ref asks for nothing, so a depth-1
+        // checkout's HEAD would keep hiding its parents and no merge
+        // base would ever appear. Asking for every boundary commit
+        // deepens it too. Only the ones under `base` or `head`: the
+        // `shallow` file also holds the boundary of anything
+        // shallow-fetched from another remote, which `origin` may
+        // not have and would refuse the whole fetch over. Those left
+        // came from the remote, unlike a local commit on top of the
+        // checkout, which it would refuse too.
+        let mut deepen_args = fetch_args.clone();
+        deepen_args.extend(shallow_boundary(repo_dir)?.into_iter().filter(|commit| {
+            is_ancestor(repo_dir, commit, &local_base) || is_ancestor(repo_dir, commit, &local_head)
+        }));
+        fetch(repo_dir, &format!("--deepen={depth}"), &deepen_args)?;
         let count = commits_count(repo_dir)?;
         if count == last_count {
             // No new commits this round — we've reached the root
@@ -428,5 +485,125 @@ mod tests {
             fetch_arg("main"),
             Some(format!("+main:{FETCHED_REF_PREFIX}main")),
         );
+        // A remote-tracking name is asked of the remote by its
+        // branch name, and still lands under its own local name. A
+        // slash alone is not a remote prefix.
+        for (ref_, remote) in [
+            ("origin/main", "main"),
+            ("origin/feature/x", "feature/x"),
+            ("remotes/origin/main", "main"),
+            ("refs/remotes/origin/main", "main"),
+            ("feature/x", "feature/x"),
+            ("originals/x", "originals/x"),
+        ] {
+            assert_eq!(
+                fetch_arg(ref_),
+                Some(format!("+{remote}:{FETCHED_REF_PREFIX}{ref_}")),
+                "{ref_}",
+            );
+        }
+    }
+
+    /// An upstream where `feature` touched `docs/readme.md`, `main`
+    /// moved on after the fork (so the merge base is the tip of
+    /// neither), and `pull/merge` merges the two, the commit
+    /// `actions/checkout` checks out for a pull request.
+    fn upstream() -> tempfile::TempDir {
+        let tmp = fixture();
+        let up = tmp.path();
+        write(up, "docs/readme.md", "docs changed\n");
+        git(up, &["add", "-A"]);
+        git(up, &["commit", "-q", "-m", "touch the docs"]);
+        git(up, &["checkout", "-q", "main"]);
+        write(up, "ignored/later.txt", "later\n");
+        git(up, &["add", "-A"]);
+        git(up, &["commit", "-q", "-m", "main moves on"]);
+        git(up, &["checkout", "-q", "-b", "pull/merge"]);
+        git(up, &["merge", "-q", "--no-edit", "feature"]);
+        tmp
+    }
+
+    /// `branch` of `up`, fetched at `depth` and checked out detached
+    /// the way `actions/checkout` does it: no `refs/remotes/origin/*`.
+    fn shallow_clone(up: &Path, branch: &str, depth: u32) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        // `file://`, because git ignores `--depth` for a plain
+        // local path.
+        let url = format!("file://{}", up.display());
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@e.com"],
+            &["config", "user.name", "T"],
+            &["remote", "add", REMOTE, &url],
+            &[
+                "fetch",
+                "-q",
+                "--no-tags",
+                &format!("--depth={depth}"),
+                REMOTE,
+                branch,
+            ],
+            &["checkout", "-q", "--detach", "FETCH_HEAD"],
+        ] {
+            git(dir, args);
+        }
+        tmp
+    }
+
+    #[test]
+    fn remote_tracking_base_on_a_shallow_clone() {
+        // MRGFY-8290: on a depth-1 checkout, `--base origin/main`
+        // failed twice over: the remote has no ref by that name
+        // ("couldn't find remote ref origin/main"), and once it was
+        // asked for `main` instead, deepening `main` never lifted
+        // the shallow boundary sitting on HEAD, so the merge base
+        // stayed hidden behind it.
+        let up = upstream();
+        let clone = shallow_clone(up.path(), "pull/merge", 1);
+
+        let paths = git_changed_files(Some(clone.path()), "origin/main", "HEAD").expect("git diff");
+        assert_eq!(paths, ["docs/readme.md"]);
+    }
+
+    #[test]
+    fn local_commit_on_a_shallow_clone() {
+        // A commit made in CI on top of the checkout is unknown to
+        // the remote, which refuses the whole fetch if it is asked
+        // for. Deepening goes through the boundary commit below it.
+        let up = upstream();
+        let clone = shallow_clone(up.path(), "feature", 1);
+        let dir = clone.path();
+        write(dir, "ignored/generated.txt", "generated\n");
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "local only"]);
+
+        let mut paths = git_changed_files(Some(dir), "origin/main", "HEAD").expect("git diff");
+        paths.sort();
+        assert_eq!(paths, ["docs/readme.md", "ignored/generated.txt"]);
+    }
+
+    #[test]
+    fn unrelated_shallow_remote_on_a_shallow_clone() {
+        // The `shallow` file is per repository, not per remote. A
+        // boundary that came from another remote is unknown to
+        // `origin`, which would refuse the whole deepening fetch if
+        // it were asked for it.
+        let up = upstream();
+        let clone = shallow_clone(up.path(), "pull/merge", 1);
+        let dir = clone.path();
+        let other = fixture();
+        write(other.path(), "ignored/other.txt", "other\n");
+        git(other.path(), &["add", "-A"]);
+        git(other.path(), &["commit", "-q", "-m", "only on other"]);
+        let url = format!("file://{}", other.path().display());
+        git(dir, &["remote", "add", "other", &url]);
+        git(
+            dir,
+            &["fetch", "-q", "--no-tags", "--depth=1", "other", "feature"],
+        );
+
+        let paths = git_changed_files(Some(dir), "origin/main", "HEAD").expect("git diff");
+        assert_eq!(paths, ["docs/readme.md"]);
     }
 }
