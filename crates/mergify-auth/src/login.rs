@@ -26,6 +26,13 @@ pub struct LoginOptions<'a> {
     /// printed either way, and a browser that will not open does
     /// not fail the login.
     pub browser: Option<&'a dyn Browser>,
+    /// `--device-name`: what to call this machine on the approval
+    /// page instead of its hostname. `None` detects the hostname,
+    /// and a blank name sends none at all, for a user who does not
+    /// want the hostname to leave the machine: the grant request is
+    /// unauthenticated and the server holds the value before anyone
+    /// approves, so editing the field on the page is too late.
+    pub device_name: Option<&'a str>,
 }
 
 /// What `auth login` produced, for the JSON rendering `Output`
@@ -60,8 +67,13 @@ pub async fn run(opts: LoginOptions<'_>, output: &mut dyn Output) -> Result<(), 
     // every machine shares — the page's own helper text already asks
     // the user to name it after the machine. Optional: a machine
     // that cannot name itself, or a deployment that predates the
-    // field, falls back to that shared default.
-    let device_name = machine::name().await;
+    // field, falls back to that shared default. `--device-name`
+    // replaces the detected name, and a blank one is the opt-out:
+    // the same request a machine that cannot name itself makes.
+    let device_name = match opts.device_name {
+        Some(name) => (!name.trim().is_empty()).then(|| name.to_string()),
+        None => machine::name().await,
+    };
     let authorization = device::authorize(&client, device_name.as_deref()).await?;
     let opened = open_verification_page(opts.browser, verification_url(&authorization));
     output.status(&instructions(&authorization, opened))?;
@@ -377,6 +389,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -417,6 +430,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -449,6 +463,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -480,6 +495,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -529,6 +545,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -564,6 +581,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -611,6 +629,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -661,6 +680,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -709,6 +729,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -753,6 +774,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: Some(&browser),
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -792,6 +814,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: Some(&browser),
+                    device_name: None,
                 },
                 &mut captured.output,
             )
@@ -816,6 +839,34 @@ mod tests {
         });
     }
 
+    /// The form body `run` sent on the grant request.
+    async fn grant_body(device_name: Option<&str>) -> String {
+        let server = MockServer::start().await;
+        mount_flow(&server, true).await;
+        let (dir, store) = file_store();
+        let mut captured = Captured::human();
+
+        run(
+            LoginOptions {
+                api_url: Some(&server.uri()),
+                store: &store,
+                browser: None,
+                device_name,
+            },
+            &mut captured.output,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let grant = requests
+            .iter()
+            .find(|r| r.url.path() == "/v1/oauth/device/code")
+            .expect("the grant request");
+        drop(dir);
+        String::from_utf8_lossy(&grant.body).into_owned()
+    }
+
     // The wiring, not the renderer: `device_name` has to leave this
     // command on the grant request, or the approval page goes back
     // to naming every machine "Mergify CLI". Asserted against what
@@ -824,33 +875,36 @@ mod tests {
     #[test]
     fn login_tells_the_server_which_machine_asked() {
         with_mergify_token(None, async {
-            let server = MockServer::start().await;
-            mount_flow(&server, true).await;
-            let (dir, store) = file_store();
-            let mut captured = Captured::human();
-
-            run(
-                LoginOptions {
-                    api_url: Some(&server.uri()),
-                    store: &store,
-                    browser: None,
-                },
-                &mut captured.output,
-            )
-            .await
-            .unwrap();
-
-            let requests = server.received_requests().await.unwrap();
-            let grant = requests
-                .iter()
-                .find(|r| r.url.path() == "/v1/oauth/device/code")
-                .expect("the grant request");
-            let body = String::from_utf8_lossy(&grant.body);
+            let body = grant_body(None).await;
             match crate::machine::name().await {
                 Some(_) => assert!(body.contains("device_name="), "got {body:?}"),
                 None => assert_eq!(body, "client_id=mergify-cli", "got {body:?}"),
             }
-            drop(dir);
+        });
+    }
+
+    // `--device-name` replaces the hostname rather than joining it,
+    // and goes out as typed: the server sanitizes, not the CLI.
+    #[test]
+    fn device_name_overrides_the_hostname() {
+        with_mergify_token(None, async {
+            let body = grant_body(Some("work laptop")).await;
+            assert_eq!(
+                body, "client_id=mergify-cli&device_name=work+laptop",
+                "got {body:?}"
+            );
+        });
+    }
+
+    // `--device-name ""` is the opt-out: no hostname leaves the
+    // machine, and the server keeps its own default label.
+    #[test]
+    fn empty_device_name_sends_none() {
+        with_mergify_token(None, async {
+            for blank in ["", "  "] {
+                let body = grant_body(Some(blank)).await;
+                assert_eq!(body, "client_id=mergify-cli", "for {blank:?}, got {body:?}");
+            }
         });
     }
 
@@ -869,6 +923,7 @@ mod tests {
                     api_url: Some(&server.uri()),
                     store: &store,
                     browser: None,
+                    device_name: None,
                 },
                 &mut captured.output,
             )

@@ -165,6 +165,7 @@ enum NativeCommand {
     AuthLogin {
         opts: AuthOpts,
         no_browser: bool,
+        device_name: Option<String>,
     },
     /// `mergify auth logout [--api-url URL]` — revoke the stored
     /// credential and forget it.
@@ -936,9 +937,14 @@ fn dispatch_from_parsed(parsed: CliRoot) -> Dispatch {
         Subcommands::Auth(AuthArgs { api_url, command }) => {
             let opts = AuthOpts { api_url };
             Dispatch::Native(match command {
-                AuthSubcommand::Login(AuthLoginArgs { no_browser }) => {
-                    NativeCommand::AuthLogin { opts, no_browser }
-                }
+                AuthSubcommand::Login(AuthLoginArgs {
+                    no_browser,
+                    device_name,
+                }) => NativeCommand::AuthLogin {
+                    opts,
+                    no_browser,
+                    device_name,
+                },
                 AuthSubcommand::Logout => NativeCommand::AuthLogout(opts),
                 AuthSubcommand::Status => NativeCommand::AuthStatus(opts),
             })
@@ -1567,7 +1573,11 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
             | NativeCommand::InternalManPage => {
                 unreachable!("introspection commands are handled before the runtime starts")
             }
-            NativeCommand::AuthLogin { opts, no_browser } => {
+            NativeCommand::AuthLogin {
+                opts,
+                no_browser,
+                device_name,
+            } => {
                 let store = mergify_core::CredentialStore::discover();
                 let system_browser = mergify_auth::browser::SystemBrowser;
                 let browser: Option<&dyn mergify_auth::browser::Browser> =
@@ -1577,6 +1587,7 @@ fn run_native(cmd: NativeCommand) -> ExitCode {
                         api_url: opts.api_url.as_deref(),
                         store: &store,
                         browser,
+                        device_name: device_name.as_deref(),
                     },
                     &mut output,
                 )
@@ -4566,6 +4577,11 @@ struct AuthLoginArgs {
     /// Do not open a browser; only print the URL to open.
     #[arg(long = "no-browser")]
     no_browser: bool,
+
+    /// Name this machine on the approval page instead of sending its
+    /// hostname. `--device-name=` sends no name at all.
+    #[arg(long = "device-name", value_name = "NAME")]
+    device_name: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -5074,6 +5090,31 @@ mod tests {
             panic!("auth login must dispatch to the native AuthLogin variant");
         };
         assert!(!no_browser, "a browser is the default");
+    }
+
+    // `--device-name ""` is the opt-out, so clap must hand the empty
+    // string through rather than reject it or read it as absent:
+    // absent means "send the hostname", the opposite of what was asked.
+    #[test]
+    fn auth_login_carries_device_name_through_dispatch() {
+        for (args, expected) in [
+            (
+                &["auth", "login", "--device-name", "work laptop"][..],
+                Some("work laptop"),
+            ),
+            (&["auth", "login", "--device-name", ""][..], Some("")),
+            // The portable spelling: Windows PowerShell 5.1 drops a
+            // `""` argument before it reaches the binary.
+            (&["auth", "login", "--device-name="][..], Some("")),
+            (&["auth", "login"][..], None),
+        ] {
+            let Dispatch::Native(NativeCommand::AuthLogin { device_name, .. }) =
+                dispatch_from_parsed(parse(args))
+            else {
+                panic!("auth login must dispatch to the native AuthLogin variant");
+            };
+            assert_eq!(device_name.as_deref(), expected, "for {args:?}");
+        }
     }
 
     #[test]
