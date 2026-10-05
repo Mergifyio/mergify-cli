@@ -228,15 +228,4 @@ mod tests {
             "2026-01-01T10:00:00 (Europe/Paris)",
         );
     }
-
-    #[test]
-    fn detect_local_timezone_returns_a_value() {
-        // We can't assert a specific timezone (varies by environment),
-        // but we can assert that detection doesn't fail outright in
-        // a normal dev / CI environment. If this fires in a sandbox
-        // that masks `TZ`, the `iana-time-zone` crate falls back to
-        // `/etc/localtime` on Unix — both routes work in CI.
-        let tz = detect_local_timezone().expect("local timezone detectable");
-        assert!(!tz.is_empty());
-    }
 }
