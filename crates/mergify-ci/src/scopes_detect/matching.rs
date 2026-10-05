@@ -18,7 +18,10 @@
 //!   compiles it inline, the engine expands it into one pattern per
 //!   branch (MRGFY-8359).
 //!
-//! Parity is exact for every path git can report as changed. The
+//! Parity is exact for every ASCII path git can report as changed.
+//! On a non-ASCII one, `?` and `[...]` differ: globset matches
+//! bytes and the engine characters, so `caf?.txt` misses
+//! `café.txt` here and hits it there (MRGFY-10066). The other
 //! residual differences all need a path git never emits: a leading
 //! `/`, a trailing `/`, an empty segment (`a//b`), or the empty
 //! string. An unterminated `[` is the one place globset is stricter
