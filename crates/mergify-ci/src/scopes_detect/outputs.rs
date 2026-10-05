@@ -1,9 +1,7 @@
 //! Side-effect emitters for `ci scopes`: GHA outputs, Buildkite
 //! metadata, GitHub step summary, Buildkite annotation.
 //!
-//! All four mirror their Python counterparts in
-//! `mergify_cli/ci/scopes/cli.py` and stay quiet when their
-//! respective environment knob is absent.
+//! Each stays quiet when its environment knob is absent.
 
 use mergify_core::env;
 use std::collections::BTreeSet;
@@ -89,10 +87,14 @@ pub fn maybe_write_buildkite_metadata(
 /// annotation.
 fn markdown_code(scope: &str) -> String {
     let escaped = scope.escape_debug().to_string().replace('|', "\\|");
-    if escaped.contains('`') {
-        format!("`` {escaped} ``")
-    } else {
+    // A code span only closes on a backtick run of its own delimiter's
+    // length, so the delimiter must be longer than any run inside.
+    let longest_run = escaped.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    if longest_run == 0 {
         format!("`{escaped}`")
+    } else {
+        let fence = "`".repeat(longest_run + 1);
+        format!("{fence} {escaped} {fence}")
     }
 }
 
@@ -103,16 +105,15 @@ fn build_summary_markdown(
 ) -> String {
     let mut md = String::from("## Mergify CI Scope Matching Results");
     if let Some(base) = refs.base.as_deref() {
-        // Python truncates each ref to 7 chars (git's standard
-        // abbreviated SHA). When the ref is shorter than 7 chars
-        // (e.g. `HEAD`) we'd panic; clamp the slice length.
-        let base_short = &base[..base.len().min(7)];
-        let head_short = &refs.head[..refs.head.len().min(7)];
+        // Each ref is cut to 7 chars, git's abbreviated-SHA length.
+        // Count chars, not bytes: a branch name can be non-ASCII, and
+        // a byte slice would split a char. A ref name can also hold a
+        // backtick or a newline, so it is escaped like a scope name.
+        let base_short: String = base.chars().take(7).collect();
+        let head_short: String = refs.head.chars().take(7).collect();
+        let range = markdown_code(&format!("{base_short}...{head_short}"));
         let source = refs.source.as_str();
-        let _ = write!(
-            &mut md,
-            " for `{base_short}...{head_short}` (source: `{source}`)",
-        );
+        let _ = write!(&mut md, " for {range} (source: `{source}`)");
     }
     md.push_str("\n\n| 🎯 Scope | ✅ Match |\n|:--|:--|\n");
     for scope in all {
@@ -294,12 +295,43 @@ mod tests {
 
     #[test]
     fn summary_markdown_short_ref_does_not_panic() {
-        // `HEAD` and `HEAD^` are shorter than 7 chars; the slice
-        // must clamp instead of panicking. Regression guard for
-        // `&base[..7]` on short refs.
+        // `HEAD` and `HEAD^` are shorter than 7 chars. Regression
+        // guard for `&base[..7]` on short refs.
         let r = refs(Some("HEAD^"), "HEAD", ReferencesSource::Manual);
         let all: BTreeSet<String> = ["a"].iter().map(|s| (*s).to_string()).collect();
         let hit = BTreeSet::new();
-        let _md = build_summary_markdown(&r, &all, &hit);
+        let md = build_summary_markdown(&r, &all, &hit);
+        assert!(
+            md.contains("for `HEAD^...HEAD` (source: `manual`)"),
+            "got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn summary_markdown_truncates_non_ascii_ref_by_chars() {
+        // Byte 7 of each ref falls inside a multi-byte char, so a
+        // byte slice would panic.
+        let r = refs(Some("releasé-2026"), "featuré/x", ReferencesSource::Manual);
+        let all: BTreeSet<String> = ["a"].iter().map(|s| (*s).to_string()).collect();
+        let hit = BTreeSet::new();
+        let md = build_summary_markdown(&r, &all, &hit);
+        assert!(md.contains("for `releasé...featuré`"), "got:\n{md}");
+    }
+
+    #[test]
+    fn summary_markdown_cannot_be_broken_out_of_by_a_ref_name() {
+        let r = refs(Some("a`\n## x"), "HEAD", ReferencesSource::Manual);
+        let all: BTreeSet<String> = ["a"].iter().map(|s| (*s).to_string()).collect();
+        let hit = BTreeSet::new();
+        let md = build_summary_markdown(&r, &all, &hit);
+        assert!(md.contains("for `` a`\\n## x...HEAD ``"), "got:\n{md}");
+        assert!(!md.contains("\n## x"), "got:\n{md}");
+    }
+
+    #[test]
+    fn markdown_code_delimiter_outlasts_consecutive_backticks() {
+        // A two-backtick delimiter would be closed by the `` run.
+        assert_eq!(markdown_code("a``<b>"), "``` a``<b> ```");
+        assert_eq!(markdown_code("a`b``c"), "``` a`b``c ```");
     }
 }
