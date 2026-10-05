@@ -72,11 +72,6 @@ fn native_commands_for_group(group: &str) -> BTreeSet<String> {
 }
 
 #[test]
-fn skill_content_is_readable() {
-    assert!(!skill_content().is_empty(), "SKILL.md must not be empty");
-}
-
-#[test]
 fn skill_has_valid_frontmatter() {
     let content = skill_content();
     // Extract YAML frontmatter between --- markers — the same

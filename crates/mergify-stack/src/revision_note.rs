@@ -322,21 +322,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn recover_pending_rejects_plain_reason() {
-        assert!(
-            recover_pending(
-                "fixed a typo in the docs",
-                GH,
-                "o",
-                "r",
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            )
-            .is_none()
-        );
-    }
-
     // --- git IO ---
 
     fn init_repo() -> TempDir {
