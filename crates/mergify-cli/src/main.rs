@@ -3504,10 +3504,11 @@ struct StackPushCli {
     /// Don't register the stack with GitHub's native Stacks API.
     /// By default, `mergify stack push` registers it, so GitHub
     /// shows it as a stack and holds the ordering (the PR
-    /// descriptions then carry no `Depends-On:` header) —
-    /// experimental, and silently skipped where the API isn't
-    /// available. Default falls back to git config
-    /// `mergify-cli.stack-github-native` (`true` when unset).
+    /// descriptions then carry no `Depends-On:` header). Where the
+    /// API isn't available, registration is skipped and the push
+    /// reports `not registered on GitHub`. Default falls back to
+    /// git config `mergify-cli.stack-github-native` (`true` when
+    /// unset).
     #[arg(
         long = "no-github-native",
         num_args = 0,
