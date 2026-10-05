@@ -244,9 +244,8 @@ pub fn ensure_history(
 /// `caf\xe9.txt` and a Shift-JIS name, MRGFY-8289). An error would
 /// fail CI on a pull request the engine scopes without complaint,
 /// and no pattern in the UTF-8 YAML config can spell the raw bytes.
-/// The name agrees with the engine's; how `?` and `[...]` match
-/// its U+FFFD does not yet (globset matches bytes, the engine
-/// characters, MRGFY-10066).
+/// `?` and `[...]` match that U+FFFD as one character, as the
+/// engine does (MRGFY-10066).
 pub fn git_changed_files(
     repo_dir: Option<&Path>,
     base: &str,

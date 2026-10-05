@@ -17,17 +17,25 @@
 //! - `{a,b}` alternation means the same on both sides — globset
 //!   compiles it inline, the engine expands it into one pattern per
 //!   branch (MRGFY-8359).
+//! - `?` and `[...]` match one character, not one byte. globset
+//!   parses the glob, but its regex is recompiled in Unicode mode
+//!   (MRGFY-10066), since the engine matches `str`.
 //!
-//! Parity is exact for every ASCII path git can report as changed.
-//! On a non-ASCII one, `?` and `[...]` differ: globset matches
-//! bytes and the engine characters, so `caf?.txt` misses
-//! `café.txt` here and hits it there (MRGFY-10066). The other
-//! residual differences all need a path git never emits: a leading
-//! `/`, a trailing `/`, an empty segment (`a//b`), or the empty
-//! string. An unterminated `[` is the one place globset is stricter
-//! — it rejects the pattern where the engine degrades it to a
-//! literal — and erroring out on a malformed config is the side to
-//! be on.
+//! Known differences that a real path or pattern can reach:
+//!
+//! - `\` is a path separator for the engine (`seps=["/", "\\"]`)
+//!   and an escape here, so a changed file whose name contains a
+//!   backslash (legal on Linux) can land in different scopes.
+//! - `[^x]` negates here; `glob.translate` reads the `^` as a
+//!   literal member (only `[!x]` negates there).
+//! - A class spanning a `/` (`x[a/b]y`) is a class here and literal
+//!   brackets for the engine, which splits on separators first.
+//!
+//! The rest need a path git never emits: a leading `/`, a trailing
+//! `/`, an empty segment (`a//b`), or the empty string. An
+//! unterminated `[` is the one place globset is stricter — it
+//! rejects the pattern where the engine degrades it to a literal —
+//! and erroring out on a malformed config is the side to be on.
 //!
 //! One intentional behavior: a pattern with an empty `include` list
 //! follows the engine and matches every path (the scope's exclude
@@ -38,8 +46,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use globset::GlobBuilder;
-use globset::GlobMatcher;
 use mergify_core::CliError;
+use regex::Regex;
+use regex::RegexBuilder;
 
 use super::config::FileFilters;
 
@@ -47,8 +56,8 @@ use super::config::FileFilters;
 #[derive(Debug)]
 pub struct ScopeMatcher {
     pub name: String,
-    include: Vec<GlobMatcher>,
-    exclude: Vec<GlobMatcher>,
+    include: Vec<Regex>,
+    exclude: Vec<Regex>,
 }
 
 impl ScopeMatcher {
@@ -88,11 +97,11 @@ pub fn compile(filters: &BTreeMap<String, FileFilters>) -> Result<Vec<ScopeMatch
         .collect()
 }
 
-fn compile_list(scope: &str, patterns: &[String]) -> Result<Vec<GlobMatcher>, CliError> {
+fn compile_list(scope: &str, patterns: &[String]) -> Result<Vec<Regex>, CliError> {
     patterns.iter().map(|pat| build_glob(scope, pat)).collect()
 }
 
-fn build_glob(scope: &str, pattern: &str) -> Result<GlobMatcher, CliError> {
+fn build_glob(scope: &str, pattern: &str) -> Result<Regex, CliError> {
     // `literal_separator(true)` is the whole parity story for
     // everything but `**`: it compiles `*` to `[^/]*` and `?` to
     // `[^/]`, which is what `glob.translate` emits and what the
@@ -101,16 +110,68 @@ fn build_glob(scope: &str, pattern: &str) -> Result<GlobMatcher, CliError> {
     // tree. `case_insensitive(false)` is the default but stated for
     // the record — file paths are case-sensitive on the platforms
     // Mergify cares about.
-    GlobBuilder::new(pattern)
+    let invalid = |reason: String| {
+        CliError::Configuration(format!(
+            "invalid glob {pattern:?} under scope {scope:?}: {reason}"
+        ))
+    };
+    let glob = GlobBuilder::new(pattern)
         .literal_separator(true)
         .case_insensitive(false)
         .build()
-        .map(|g| g.compile_matcher())
-        .map_err(|e| {
-            CliError::Configuration(format!(
-                "invalid glob {pattern:?} under scope {scope:?}: {e}"
-            ))
-        })
+        .map_err(|e| invalid(e.to_string()))?;
+    // Not the config's fault: globset changed its output format.
+    let unicode = unicode_regex(glob.regex()).ok_or_else(|| {
+        CliError::Generic(format!(
+            "cannot read globset's regex {:?} for glob {pattern:?}",
+            glob.regex()
+        ))
+    })?;
+    // globset builds its own matcher with `.` matching `\n`; keep it.
+    RegexBuilder::new(&unicode)
+        .dot_matches_new_line(true)
+        .build()
+        .map_err(|e| invalid(e.to_string()))
+}
+
+/// Rewrite globset's byte regex into the same regex over characters.
+///
+/// globset emits `(?-u)` up front and spells every non-ASCII glob
+/// character as its UTF-8 bytes, so `?` (`[^/]`) matches one byte
+/// and `[é]` is the byte class `[\xc3\xa9]`. Dropping `(?-u)` and
+/// folding each `\xNN` run back into its character gives the
+/// engine's semantics, where both match one character. `None` means
+/// globset's output no longer has that shape.
+fn unicode_regex(byte_regex: &str) -> Option<String> {
+    let body = byte_regex.strip_prefix("(?-u)")?;
+    let mut out = String::with_capacity(body.len());
+    let mut bytes = Vec::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            flush_utf8(&mut bytes, &mut out)?;
+            out.push(c);
+            continue;
+        }
+        let escaped = chars.next()?;
+        if escaped == 'x' {
+            let hi = chars.next()?.to_digit(16)?;
+            let lo = chars.next()?.to_digit(16)?;
+            bytes.push(u8::try_from(hi << 4 | lo).ok()?);
+        } else {
+            flush_utf8(&mut bytes, &mut out)?;
+            out.push('\\');
+            out.push(escaped);
+        }
+    }
+    flush_utf8(&mut bytes, &mut out)?;
+    Some(out)
+}
+
+fn flush_utf8(bytes: &mut Vec<u8>, out: &mut String) -> Option<()> {
+    out.push_str(std::str::from_utf8(bytes).ok()?);
+    bytes.clear();
+    Some(())
 }
 
 /// Result of routing a set of changed files through every scope
@@ -129,6 +190,10 @@ where
     let mut hit: BTreeSet<String> = BTreeSet::new();
     let mut by_scope: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for file in files {
+        // globset's own matcher rewrote `\\` to `/` before matching
+        // on non-Unix targets; the Windows binary keeps doing so.
+        #[cfg(not(unix))]
+        let file = &file.replace('\\', "/");
         for m in matchers {
             if m.matches(file) {
                 hit.insert(m.name.clone());
@@ -251,6 +316,46 @@ mod tests {
             ("*.{md,rst}", "readme.rst", true),
             ("*.{md,rst}", "docs/readme.md", false),
         ]);
+    }
+
+    #[test]
+    fn question_mark_and_class_match_one_character() {
+        // MRGFY-10066. globset's byte regex made `?` one byte and
+        // `[é]` a class of `é`'s two UTF-8 bytes, so every row below
+        // but the plain-literal and `*` ones came out the other way
+        // round from the engine, which matches characters. The U+FFFD row is how both GitHub and
+        // `ci scopes` report a `café.txt` whose é is the Latin-1 byte.
+        assert_matches(&[
+            ("critical/caf?.txt", "critical/café.txt", true),
+            ("critical/caf??.txt", "critical/café.txt", false),
+            ("critical/caf[é].txt", "critical/café.txt", true),
+            ("critical/caf?.txt", "critical/caf\u{FFFD}.txt", true),
+            ("critical/caf[!é].txt", "critical/café.txt", false),
+            ("critical/caf[!à].txt", "critical/café.txt", true),
+            ("critical/caf[à-ê].txt", "critical/café.txt", true),
+            ("critical/日本?.txt", "critical/日本語.txt", true),
+            ("critical/*.txt", "critical/café.txt", true),
+            ("critical/café.txt", "critical/café.txt", true),
+            ("critical/café.txt", "critical/cafe.txt", false),
+        ]);
+    }
+
+    #[test]
+    fn double_star_crosses_a_newline_in_a_file_name() {
+        // globset compiled its own regex with `.` matching `\n`, and
+        // the engine's `glob.translate` output is `(?s:...)`. Now the
+        // regex is built here, so the flag has to be kept by hand.
+        assert_matches(&[("src/**", "src/a\nb.txt", true)]);
+    }
+
+    #[test]
+    fn escaped_backslash_before_x_is_not_a_byte_escape() {
+        // `\\x41` in globset's output is an escaped `\` followed by
+        // the text `x41`: folding it into `A` would change the glob.
+        assert_eq!(
+            unicode_regex(r"(?-u)^a\\x41\xc3\xa9$").as_deref(),
+            Some(r"^a\\x41é$"),
+        );
     }
 
     #[test]

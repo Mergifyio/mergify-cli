@@ -20,6 +20,7 @@ mergify-core = { path = "../mergify-core" }
 opentelemetry-proto = { workspace = true }
 prost = { workspace = true }
 quick-xml = { workspace = true }
+regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
