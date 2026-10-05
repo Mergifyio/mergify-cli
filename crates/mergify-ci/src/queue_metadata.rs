@@ -21,6 +21,8 @@
 use mergify_core::Output;
 
 use crate::github_event::GitHubEvent;
+#[cfg(doc)]
+use crate::github_event::PullRequest;
 
 /// Parse the first ```yaml``` fenced block out of `body` into a
 /// generic value, keeping every field. Returns `None` when the body
@@ -51,9 +53,10 @@ pub fn parse_yaml_block(body: &str) -> Option<serde_json::Value> {
 
 /// Extract MQ metadata from an event payload's pull-request body.
 ///
-/// Emits a warning on `output` (stderr for human mode) when the PR is
-/// an MQ draft but the body is missing or lacks the fenced block —
-/// matches Python's stderr warnings.
+/// The title only nominates the pull request: the body is read when
+/// [`PullRequest::is_from_base_repository`] also holds. Emits a warning
+/// on `output` (stderr for human mode) when it does not, or when the
+/// body is missing or lacks the fenced block.
 pub fn extract_from_event(
     ev: &GitHubEvent,
     output: &mut dyn Output,
@@ -65,6 +68,12 @@ pub fn extract_from_event(
         return Ok(None);
     };
     if !title.starts_with("merge queue: ") {
+        return Ok(None);
+    }
+    if !pr.is_from_base_repository() {
+        output.status(
+            "WARNING: pull request titled like a merge queue draft does not come from the base repository, skipping metadata extraction",
+        )?;
         return Ok(None);
     }
     let Some(body) = pr.body.as_deref() else {
@@ -154,16 +163,31 @@ mod tests {
         assert!(cap.stderr().is_empty());
     }
 
-    #[test]
-    fn extract_warns_on_mq_pr_without_body() {
-        let ev = GitHubEvent {
+    /// A `merge queue: ` pull request whose head and base live in the
+    /// repositories with these ids (`None`: the payload's `repo` is
+    /// `null`, as on the head of a deleted fork).
+    fn mq_event(head_repo: Option<u64>, base_repo: Option<u64>, body: Option<&str>) -> GitHubEvent {
+        let git_ref = |id: Option<u64>| crate::github_event::GitRef {
+            repo: id.map(|id| crate::github_event::RefRepository { id: Some(id) }),
+            ..Default::default()
+        };
+        GitHubEvent {
             pull_request: Some(crate::github_event::PullRequest {
-                title: Some("merge queue: deploy".into()),
-                body: None,
+                title: Some("merge queue: batch".into()),
+                body: body.map(Into::into),
+                head: Some(git_ref(head_repo)),
+                base: Some(git_ref(base_repo)),
                 ..Default::default()
             }),
             ..Default::default()
-        };
+        }
+    }
+
+    const BODY: &str = "blah\n```yaml\nchecking_base_sha: deadbeef\n```";
+
+    #[test]
+    fn extract_warns_on_mq_pr_without_body() {
+        let ev = mq_event(Some(1), Some(1), None);
         let mut cap = Captured::human();
         let result = extract_from_event(&ev, &mut cap.output).unwrap();
         assert!(result.is_none());
@@ -173,17 +197,32 @@ mod tests {
 
     #[test]
     fn extract_returns_metadata_for_mq_pr() {
-        let body = "blah\n```yaml\nchecking_base_sha: deadbeef\n```";
-        let ev = GitHubEvent {
-            pull_request: Some(crate::github_event::PullRequest {
-                title: Some("merge queue: batch".into()),
-                body: Some(body.into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+        let ev = mq_event(Some(1), Some(1), Some(BODY));
         let mut cap = Captured::human();
         let meta = extract_from_event(&ev, &mut cap.output).unwrap().unwrap();
         assert_eq!(meta["checking_base_sha"], "deadbeef");
+    }
+
+    #[test]
+    fn extract_ignores_mq_title_outside_the_base_repository() {
+        // MRGFY-8854: anyone can title a pull request `merge queue: `.
+        // From a fork, from a deleted fork, or with no repository to
+        // compare, the body is not the engine's.
+        for (head, base) in [
+            (Some(2), Some(1)),
+            (None, Some(1)),
+            (Some(1), None),
+            (None, None),
+        ] {
+            let ev = mq_event(head, base, Some(BODY));
+            let mut cap = Captured::human();
+            let result = extract_from_event(&ev, &mut cap.output).unwrap();
+            assert!(result.is_none(), "{head:?} -> {base:?} admitted");
+            let stderr = cap.stderr();
+            assert!(
+                stderr.contains("does not come from the base repository"),
+                "got: {stderr:?}"
+            );
+        }
     }
 }
