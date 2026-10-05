@@ -83,8 +83,8 @@ pub struct References {
     pub source: ReferencesSource,
     /// The scopes the merge queue decided for this batch, read off
     /// the engine's git note: see [`batch_scopes`]. `None` everywhere
-    /// else, the pull request body included, which anyone opening a
-    /// pull request titled `merge queue: ` writes.
+    /// else, the pull request body included, which whoever opens the
+    /// pull request writes.
     pub batch_scopes: Option<BatchScopes>,
 }
 
@@ -240,7 +240,10 @@ fn detect_from_pull_request_event(
         .and_then(|pr| pr.head.as_ref())
         .map_or_else(|| "HEAD".to_string(), |r| r.sha.clone());
 
+    // A fork can serve the note too, when the workflow checks it out
+    // as `origin`, so the note needs the same admission as the body.
     if let Some(pr) = &event.pull_request
+        && pr.is_from_base_repository()
         && let Some(head_ref) = &pr.head
         && let Some(branch) = head_ref.r#ref.as_deref()
         && let Some(note) = notes_reader(branch, &head_ref.sha)
@@ -255,8 +258,9 @@ fn detect_from_pull_request_event(
     }
 
     if let Some(meta) = extract_from_event(event, output)? {
-        // Anyone who can open a pull request writes this body, so the
-        // value only becomes a base once it looks like one. Either way
+        // Anyone who can open a pull request from a branch of the
+        // repository writes this body, so the value only becomes a base
+        // once it looks like one. Either way
         // a payload we can't use is not metadata: fall through to the
         // PR base below, which is the *wrong* base for a genuine batch
         // build, so warn rather than let it be diagnosed silently.
@@ -361,8 +365,9 @@ pub fn real_notes_reader(branch: &str, head_sha: &str) -> Option<serde_json::Val
 ///
 /// The gate this backs is on the *pull request body* payload alone,
 /// and that asymmetry is the point. `queue_metadata::extract_from_event`
-/// admits a body on the title prefix `merge queue: ` and nothing
-/// else, so whoever opens a pull request writes the value; the git
+/// admits a body on the title prefix `merge queue: ` from a branch of
+/// the base repository, so anyone who can open a pull request from one
+/// writes the value; the git
 /// note comes from the engine, over a push to `origin`. A value
 /// admitted here leaves the CLI as `base`: into `$GITHUB_OUTPUT` and
 /// the `--format=shell` eval for the caller's workflow, into
@@ -589,8 +594,8 @@ mod tests {
 
     #[test]
     fn is_object_name_admits_only_full_hex_object_names() {
-        // Anyone who can open a pull request writes the body this
-        // gates, and the value ends up as `base` in the caller's
+        // Anyone who can open a pull request from a branch of the
+        // repository writes the body this gates, and the value ends up as `base` in the caller's
         // workflow. A leading `-` above all: every consumer of `base`
         // reads it as an option (MRGFY-8845).
         for value in [
@@ -702,7 +707,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": format!("prelude\n```yaml\nchecking_base_sha: {MQ_BASE}\n```"),
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
                 },
             }),
         );
@@ -718,6 +724,43 @@ mod tests {
         assert_eq!(refs.base.as_deref(), Some(MQ_BASE));
         assert_eq!(refs.head, "mq-head");
         assert_eq!(refs.source, ReferencesSource::MergeQueue);
+    }
+
+    #[test]
+    fn mq_title_from_a_fork_is_not_a_merge_queue_draft() {
+        // MRGFY-8854, the ticket's reproduction: a fork's pull request
+        // titled `merge queue: ` whose body names its own head as
+        // `checking_base_sha`. Admitted, the diff is empty, every scope
+        // reads false and `source` turns on the merge-queue scope. A
+        // workflow that checks the fork out as `origin` fetches the
+        // fork's note, which says the same.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_event(
+            &dir,
+            &serde_json::json!({
+                "pull_request": {
+                    "title": "merge queue: attacker batch",
+                    "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\n```"),
+                    "head": {"sha": MQ_BASE, "ref": "attacker-fork-branch", "repo": {"id": 2}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
+                },
+            }),
+        );
+        let forged_note = |_: &str, _: &str| {
+            Some(serde_json::json!({"checking_base_sha": MQ_BASE, "scopes": []}))
+        };
+        let mut cap = Captured::human();
+        let refs = env::testing::with_vars(
+            [
+                ("GITHUB_EVENT_NAME", Some("pull_request_target")),
+                ("GITHUB_EVENT_PATH", Some(path.to_str().unwrap())),
+                ("BUILDKITE", None),
+            ],
+            || detect(&mut cap.output, &forged_note).unwrap(),
+        );
+        assert_eq!(refs.base.as_deref(), Some("pr-base"));
+        assert_eq!(refs.source, ReferencesSource::GithubEventPullRequest);
+        assert!(refs.batch_scopes.is_none());
     }
 
     #[test]
@@ -737,8 +780,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\nprevious_failed_batches:\n  - batch_pr_number: 42\n    checked_pull_requests:\n      - 7\n```"),
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
-                    "base": {"sha": "wrong-base"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "wrong-base", "repo": {"id": 1}},
                 },
             }),
         );
@@ -768,8 +811,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": "```yaml\npull_requests:\n  - number: 7\n```",
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
-                    "base": {"sha": "pr-base"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
                 },
             }),
         );
@@ -793,12 +836,14 @@ mod tests {
 
     #[test]
     fn mq_body_with_option_like_base_warns_and_falls_through() {
-        // MRGFY-8845: `extract_from_event` admits any pull request
+        // MRGFY-8845: `extract_from_event` admitted any pull request
         // whose title starts with "merge queue: ", so the reporter's
         // fork PR put `--output=<path>` in the body and git-refs
         // emitted it as `base`, where the workflow's next git call
         // read it as an option. A value that is not an object name is
-        // not metadata: fall through to the PR base and say so.
+        // not metadata: fall through to the PR base and say so. Forks
+        // are refused since MRGFY-8854, but a branch of the repository
+        // still writes the body.
         let dir = tempfile::tempdir().unwrap();
         let path = write_event(
             &dir,
@@ -806,8 +851,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": "```yaml\nchecking_base_sha: --output=/home/runner/.gitconfig\n```",
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
-                    "base": {"sha": "pr-base"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
                 },
             }),
         );
@@ -842,8 +887,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": "```yaml\nchecking_base_sha: \"cafef00d\\n::error::pwned\"\n```",
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
-                    "base": {"sha": "pr-base"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
                 },
             }),
         );
@@ -877,7 +922,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\n```"),
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
                 },
             }),
         );
@@ -943,8 +989,8 @@ mod tests {
 
     #[test]
     fn mq_note_carries_batch_scopes_but_body_does_not() {
-        // The body is written by whoever opens a pull request titled
-        // `merge queue: `, so only the engine's note decides scopes.
+        // The body is written by whoever opens the pull request, so
+        // only the engine's note decides scopes.
         let dir = tempfile::tempdir().unwrap();
         let path = write_event(
             &dir,
@@ -952,7 +998,8 @@ mod tests {
                 "pull_request": {
                     "title": "merge queue: batch",
                     "body": format!("```yaml\nchecking_base_sha: {MQ_BASE}\nscopes: [body]\n```"),
-                    "head": {"sha": "mq-head", "ref": "mq/main/0"},
+                    "head": {"sha": "mq-head", "ref": "mq/main/0", "repo": {"id": 1}},
+                    "base": {"sha": "pr-base", "repo": {"id": 1}},
                 },
             }),
         );
