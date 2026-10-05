@@ -1,13 +1,12 @@
 //! `git diff` between two refs, with progressive deepening of a
 //! shallow clone if no merge base exists yet.
 //!
-//! Mirrors `mergify_cli/ci/scopes/changed_files.py`. The history
-//! deepening is necessary in CI: GitHub Actions checkouts default
-//! to depth=1, and the merge base between `base` and `head`
-//! probably lives further back. We fetch in batches of 100
-//! commits until either a merge base appears or the commit count
-//! stops growing (meaning we've reached the root and there's
-//! genuinely no common ancestor).
+//! The history deepening is necessary in CI: GitHub Actions
+//! checkouts default to depth=1, and the merge base between
+//! `base` and `head` probably lives further back. We fetch in
+//! batches of 100 commits until either a merge base appears or
+//! the commit count stops growing (meaning we've reached the
+//! root and there's genuinely no common ancestor).
 
 use std::path::Path;
 use std::process::Command;
@@ -90,6 +89,10 @@ fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, CliError> {
     // Untrimmed: `git_changed_files` reads NUL-delimited paths,
     // and a leading or trailing space is a legal filename
     // character. Callers that parse a scalar trim it themselves.
+    //
+    // Lossy on purpose: see `git_changed_files` for why a path
+    // that is not UTF-8 must come back with U+FFFD in it rather
+    // than as raw bytes or an error.
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -171,10 +174,22 @@ pub fn ensure_history(
 ///
 /// A rename yields **both** of its paths, so a scope the file moved
 /// out of still counts as touched. Paths are not
-/// `core.quotePath`-escaped, so the globs see the real name; bytes
-/// that aren't valid UTF-8 are still replaced (see `run_git`), and
+/// `core.quotePath`-escaped, so the globs see the real name, and
 /// the result is unescaped, so callers that print a path must
 /// escape it first.
+///
+/// A path that is not valid UTF-8 (a Latin-1 or Shift-JIS name)
+/// comes back with each invalid sequence replaced by U+FFFD:
+/// `caf\xe9.txt` reads `caf\u{FFFD}.txt`. That is the name the
+/// engine matches, not a corruption of it. The engine derives
+/// scopes from GitHub's pull request files API, which reports that
+/// exact replacement (checked on a sandbox repository holding
+/// `caf\xe9.txt` and a Shift-JIS name, MRGFY-8289). An error would
+/// fail CI on a pull request the engine scopes without complaint,
+/// and no pattern in the UTF-8 YAML config can spell the raw bytes.
+/// The name agrees with the engine's; how `?` and `[...]` match
+/// its U+FFFD does not yet (globset matches bytes, the engine
+/// characters, MRGFY-10066).
 pub fn git_changed_files(
     repo_dir: Option<&Path>,
     base: &str,
@@ -190,7 +205,7 @@ pub fn git_changed_files(
     // two must agree or CLI-uploaded and engine-derived scopes
     // disagree for the same pull request.
     //
-    // `--diff-filter=ACMRTD` matches Python: Added, Modified,
+    // `--diff-filter=ACMRTD` keeps Added, Modified,
     // Type-changed, Deleted, plus the Renamed and Copied letters
     // that `--no-renames` has just made unreachable. They stay so
     // that removing `--no-renames` degrades to the old
@@ -239,29 +254,80 @@ pub fn git_changed_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+    use std::process::Stdio;
 
     /// Run `git` in `dir` with the developer's global/system
     /// config out of the way, so a personal `diff.renames` or
     /// `core.quotePath` setting can't change what these tests see.
     ///
-    /// `GIT_DIR`/`GIT_WORK_TREE` are dropped too: they override
-    /// `-C`, and this helper is the one that runs `add`/`commit`.
-    /// Under `git bisect run cargo test` (or a hook, or `git
-    /// rebase -x`) those are set, and the fixture's `git add -A`
-    /// would otherwise stage into the developer's real repository.
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = Command::new("git")
-            .arg("-C")
+    /// `GIT_DIR`, `GIT_WORK_TREE` and the other repository-locating
+    /// variables are dropped too: they override `-C`, and these
+    /// helpers run `add`/`commit`. Under `git bisect run cargo
+    /// test` (or a hook, or `git rebase -x`) they are set, and the
+    /// fixture's `git add -A` would otherwise stage into the
+    /// developer's real repository.
+    fn fixture_git(dir: &Path) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = fixture_git(dir)
             .args(args)
             .status()
             .expect("spawn git")
             .success();
         assert!(ok, "git {args:?} failed");
+    }
+
+    /// Stage `content` at a path given as raw bytes, which need
+    /// not be UTF-8. Goes through the index because macOS refuses
+    /// such a name on disk.
+    fn stage_raw_path(dir: &Path, path: &[u8], content: &str) {
+        let mut hash = fixture_git(dir)
+            .args(["hash-object", "-w", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn git hash-object");
+        hash.stdin
+            .take()
+            .expect("stdin")
+            .write_all(content.as_bytes())
+            .expect("write blob");
+        let out = hash.wait_with_output().expect("wait git hash-object");
+        assert!(out.status.success(), "git hash-object failed");
+        let blob = String::from_utf8(out.stdout).expect("hex object id");
+
+        let mut entry = format!("100644 {} 0\t", blob.trim()).into_bytes();
+        entry.extend_from_slice(path);
+        entry.push(b'\n');
+        let mut index = fixture_git(dir)
+            .args(["update-index", "--index-info"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("spawn git update-index");
+        index
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(&entry)
+            .expect("write index entry");
+        assert!(index.wait().expect("wait git update-index").success());
     }
 
     fn write(dir: &Path, rel: &str, content: &str) {
@@ -365,6 +431,28 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "touch the punctuated file"]);
 
         assert_eq!(changed(dir), ["critical/quote\"and\\slash.txt"]);
+    }
+
+    #[test]
+    fn non_utf8_path_reads_as_github_reports_it() {
+        // MRGFY-8289: GitHub's pull request files API, which the
+        // engine scopes from, reports a Latin-1 `caf\xe9.txt` as
+        // `caf\u{FFFD}.txt`, and the Shift-JIS `テスト.txt` with one
+        // U+FFFD per lead byte. An error here would fail CI on a
+        // pull request the engine scopes fine.
+        let tmp = fixture();
+        let dir = tmp.path();
+        stage_raw_path(dir, b"critical/caf\xe9.txt", "latin-1\n");
+        stage_raw_path(dir, b"critical/\x83e\x83X\x83g.txt", "shift-jis\n");
+        git(dir, &["commit", "-q", "-m", "add non-UTF-8 names"]);
+
+        assert_eq!(
+            changed(dir),
+            [
+                "critical/caf\u{FFFD}.txt",
+                "critical/\u{FFFD}e\u{FFFD}X\u{FFFD}g.txt",
+            ],
+        );
     }
 
     #[test]
