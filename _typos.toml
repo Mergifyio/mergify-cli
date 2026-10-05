@@ -13,3 +13,6 @@ nd = "nd"
 authentification = "authentification"
 # Hex-like test Change-Id fixture token ("Idead0000…ff").
 idead = "idead"
+# Latin-1 "café" fixture with the é as a raw byte ("caf\xe9.txt") or
+# its replacement char ("caf\u{FFFD}.txt").
+caf = "caf"
