@@ -77,6 +77,10 @@ restricted file under your configuration directory. `mergify auth status` says
 which account you are signed in as, and `mergify auth logout` asks the Mergify
 API to revoke the credential rather than only deleting the local copy.
 
+The approval page labels the new token `Mergify CLI on <hostname>`. Pass
+`--device-name "work laptop"` to name the machine yourself, or `--device-name=`
+to keep the hostname from leaving the machine at all.
+
 The commands that talk to the **Mergify API** resolve a credential in this
 order:
 
