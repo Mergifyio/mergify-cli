@@ -437,6 +437,117 @@ jobs:
               kill "$(cat /tmp/su-server.pid)" || true
           fi
 
+  # The agent skills against the binary people actually get: the latest
+  # release's. The CLI's source isn't in this repository any more, so there is
+  # no build to check them against. See scripts/check-skills.py.
+  skills:
+    name: skills reference real commands
+    timeout-minutes: 5
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download the latest release's Linux binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'mergify-*-x86_64-unknown-linux-gnu.tar.gz' --dir release
+          tar -C release -xzf release/mergify-*-x86_64-unknown-linux-gnu.tar.gz
+          release/mergify --version
+      - name: Check the skills
+        run: python3 scripts/check-skills.py release/mergify
+
+  # End to end, the one-liner people run: install.sh against the latest
+  # release's real binaries and SHA256SUMS, served from a local fixture so the
+  # script's own download, checksum and install paths all run. The release is
+  # the only place binaries come from now, so this is also what proves the
+  # current release installs. Plus the two ways a tampered SHA256SUMS must fail
+  # closed. Windows runs the same POSIX script under git-bash.
+  install-script-release:
+    name: install.sh against the latest release (${{ matrix.os }})
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install shellcheck (Linux only)
+        if: matrix.os == 'ubuntu-26.04'
+        run: sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Lint install.sh
+        if: matrix.os == 'ubuntu-26.04'
+        run: shellcheck install.sh
+      # Every binary of the release, so install.sh picks its own target the
+      # way it does against GitHub; latest-release.json stands in for the
+      # releases/latest redirect it resolves the version from.
+      - name: Fetch the latest release as the fixture
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          mkdir -p fixture/release
+          gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir fixture/release \
+            --pattern 'mergify-*' --pattern SHA256SUMS
+          printf '{"tag_name":"%s"}\n' "${tag}" > fixture/release/latest-release.json
+          ls -la fixture/release
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Serve the fixture
+        shell: bash
+        run: |
+          cd fixture/release
+          # `python3` on the Unix runners, `python` on the Windows one.
+          py=python3; command -v "$py" > /dev/null 2>&1 || py=python
+          "$py" -m http.server 8765 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
+          echo $! > /tmp/server.pid
+          for _ in $(seq 1 50); do
+            curl -fsS http://127.0.0.1:8765/SHA256SUMS > /dev/null && break
+            sleep 0.1
+          done
+      - name: install.sh installs the latest release
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          MERGIFY_BASE_URL=http://127.0.0.1:8765 MERGIFY_INSTALL_DIR=/tmp/mergify-install ./install.sh
+          case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) bin=mergify.exe ;; *) bin=mergify ;; esac
+          out="$("/tmp/mergify-install/${bin}" --version)"
+          echo "${out}"
+          [ "${out}" = "mergify ${TAG}" ] || { echo "expected 'mergify ${TAG}', got '${out}'"; exit 1; }
+      # sha256sum -c only warns on a malformed line, so install.sh checks the
+      # line shape itself: both cases must refuse to install.
+      - name: install.sh rejects a tampered SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd fixture/release
+          cp SHA256SUMS SHA256SUMS.orig
+          assets=(mergify-*)
+          echo "Case 1: wrong but well-formed hashes"
+          for asset in "${assets[@]}"; do printf '%064d  %s\n' 0 "${asset}"; done > SHA256SUMS
+          if MERGIFY_BASE_URL=http://127.0.0.1:8765 MERGIFY_INSTALL_DIR=/tmp/mergify-bad1 ../../install.sh > /tmp/case1.log 2>&1; then
+            cat /tmp/case1.log; echo "install.sh accepted wrong checksums"; exit 1
+          fi
+          grep -q 'checksum verification failed' /tmp/case1.log
+          echo "Case 2: malformed lines"
+          for asset in "${assets[@]}"; do echo "bogus  ${asset}"; done > SHA256SUMS
+          if MERGIFY_BASE_URL=http://127.0.0.1:8765 MERGIFY_INSTALL_DIR=/tmp/mergify-bad2 ../../install.sh > /tmp/case2.log 2>&1; then
+            cat /tmp/case2.log; echo "install.sh accepted malformed checksums"; exit 1
+          fi
+          grep -q 'malformed checksum entry' /tmp/case2.log
+          mv SHA256SUMS.orig SHA256SUMS
+      - name: Stop the fixture server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/server.pid ]; then kill "$(cat /tmp/server.pid)" || true; fi
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
@@ -448,6 +559,8 @@ jobs:
       - smoke-test-binary
       - install-script-smoke
       - self-update-smoke
+      - skills
+      - install-script-release
     runs-on: ubuntu-26.04
     steps:
       - name: Verify all jobs succeeded
