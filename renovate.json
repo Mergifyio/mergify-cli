@@ -4,35 +4,7 @@
     "config:recommended"
   ],
   "minimumReleaseAge": "7 days",
-  "lockFileMaintenance": {
-    "enabled": false
-  },
   "packageRules": [
-    {
-      "matchManagers": [
-        "cargo"
-      ],
-      "matchUpdateTypes": [
-        "lockFileMaintenance"
-      ],
-      "enabled": true,
-      "schedule": [
-        "before 5am on monday"
-      ]
-    },
-    {
-      "matchManagers": [
-        "cargo"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "patch"
-      ],
-      "groupName": "Cargo minor/patch updates",
-      "schedule": [
-        "before 5am on monday"
-      ]
-    },
     {
       "matchManagers": [
         "github-actions"
