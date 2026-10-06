@@ -1,33 +1,14 @@
 //! Glob-pattern matching: file path → matching scopes.
 //!
 //! The engine derives a pull request's scopes from the very same
-//! `scopes:` block, in `mergify_engine/rules/globs.py` (brace
-//! expansion, then `glob.translate`, matched with the third-party
-//! `regex` module's `.match()` — `glob.translate` end-anchors its
-//! output with `\z`, so that is a full match), and it — not this
-//! command — is what the merge queue acts on. So the
-//! semantics here have to track that module rather than globset's
-//! defaults, or one config means two things and `ci scopes` picks
-//! CI jobs for a scope set the engine never derives:
-//!
-//! - `*` and `?` stop at `/` (`literal_separator(true)`). `src/*.py`
-//!   is `src`'s own Python files, not the whole subtree; only `**`
-//!   crosses directories. This is also what
-//!   `/configuration/data-types` documents.
-//! - `{a,b}` alternation means the same on both sides — globset
-//!   compiles it inline, the engine expands it into one pattern per
-//!   branch (MRGFY-8359).
-//!
-//! Parity is exact for every ASCII path git can report as changed.
-//! On a non-ASCII one, `?` and `[...]` differ: globset matches
-//! bytes and the engine characters, so `caf?.txt` misses
-//! `café.txt` here and hits it there (MRGFY-10066). The other
-//! residual differences all need a path git never emits: a leading
-//! `/`, a trailing `/`, an empty segment (`a//b`), or the empty
-//! string. An unterminated `[` is the one place globset is stricter
-//! — it rejects the pattern where the engine degrades it to a
-//! literal — and erroring out on a malformed config is the side to
-//! be on.
+//! `scopes:` block, and it — not this command — is what the merge
+//! queue acts on. So a glob here compiles as the engine compiles it
+//! (`engine_glob`, a port of `mergify_engine/rules/globs.py`, which
+//! documents the one pattern shape it refuses instead), or one config
+//! means two things and `ci scopes` picks CI jobs for a
+//! scope set the engine never derives. `engine_glob_cases.json` is the
+//! proof: patterns and paths with the engine's own verdicts, which
+//! this module must reproduce.
 //!
 //! One intentional behavior: a pattern with an empty `include` list
 //! follows the engine and matches every path (the scope's exclude
@@ -37,18 +18,18 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use globset::GlobBuilder;
-use globset::GlobMatcher;
 use mergify_core::CliError;
+use regex::Regex;
 
 use super::config::FileFilters;
+use super::engine_glob;
 
 /// Pre-built matchers for one scope.
 #[derive(Debug)]
 pub struct ScopeMatcher {
     pub name: String,
-    include: Vec<GlobMatcher>,
-    exclude: Vec<GlobMatcher>,
+    include: Vec<Regex>,
+    exclude: Vec<Regex>,
 }
 
 impl ScopeMatcher {
@@ -88,29 +69,20 @@ pub fn compile(filters: &BTreeMap<String, FileFilters>) -> Result<Vec<ScopeMatch
         .collect()
 }
 
-fn compile_list(scope: &str, patterns: &[String]) -> Result<Vec<GlobMatcher>, CliError> {
+fn compile_list(scope: &str, patterns: &[String]) -> Result<Vec<Regex>, CliError> {
     patterns.iter().map(|pat| build_glob(scope, pat)).collect()
 }
 
-fn build_glob(scope: &str, pattern: &str) -> Result<GlobMatcher, CliError> {
-    // `literal_separator(true)` is the whole parity story for
-    // everything but `**`: it compiles `*` to `[^/]*` and `?` to
-    // `[^/]`, which is what `glob.translate` emits and what the
-    // data-types page documents. globset defaults it off, and that
-    // default is what used to let `*.md` swallow every `.md` in the
-    // tree. `case_insensitive(false)` is the default but stated for
-    // the record — file paths are case-sensitive on the platforms
-    // Mergify cares about.
-    GlobBuilder::new(pattern)
-        .literal_separator(true)
-        .case_insensitive(false)
-        .build()
-        .map(|g| g.compile_matcher())
-        .map_err(|e| {
-            CliError::Configuration(format!(
-                "invalid glob {pattern:?} under scope {scope:?}: {e}"
-            ))
-        })
+fn build_glob(scope: &str, pattern: &str) -> Result<Regex, CliError> {
+    engine_glob::compile(pattern).map_err(|e| match e {
+        engine_glob::CompileError::Invalid(reason) => CliError::Configuration(format!(
+            "invalid glob {pattern:?} under scope {scope:?}: {reason}"
+        )),
+        // Not the config's fault: the translation is ours.
+        engine_glob::CompileError::Regex(e) => {
+            CliError::wrap(format!("compile glob {pattern:?} under scope {scope:?}"), e)
+        }
+    })
 }
 
 /// Result of routing a set of changed files through every scope
@@ -159,45 +131,6 @@ mod tests {
         compile(&m).expect("globs compile")
     }
 
-    /// Assert a single `include` pattern's verdict on one path.
-    fn assert_matches(cases: &[(&str, &str, bool)]) {
-        for &(pattern, path, expected) in cases {
-            let ms = compile_one(&[pattern], &[]);
-            let hit = route([path], &ms).hit.contains("s");
-            assert_eq!(
-                hit, expected,
-                "{pattern:?} vs {path:?}: expected match={expected}",
-            );
-        }
-    }
-
-    #[test]
-    fn single_star_and_question_mark_stop_at_a_separator() {
-        // MRGFY-8392. globset's default (`literal_separator(false)`)
-        // compiles `*` to `.*`, so `src/*.py` used to claim
-        // `src/deep/nested.py` — a file the engine, which compiles
-        // the same pattern to `src[/\\][^/\\]*\.py`, never puts in
-        // the scope. Each pattern below is paired with the path the
-        // two sides disagreed on and one they always agreed on, so
-        // the bound is pinned without pinning `*` shut entirely.
-        assert_matches(&[
-            ("src/*.py", "src/deep/nested.py", false),
-            ("src/*.py", "src/main.py", true),
-            ("*.md", "docs/readme.md", false),
-            ("*.md", "readme.md", true),
-            (
-                ".github/workflows/*",
-                ".github/workflows/nested/ci.yml",
-                false,
-            ),
-            (".github/workflows/*", ".github/workflows/ci.yml", true),
-            ("package*.json", "packages/ui/tsconfig.json", false),
-            ("package*.json", "package-lock.json", true),
-            ("a?c", "a/c", false),
-            ("a?c", "abc", true),
-        ]);
-    }
-
     #[test]
     fn separator_bounded_star_in_exclude_does_not_drop_a_scope() {
         // The direction that actually skipped CI. With `*` crossing
@@ -215,42 +148,6 @@ mod tests {
         );
         let res = route(["README.md"], &ms);
         assert!(res.hit.is_empty(), "unexpected hit: {:?}", res.hit);
-    }
-
-    #[test]
-    fn double_star_is_the_only_wildcard_that_crosses_directories() {
-        // `**` keeps its recursive meaning, including the "zero
-        // segments" case (`**/x` matches a root-level `x`) that the
-        // engine's `(?:.+[/\\])?` prefix also allows. Without this,
-        // narrowing `*` could plausibly have been read as narrowing
-        // `**` too.
-        assert_matches(&[
-            ("**/*.py", "a/b/c.py", true),
-            ("**/*.py", "top.py", true),
-            ("**/x", "x", true),
-            ("**/x", "deep/nested/x", true),
-            ("src/**", "src/a/b/c.py", true),
-            ("src/**/*.py", "src/a/b.py", true),
-            ("**/tests/**", "a/b/tests/c/d.py", true),
-            // `**/*` is `FileFilters`' default `include`, so every
-            // scope that only declares an `exclude` list rides on it.
-            // Narrowing the trailing `*` must not stop it catching a
-            // nested file, or those scopes would quietly go empty.
-            ("**/*", "a/b/c/deep.py", true),
-            ("**/*", "top.py", true),
-        ]);
-    }
-
-    #[test]
-    fn brace_alternation_expands_within_the_separator_bound() {
-        // Braces are the other half of engine parity (MRGFY-8359),
-        // and they compose with the bound rather than escaping it:
-        // each branch is a separator-bounded `*` in its own right.
-        assert_matches(&[
-            ("*.{md,rst}", "readme.md", true),
-            ("*.{md,rst}", "readme.rst", true),
-            ("*.{md,rst}", "docs/readme.md", false),
-        ]);
     }
 
     #[test]
@@ -300,11 +197,10 @@ mod tests {
 
     #[test]
     fn invalid_glob_surfaces_configuration_error() {
-        // An obviously-bad pattern (unterminated bracket
-        // expression) should fail config validation rather than
-        // crash at match time.
+        // A pattern the engine refuses (an unclosed brace group)
+        // fails config validation rather than never matching.
         let mut m = BTreeMap::new();
-        m.insert("s".to_string(), filters(&["[unterminated"], &[]));
+        m.insert("s".to_string(), filters(&["src/{a,b"], &[]));
         let err = compile(&m).unwrap_err();
         assert!(matches!(err, CliError::Configuration(_)));
         assert!(err.to_string().contains("invalid glob"), "got {err}");

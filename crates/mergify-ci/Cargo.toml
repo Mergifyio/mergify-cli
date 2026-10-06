@@ -14,12 +14,12 @@ chrono = { workspace = true }
 flate2 = { workspace = true }
 getrandom = { workspace = true }
 glob = { workspace = true }
-globset = { workspace = true }
 mergify-config = { path = "../mergify-config" }
 mergify-core = { path = "../mergify-core" }
 opentelemetry-proto = { workspace = true }
 prost = { workspace = true }
 quick-xml = { workspace = true }
+regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
