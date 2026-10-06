@@ -299,10 +299,19 @@ jobs:
           echo "Review the draft and click Publish in the Releases UI to ship."
 
   # ---------------- Stage 2: publish + PyPI ----------------
+  #
+  # Every stage-2 job skips releases authored by mergify-ci-bot. Those are
+  # the test clients' releases (pytest-mergify, rspec-mergify, @mergifyio/*),
+  # which their now-private repository publishes itself and ci-bot mirrors
+  # here so their notes and files stay public. They carry no CLI binaries and
+  # must not reach PyPI as mergify-cli; without the skip, every mirror would
+  # fail the asset check below. A release created with a user token starts
+  # workflows, unlike one created with GITHUB_TOKEN, hence the check on the
+  # author rather than on how it was created.
 
   assert-binaries-present:
     name: assert binary assets attached
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published' && github.event.release.author.login != 'mergify-ci-bot'
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -352,7 +361,7 @@ jobs:
 
   build-wheels-for-publish:
     name: build wheels (publish stage)
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published' && github.event.release.author.login != 'mergify-ci-bot'
     needs: assert-binaries-present
     uses: ./.github/workflows/build-wheels.yml
     with:
@@ -360,7 +369,7 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published' && github.event.release.author.login != 'mergify-ci-bot'
     runs-on: ubuntu-26.04
     needs:
       - assert-binaries-present
