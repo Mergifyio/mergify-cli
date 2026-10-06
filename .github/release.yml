@@ -1,6 +1,0 @@
-changelog:
-  exclude:
-    authors:
-      - dependabot[bot]
-      - mergify[bot]
-      - renovate[bot]

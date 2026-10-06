@@ -15,74 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
-    timeout-minutes: 10
-    runs-on: ubuntu-26.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Rust toolchain
-        # No version argument: installs the channel + components
-        # pinned in rust-toolchain.toml.
-        run: rustup toolchain install
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-
-      - name: cargo fmt
-        run: cargo fmt --all --check
-
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features --workspace --locked -- -D warnings
-
-      - name: cargo test
-        run: cargo test --workspace --all-features --locked
-
-      - name: cargo build --release
-        run: cargo build --release --locked
-
-  # Verify the workspace compiles on the declared MSRV. The version
-  # is read from Cargo.toml so the floor stays a single source of
-  # truth — bump rust-version there and this job follows it. `--locked`
-  # makes the committed lockfile part of the contract.
-  msrv:
-    name: cargo check (MSRV)
-    timeout-minutes: 15
-    runs-on: ubuntu-26.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve MSRV from Cargo.toml
-        id: msrv
-        run: |
-          set -euo pipefail
-          msrv=$(grep -m1 '^rust-version' Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
-          echo "Declared MSRV: ${msrv}"
-          echo "version=${msrv}" >> "${GITHUB_OUTPUT}"
-      - name: Install MSRV toolchain
-        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: msrv
-      - name: cargo check --locked on MSRV
-        # RUSTUP_TOOLCHAIN outranks rust-toolchain.toml (which
-        # outranks `rustup default` — so without this env the job
-        # silently checks the pinned toolchain, not the MSRV).
-        run: cargo check --workspace --all-targets --locked
-        env:
-          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
-
-  # Supply-chain gate: RUSTSEC advisories, license policy, banned /
-  # duplicate crates, and source provenance. Policy lives in
-  # deny.toml; reproduce locally with `cargo deny check`.
-  cargo-deny:
-    name: cargo-deny
-    timeout-minutes: 10
-    runs-on: ubuntu-26.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
-        with:
-          command: check advisories bans licenses sources
-
   # Spellcheck source, comments, and docs. Allow-list of project
   # nouns lives in _typos.toml; reproduce locally with `typos`.
   typos:
@@ -92,350 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: crate-ci/typos@00f422f3b19c57bc6338715ebfe3316d38768461 # v1.50.3
-
-  # Smoke build the full release wheel matrix on every PR so a
-  # cross-compile or platform-specific maturin failure is caught
-  # here, not on the next `release: published` event. Calls the
-  # same reusable workflow the release uses, with version stamping
-  # disabled (the placeholder "0.0.0" stays in pyproject.toml so
-  # the wheel name doesn't pretend to be a release version).
-  wheels:
-    uses: ./.github/workflows/build-wheels.yml
-    with:
-      stamp-version: false
-
-  # Confirm the binary actually runs out of the freshly-built wheel
-  # on each supported runtime. Lightweight smoke — `mergify --help`
-  # exits 0 — covers the most common breakage class (a maturin
-  # config change that ships a wheel with a broken or missing
-  # binary entry, or a libc / runtime-link issue that only shows
-  # up post-install). Builds the wheel locally with maturin
-  # rather than downloading the `wheels`-job artifacts, since
-  # `wheels` only uploads in release mode (PR smoke runs are
-  # `stamp-version: false`).
-  smoke-test-binary:
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-26.04, windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: 3.14
-      - name: Install Rust toolchain
-        # No version argument: installs the channel pinned in
-        # rust-toolchain.toml.
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: smoke-${{ matrix.os }}
-      - name: Build wheel
-        shell: bash
-        run: |
-          pip install 'maturin~=1.7'
-          maturin build --release --out dist
-      - name: Install wheel
-        shell: bash
-        run: pip install dist/*.whl
-      - name: mergify --help
-        shell: bash
-        run: mergify --help
-
-      # Lock the dev-build version fallback in. Release builds get
-      # `MERGIFY_RELEASE_VERSION` from the stamp step in
-      # `build-wheels.yml`; PR smoke builds don't, so the binary
-      # must report `Cargo.toml`'s `0.0.0` placeholder. If this
-      # ever changes silently, every release-version assumption
-      # downstream (PyPI install reporting, support diagnostics)
-      # rests on the same code path — catch the drift here.
-      - name: mergify --version reports placeholder on unstamped build
-        shell: bash
-        run: |
-          out=$(mergify --version)
-          echo "$out"
-          [[ "$out" == "mergify 0.0.0" ]] || {
-            echo "expected 'mergify 0.0.0', got '$out'"
-            exit 1
-          }
-
-  # End-to-end exercise of the `install.sh` one-liner: build the
-  # release binary, pretend to be a GitHub Release by serving the
-  # repackaged `mergify-<target>.tar.gz` + `SHA256SUMS` through a
-  # local HTTP fixture, then run `install.sh` against it and assert
-  # the installed binary works. This catches the install path that
-  # the unit-style shellcheck pass can't — detect_target mapping,
-  # sha256 verification, the `install -m 0755` step, and the final
-  # `--version` exec.
-  #
-  # Windows runs the same POSIX `install.sh` under git-bash
-  # (`shell: bash`), pulling the `.zip` asset and `mergify.exe`
-  # instead of the `.tar.gz` + `mergify` the Unix legs use.
-  install-script-smoke:
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-26.04, macos-15, windows-2025]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install Rust toolchain
-        # No version argument: installs the channel pinned in
-        # rust-toolchain.toml.
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: install-${{ matrix.os }}
-
-      - name: Install shellcheck (Linux only)
-        if: matrix.os == 'ubuntu-26.04'
-        run: sudo apt-get install -y --no-install-recommends shellcheck
-      - name: Lint install.sh
-        if: matrix.os == 'ubuntu-26.04'
-        run: shellcheck install.sh
-
-      # Build the binary the same way the release path does, then
-      # repackage it under the exact name/structure `install.sh`
-      # expects so the fixture is bit-identical to a real release
-      # asset.
-      - name: Build release binary
-        run: cargo build --release -p mergify-cli
-
-      - name: Pack release fixture
-        shell: bash
-        run: |
-          set -euo pipefail
-          # `sha256sum` (Linux, git-bash) or `shasum -a 256` (macOS) —
-          # same fallback install.sh uses; git-bash ships no `shasum`.
-          sha256sums() {
-              if command -v sha256sum > /dev/null 2>&1; then sha256sum "$@"
-              else shasum -a 256 "$@"; fi
-          }
-          target=$(rustc -vV | awk '/^host:/ {print $2}')
-          echo "Building fixture for target: ${target}"
-          # Mirror what install.sh derives from the triple: Windows
-          # ships a `.zip` holding `mergify.exe`, everything else a
-          # `.tar.gz` holding `mergify`.
-          case "${target}" in
-              *windows*) ext="zip";    bin="mergify.exe" ;;
-              *)         ext="tar.gz"; bin="mergify"     ;;
-          esac
-          asset="mergify-2099.1.1-${target}.${ext}"
-          mkdir -p fixture/release
-          # install.sh resolves the version from latest-release.json (fixture
-          # mode) before building the per-version asset name.
-          echo '{"tag_name":"2099.1.1"}' > fixture/release/latest-release.json
-          if [ "${ext}" = "zip" ]; then
-              # Pack with python's zipfile rather than betting on a
-              # `zip` binary in git-bash; python is already required
-              # below for the fixture server. Resolve the interpreter
-              # name the same way the serve step does (`python3` on
-              # Unix, `python` on the Windows runner).
-              py=python3; command -v "$py" > /dev/null 2>&1 || py=python
-              ( cd target/release \
-                && "$py" -m zipfile -c "${OLDPWD}/fixture/release/${asset}" "${bin}" )
-          else
-              tar -C target/release -czf "fixture/release/${asset}" "${bin}"
-          fi
-          # Normalise to the canonical "HASH␣␣filename" form the
-          # release pipeline emits on Linux. git-bash's `sha256sum`
-          # tags binary files with a `*` marker (`HASH *file`), which
-          # would break install.sh's `$2 == asset` lookup and its
-          # two-space line-shape check.
-          ( cd fixture/release \
-            && hash=$(sha256sums "${asset}" | awk '{print $1}') \
-            && printf '%s  %s\n' "${hash}" "${asset}" > SHA256SUMS )
-          ls -la fixture/release
-
-      - name: Serve fixture
-        shell: bash
-        run: |
-          cd fixture/release
-          # `python3` on the Unix runners, `python` on the Windows
-          # runner (it ships no `python3` shim). The http.server
-          # module is in the stdlib on all of them. Bind to localhost
-          # only; the runner is ephemeral but there's no point
-          # exposing the fixture.
-          py=python3; command -v "$py" > /dev/null 2>&1 || py=python
-          "$py" -m http.server 8765 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
-          echo $! > /tmp/server.pid
-          # Wait for the server to actually accept connections.
-          for _ in $(seq 1 50); do
-              curl -fsS http://127.0.0.1:8765/SHA256SUMS > /dev/null && break
-              sleep 0.1
-          done
-
-      - name: Run install.sh against the fixture
-        shell: bash
-        run: |
-          set -euo pipefail
-          export MERGIFY_BASE_URL=http://127.0.0.1:8765
-          export MERGIFY_INSTALL_DIR=/tmp/mergify-install
-          ./install.sh
-          # `install.sh` runs `--version` itself, but pin it here
-          # too so a future refactor that drops the post-install
-          # smoke from the script still trips this job. The binary
-          # is `mergify.exe` on Windows.
-          case "$(rustc -vV | awk '/^host:/ {print $2}')" in
-              *windows*) bin=mergify.exe ;;
-              *)         bin=mergify     ;;
-          esac
-          "/tmp/mergify-install/${bin}" --version
-
-      # Negative paths: corrupted SHA256SUMS must fail closed, not
-      # silently install a tampered binary. Tests both the
-      # `sha256sum -c` mismatch path (right shape, wrong hash) and
-      # the malformed-line path (`sha256sum -c` only warns on
-      # malformed lines, so install.sh validates the line shape
-      # separately).
-      - name: install.sh rejects a tampered SHA256SUMS
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=$(rustc -vV | awk '/^host:/ {print $2}')
-          case "${target}" in *windows*) ext=zip ;; *) ext=tar.gz ;; esac
-          asset="mergify-2099.1.1-${target}.${ext}"
-          # Keep a clean copy so the malformed test below can write
-          # its own bad version without losing the original.
-          cp fixture/release/SHA256SUMS fixture/release/SHA256SUMS.orig
-
-          echo "Case 1: wrong-but-well-formed hash"
-          printf '%064d  %s\n' 0 "${asset}" > fixture/release/SHA256SUMS
-          ! MERGIFY_BASE_URL=http://127.0.0.1:8765 \
-            MERGIFY_INSTALL_DIR=/tmp/mergify-bad1 \
-            ./install.sh > /tmp/case1.log 2>&1
-          grep -q 'checksum verification failed' /tmp/case1.log
-
-          echo "Case 2: malformed line"
-          echo "bogus  ${asset}" > fixture/release/SHA256SUMS
-          ! MERGIFY_BASE_URL=http://127.0.0.1:8765 \
-            MERGIFY_INSTALL_DIR=/tmp/mergify-bad2 \
-            ./install.sh > /tmp/case2.log 2>&1
-          grep -q 'malformed checksum entry' /tmp/case2.log
-
-          # Restore — the next steps may depend on a working fixture.
-          mv fixture/release/SHA256SUMS.orig fixture/release/SHA256SUMS
-
-      - name: Stop fixture server
-        if: always()
-        shell: bash
-        run: |
-          if [ -f /tmp/server.pid ]; then
-              kill "$(cat /tmp/server.pid)" || true
-          fi
-
-  # Same fixture pattern as `install-script-smoke`, but exercises
-  # `mergify self-update`. Builds the release binary, packages it
-  # like a real release would, points the binary at a localhost
-  # fixture via `MERGIFY_BASE_URL`, and runs the full download +
-  # verify + atomic-swap path. Plus a negative case proving a
-  # tampered `SHA256SUMS` reject (binary must stay untouched).
-  self-update-smoke:
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-26.04, macos-15]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install Rust toolchain
-        # No version argument: installs the channel pinned in
-        # rust-toolchain.toml.
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: self-update-${{ matrix.os }}
-
-      - name: Build release binary
-        run: cargo build --release -p mergify-cli
-
-      # Fixture shape `self_update` expects in `MERGIFY_BASE_URL`
-      # mode: a flat dir holding `latest-release.json` (the API
-      # stub), the asset tarball, and `SHA256SUMS`. The stub mirrors
-      # GitHub's `releases/latest` payload — `assets[]` carries the
-      # `browser_download_url` the binary downloads from, so the
-      # smoke test exercises the same discovery path as production
-      # (no filename reconstruction).
-      - name: Pack self-update fixture
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=$(rustc -vV | awk '/^host:/ {print $2}')
-          echo "Building fixture for target: ${target}"
-          mkdir -p fixture/su
-          asset="mergify-2099.1.1-${target}.tar.gz"
-          tar -C target/release -czf "fixture/su/${asset}" mergify
-          (cd fixture/su && shasum -a 256 "${asset}" > SHA256SUMS)
-          # Pretend a far-future release is available so the
-          # `current == latest` short-circuit doesn't fire.
-          base="http://127.0.0.1:8766"
-          cat > fixture/su/latest-release.json <<JSON
-          {
-            "tag_name": "2099.1.1",
-            "assets": [
-              {"name": "${asset}", "browser_download_url": "${base}/${asset}"},
-              {"name": "SHA256SUMS", "browser_download_url": "${base}/SHA256SUMS"}
-            ]
-          }
-          JSON
-          ls -la fixture/su
-
-      - name: Serve fixture
-        shell: bash
-        run: |
-          cd fixture/su
-          python3 -m http.server 8766 --bind 127.0.0.1 > /tmp/su-server.log 2>&1 &
-          echo $! > /tmp/su-server.pid
-          for _ in $(seq 1 50); do
-              curl -fsS http://127.0.0.1:8766/SHA256SUMS > /dev/null && break
-              sleep 0.1
-          done
-
-      - name: self-update --check reports both versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          out=$(MERGIFY_BASE_URL=http://127.0.0.1:8766 target/release/mergify self-update --check)
-          echo "$out"
-          echo "$out" | grep -q 'Current: 0.0.0'
-          echo "$out" | grep -q 'Latest:  2099.1.1'
-
-      - name: self-update happy path swaps the binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp target/release/mergify /tmp/mergify-su
-          MERGIFY_BASE_URL=http://127.0.0.1:8766 /tmp/mergify-su self-update
-          # Sanity: the swapped binary still runs.
-          /tmp/mergify-su --version
-
-      - name: self-update rejects tampered SHA256SUMS
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=$(rustc -vV | awk '/^host:/ {print $2}')
-          cp target/release/mergify /tmp/mergify-su-tamper
-          before=$(shasum -a 256 /tmp/mergify-su-tamper | awk '{print $1}')
-          # Replace SHA256SUMS with a wrong-but-well-formed hash.
-          printf '%064d  mergify-2099.1.1-%s.tar.gz\n' 0 "${target}" > fixture/su/SHA256SUMS
-          ! MERGIFY_BASE_URL=http://127.0.0.1:8766 /tmp/mergify-su-tamper self-update \
-              > /tmp/su-tamper.log 2>&1
-          grep -q 'checksum mismatch' /tmp/su-tamper.log
-          # The binary must NOT have been swapped.
-          after=$(shasum -a 256 /tmp/mergify-su-tamper | awk '{print $1}')
-          [ "$before" = "$after" ] || { echo "binary was tampered!"; exit 1; }
-
-      - name: Stop fixture server
-        if: always()
-        shell: bash
-        run: |
-          if [ -f /tmp/su-server.pid ]; then
-              kill "$(cat /tmp/su-server.pid)" || true
-          fi
 
   # The agent skills against the binary people actually get: the latest
   # release's. The CLI's source isn't in this repository any more, so there is
@@ -548,19 +136,41 @@ jobs:
         run: |
           if [ -f /tmp/server.pid ]; then kill "$(cat /tmp/server.pid)" || true; fi
 
+  # The published files (see AGENTS.md) come from the CLI's private source,
+  # copied by ci-bot's public-releases-sync as of each release: an edit made
+  # here would be silently overwritten by the next sync. Only that sync's own
+  # pull requests may change them.
+  synced-files:
+    name: synced files only change through the sync
+    if: github.event.pull_request.user.login != 'mergify-ci-bot'
+    timeout-minutes: 5
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Check no synced file changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "${BASE_SHA}...HEAD" -- \
+            README.md install.sh skills .claude-plugin .codex-plugin assets scripts/check-skills.py)"
+          if [ -n "${changed}" ]; then
+            for file in ${changed}; do
+              echo "::error file=${file}::${file} is published from the CLI's source and synced here at each release; edit it there (see AGENTS.md)"
+            done
+            exit 1
+          fi
+          echo "no synced file changed"
+
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
-      - rust
-      - msrv
-      - cargo-deny
       - typos
-      - wheels
-      - smoke-test-binary
-      - install-script-smoke
-      - self-update-smoke
       - skills
       - install-script-release
+      - synced-files
     runs-on: ubuntu-26.04
     steps:
       - name: Verify all jobs succeeded
