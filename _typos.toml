@@ -1,6 +1,0 @@
-# typos spell-check allow-list. Reproduce CI locally with `typos`.
-
-[default.extend-words]
-# The CLI's spelling (its exit-code table in the README says "unparseable"),
-# kept as is rather than diverging from the binary's own messages.
-unparseable = "unparseable"
