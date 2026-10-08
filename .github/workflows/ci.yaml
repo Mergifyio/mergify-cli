@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The published files (see AGENTS.md) come from the CLI's private source,
-  # copied by ci-bot's public-releases-sync as of each release: an edit made
-  # here would be silently overwritten by the next sync. Only that sync's own
-  # pull requests may change them.
+  # The published files (see AGENTS.md) come from the CLI's source, copied by
+  # mergify-ci-bot as of each release: an edit made here would be silently
+  # overwritten by the next sync. Only that sync's own pull requests may
+  # change them.
   synced-files:
     name: synced files only change through the sync
     if: github.event.pull_request.user.login != 'mergify-ci-bot'
@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only "${BASE_SHA}...HEAD" -- \
-            README.md install.sh skills .claude-plugin .codex-plugin assets)"
+            README.md install.sh skills .claude-plugin .codex-plugin assets LICENSE)"
           if [ -n "${changed}" ]; then
             for file in ${changed}; do
               echo "::error file=${file}::${file} is published from the CLI's source and synced here at each release; edit it there (see AGENTS.md)"
