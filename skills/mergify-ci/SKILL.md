@@ -27,28 +27,34 @@ mergify tests quarantines list            # List the tests currently in the CI I
 
 ## Authentication
 
-Two classes of Mergify application key, both minted in the dashboard:
+Two classes of Mergify application key, both minted in the dashboard. Each
+reaches its own list of endpoints, not a subset of the other's: of what this
+CLI calls, the two lists share only the quarantine list.
 
 | Key | Reaches |
 | --- | --- |
 | `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
-| `admin` | Everything a `ci` key reaches, plus reading test health and mutating the quarantine. |
+| `admin` | Reading test health, the quarantine *list*, and mutating the quarantine. Not trace upload, not `scopes-send`. |
 
-Every endpoint below that refuses a `ci` key accepts a GitHub PAT instead.
-`GITHUB_TOKEN` inside GitHub Actions is *not* a PAT — it is the ephemeral
-installation token — so do not reach for it to clear one of these `403`s.
+Trace upload and `scopes-send` take a `ci` key only: an `admin` key or a
+GitHub PAT gets a `403`. Every other endpoint below that refuses a `ci` key
+accepts a GitHub PAT instead. `GITHUB_TOKEN` inside GitHub Actions is *not* a
+PAT — it is the ephemeral installation token — so do not reach for it to
+clear one of these `403`s.
 
 The split follows the endpoint each command calls: reads of test health and
 writes to the quarantine are a person inspecting or overriding a repository,
-not something a pipeline does, so they are outside what a `ci` key carries.
-Per command:
+not something a pipeline does, so they are outside what a `ci` key carries;
+trace upload and scope reports are what a pipeline sends, so they are outside
+what an `admin` key carries. Per command:
 
-| Command | `ci` key |
-| --- | --- |
-| `ci junit-process`, `ci junit-upload`, `ci scopes-send` | yes |
-| `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list |
-| `tests show` | **no** — `403` |
-| `tests quarantines add`, `tests quarantines remove` | **no** — `403` |
+| Command | `ci` key | `admin` key |
+| --- | --- | --- |
+| `ci junit-process`, `ci junit-upload` | yes | quarantine evaluation only — the upload gets a `403`, reported as a rejected upload (the exit code is unaffected) |
+| `ci scopes-send` | yes | **no** — `403` |
+| `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list | yes |
+| `tests show` | **no** — `403` | yes |
+| `tests quarantines add`, `tests quarantines remove` | **no** — `403` | yes |
 
 `ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
 no token at all.
@@ -69,12 +75,13 @@ mergify ci junit-process \
 
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
-- `--repository` / `-r` -- Repository full name (auto-detected in GitHub Actions)
-- `--tests-target-branch` / `-ttb` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME` → `GITHUB_REF`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`).
+- `--repository` / `-r` -- Repository full name (auto-detected from the CI provider, then the git remote)
+- `--tests-target-branch` / `-ttb` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`), then the checked-out branch.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 - `--test-framework` -- Test framework name (optional metadata)
 - `--test-language` -- Test language (optional metadata)
 - `--test-exit-code` / `-e` (env: `MERGIFY_TEST_EXIT_CODE`) -- Exit code of the test runner, used to detect silent failures where the runner crashed but the JUnit report appears clean
+- `MERGIFY_TRACEPARENT` (env only) -- A W3C `traceparent` to put the uploaded test session inside a trace the caller already started; a malformed value is ignored and the session starts its own trace
 
 **Behavior:**
 1. Parses JUnit XML files into test spans
@@ -163,6 +170,9 @@ Sends scopes tied to a pull request to the Mergify API. Used when scopes are det
 
 The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, or `BUILDKITE_COMMIT`); pass `--head-sha` to name it explicitly. When no head SHA can be resolved -- or the Mergify deployment predates the commit endpoint -- the command falls back to reporting against the pull request number alone, which is what it always did.
 
+Needs a `ci` key — an `admin` key or a GitHub PAT gets a `403`. See
+[Authentication](#authentication).
+
 ```bash
 # Send specific scopes
 mergify ci scopes-send -s frontend -s backend -p 123
@@ -183,7 +193,7 @@ mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 ```
 
 **Key options:**
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify key
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify `ci` application key
 - `--repository` / `-r` -- Repository full name (auto-detected)
 - `--pull-request` / `-p` -- Pull request number (auto-detected in GitHub Actions)
 - `--scope` / `-s` -- Scope name (repeatable)

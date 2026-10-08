@@ -3,7 +3,6 @@
 [![CI](https://github.com/Mergifyio/mergify-cli/actions/workflows/ci.yaml/badge.svg)](https://github.com/Mergifyio/mergify-cli/actions/workflows/ci.yaml)
 [![Latest release](https://img.shields.io/github/v/release/Mergifyio/mergify-cli?logo=github&label=release)](https://github.com/Mergifyio/mergify-cli/releases/latest)
 [![Documentation](https://img.shields.io/badge/docs-mergify.com-7c3aed)](https://docs.mergify.com/cli/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Drive [Mergify](https://mergify.com) from your terminal and CI pipelines:
 stacked pull requests, the merge queue, CI Insights, scheduled freezes, and
@@ -120,9 +119,11 @@ The repository and API URL resolve as before:
 Credentials are stored per API URL, so one machine can hold a credential for
 the hosted service and one for an on-premise install.
 
-Mergify application keys come in two classes, and a few commands will not
-accept the narrower one. A `ci` key is scoped to what a CI job does — trace
-upload, `ci scopes-send`, quarantine evaluation and the quarantine list.
+Mergify application keys come in two classes, each reaching its own set of
+endpoints rather than one being a subset of the other. A `ci` key is scoped
+to what a CI job does — trace upload, `ci scopes-send`, quarantine evaluation
+and the quarantine list. Trace upload and `ci scopes-send` take a `ci` key
+only, and answer an `admin` key or a user credential with `403 Forbidden`.
 Reading test health (`mergify tests show`) and changing the quarantine
 (`mergify tests quarantines add` / `remove`) need an `admin` key or a user
 credential — the one `mergify auth login` stores, or a GitHub PAT — and
@@ -262,11 +263,14 @@ Full reference and guides live at
 
 ## Contributing
 
-Contributions are welcome — open an
-[issue](https://github.com/Mergifyio/mergify-cli/issues) or a pull request.
-The workspace is a Rust monorepo; see [AGENTS.md](AGENTS.md) for the crate
-layout, build, and test workflow.
+Bug reports and feature requests are welcome: open an
+[issue](https://github.com/Mergifyio/mergify-cli/issues). The CLI is developed
+by Mergify; this repository publishes it: the releases, the installer, the
+agent skills and this README, all updated with each release. Suggestions to
+`install.sh`, `skills/` or the documentation are welcome as issues too. See
+[AGENTS.md](AGENTS.md) for what lives where.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Proprietary — see [LICENSE](LICENSE). Use is governed by the
+[Mergify Terms of Service](https://mergify.com/tos).
