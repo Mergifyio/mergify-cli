@@ -26,6 +26,8 @@ queue_rules:
     commit_message_format:
       title: pr-title
       body: pr-body
+      trailers:
+        - approved-by
     merge_method: squash
 
 pull_request_rules:
