@@ -24,7 +24,7 @@ from `mergify-ci-bot`. Suggestions are welcome as issues.
 
 ## Owned here
 
-- `.github/workflows/ci.yaml`, `.mergify.yml`, `renovate.json` and this `AGENTS.md`.
+- `.github/workflows/ci.yaml`, `.mergify.yml`, `renovate.json`, `SECURITY.md` and this `AGENTS.md`.
 - The releases, published by `mergify-ci-bot`, never by hand. A release carrying
   the CLI binaries is Latest, which install.sh, `mergify self-update`, the
   Homebrew tap and the docs' CLI reference all follow.
