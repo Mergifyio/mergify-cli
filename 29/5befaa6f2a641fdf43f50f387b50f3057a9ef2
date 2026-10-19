@@ -1,0 +1,6 @@
+Revision history for #1902:
+
+rev 2 (content) 2026-10-18 14:22 UTC — drop the Scorecard and CodeQL workflows: keep only the security policy
+rev 1 (initial) 2026-10-18 14:22 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":1902,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"e02633bce8c02553bcfb91ca582ffdda40a951a4","timestamp_iso":"2026-10-18T14:22:50Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"content","old_sha":"e02633bce8c02553bcfb91ca582ffdda40a951a4","new_sha":"fd1e164421667f7de0b7afff49bea84793a5426a","timestamp_iso":"2026-10-18T14:22:50Z","reason":"drop the Scorecard and CodeQL workflows: keep only the security policy","replay_sha":null,"compare_url":"https://github.com/Mergifyio/mergify-cli/compare/e02633bce8c02553bcfb91ca582ffdda40a951a4...fd1e164421667f7de0b7afff49bea84793a5426a"}]} -->
