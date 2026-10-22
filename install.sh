@@ -112,7 +112,7 @@ main() {
 
     # Resolve VERSION to the actual tag so we can embed it in the
     # asset filename. When MERGIFY_BASE_URL is set (fixture mode used
-    # by the CI smoke test) the fixture already serves a
+    # by cli/tests/install-sh-test.sh) the fixture already serves a
     # `latest-release.json` stub; otherwise resolve against GitHub.
     if [ "${VERSION}" = "latest" ]; then
         if [ -n "${MERGIFY_BASE_URL:-}" ]; then

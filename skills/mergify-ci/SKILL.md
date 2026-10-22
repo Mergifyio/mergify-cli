@@ -7,7 +7,7 @@ description: Use Mergify CI commands to upload JUnit test results, detect git re
 
 ## Overview
 
-The `mergify ci` command group provides tools for CI pipelines: uploading JUnit test results to Mergify CI Insights, detecting git references for diff-based operations, managing CI scopes for selective testing, and retrieving merge queue batch metadata.
+The `mergify ci` command group provides tools for CI pipelines: uploading JUnit test results to Mergify Test Engine, detecting git references for diff-based operations, managing CI scopes for selective testing, and retrieving merge queue batch metadata.
 
 ## Commands
 
@@ -19,10 +19,10 @@ mergify ci scopes --config PATH           # Detect scopes impacted by changed fi
 mergify ci scopes-send -s SCOPE           # Report scopes against the pull request's head commit
 mergify ci queue-info                     # Output the current build's merge queue batch metadata (from the git note)
 mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
-mergify tests quarantines add NAME        # Add a test to the CI Insights quarantine
-mergify tests quarantines remove NAME     # Remove a test from the CI Insights quarantine
+mergify tests quarantines add NAME        # Add a test to the Test Engine quarantine
+mergify tests quarantines remove NAME     # Remove a test from the Test Engine quarantine
 mergify tests quarantines get NAME        # Print a single quarantine by test name or id
-mergify tests quarantines list            # List the tests currently in the CI Insights quarantine
+mergify tests quarantines list            # List the tests currently in the Test Engine quarantine
 ```
 
 ## Authentication
@@ -61,7 +61,7 @@ no token at all.
 
 ## JUnit Processing (`junit-process`)
 
-The primary CI command. Parses JUnit XML reports, checks quarantine status for failing tests, uploads results to Mergify CI Insights, and determines the final CI exit code.
+The primary CI command. Parses JUnit XML reports, checks quarantine status for failing tests, uploads results to Mergify Test Engine, and determines the final CI exit code.
 
 ```bash
 mergify ci junit-process \
@@ -76,7 +76,7 @@ mergify ci junit-process \
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
 - `--repository` / `-r` -- Repository full name (auto-detected from the CI provider, then the git remote)
-- `--tests-target-branch` / `-ttb` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`), then the checked-out branch.
+- `--tests-target-branch` / `-b` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`), then the checked-out branch. Without one, quarantine is off for the run: the results are still uploaded, and every failure blocks.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 - `--test-framework` -- Test framework name (optional metadata)
 - `--test-language` -- Test language (optional metadata)
@@ -86,11 +86,11 @@ mergify ci junit-process \
 **Behavior:**
 1. Parses JUnit XML files into test spans
 2. Checks quarantine status for failing tests against the Mergify API
-3. Uploads all test spans to Mergify CI Insights
+3. Checks the spans against the schema Mergify publishes of what it can ingest (`https://docs.mergify.com/mergify-ci-traces-schema.json`), then uploads them to Mergify Test Engine. An upload Mergify would drop (for example one without a branch, `vcs.ref.head.name`) is not sent: the report lists what is missing, and the run is reported as a rejected upload. When the schema cannot be fetched, the spans are uploaded unchecked
 4. Prints a summary: tests run, failures, quarantined vs blocking
 5. Exits with code 0 if all failures are quarantined, code 1 if any are blocking
 6. If `--test-exit-code` is non-zero but no test failures are found, exits with code 1 (silent failure detection)
-7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (HTTP 4xx except 408/429, e.g. a token without CI Insights access) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
+7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (refused by the schema check, or HTTP 4xx except 408/429, e.g. a token without CI Insights access) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
 
 **GitHub Actions example:**
 ```yaml
@@ -137,6 +137,8 @@ BASE=$(mergify ci git-refs --format=json | jq -r '.base // ""')
 
 Sources detected (in priority order): merge queue context, GitHub pull request event, GitHub push event, fallback to last commit.
 
+The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite builds of the branch, so a merge queue batch built by a `push` trigger with no draft pull request gets the batch's checking base too. A push that creates a branch has no previous commit, so its base is the default branch.
+
 ## Scopes (`scopes`)
 
 Detects which CI scopes are impacted by changed files, based on a Mergify configuration file. Used for selective/targeted CI -- only run tests for scopes that have changed files.
@@ -160,7 +162,7 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 
 The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`.
 
-On a merge queue draft pull request, scopes are not computed from changed files: the command reads the engine's git note for the batch and returns the scopes the merge queue decided (the batch's scopes plus each batched pull request's scopes, including scopes a pull request's CI reported), plus the merge queue scope. A batch the note marks as a barrier (`all_scopes: true`) selects every scope. This also works with a `manual` scopes source. Without a note, or with a note that has no `scopes` list, it falls back to diffing files.
+On a merge queue batch build (a draft pull request, or a `push` build of the merge queue branch), scopes are not computed from changed files: the command reads the engine's git note for the batch and returns the scopes the merge queue decided (the batch's scopes plus each batched pull request's scopes, including scopes a pull request's CI reported), plus the merge queue scope. A batch the note marks as a barrier (`all_scopes: true`) selects every scope. This also works with a `manual` scopes source. Without a note, or with a note that has no `scopes` list, it falls back to diffing files.
 
 A renamed file counts against **both** of its paths, same as the engine: `git mv critical/guard.txt ignored/guard.txt` touches `critical` and `ignored`.
 
@@ -240,7 +242,7 @@ mergify tests show -r owner/repo \
 
 ## Tests Quarantines Add (`tests quarantines add`)
 
-Adds a test to the repository's CI Insights quarantine, so its failures stop
+Adds a test to the repository's Test Engine quarantine, so its failures stop
 blocking the CI verdict. Takes a single fully qualified test name; a `--reason`
 is required.
 
@@ -328,7 +330,7 @@ mergify tests quarantines get -r owner/repo --json \
 
 ## Tests Quarantines List (`tests quarantines list`)
 
-Lists every test currently in the repository's CI Insights quarantine. Takes no
+Lists every test currently in the repository's Test Engine quarantine. Takes no
 test argument -- it prints the whole quarantine. Human output is one indented
 block per record -- the test name on its own line (never wrapped mid-name),
 then its id (the value `delete` accepts), branch, source, recovered, and

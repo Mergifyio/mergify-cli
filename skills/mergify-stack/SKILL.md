@@ -64,9 +64,9 @@ mergify stack checkout PR_URL    # Same, from any PR in the stack — middle inc
 mergify stack sync           # Fetch trunk, remove merged commits, rebase
 mergify stack list           # Show commit <-> PR mapping for current stack
 mergify stack list --json    # Same, but machine-readable JSON output
-mergify stack reorder C A B  # Reorder all commits (pass SHA or Change-Id prefixes)
-mergify stack move X first   # Move commit X to the top of the stack
-mergify stack move X last    # Move commit X to the bottom of the stack
+mergify stack reorder C A B  # Reorder all commits, bottom first (pass SHA or Change-Id prefixes)
+mergify stack move X first   # Move commit X to the bottom of the stack (next to the trunk)
+mergify stack move X last    # Move commit X to the top of the stack
 mergify stack move X before Y  # Move commit X before commit Y
 mergify stack move X after Y   # Move commit X after commit Y
 mergify stack fixup X              # Fold commit X into its parent (drops X's message)

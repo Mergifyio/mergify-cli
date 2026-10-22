@@ -5,14 +5,14 @@
 [![Documentation](https://img.shields.io/badge/docs-mergify.com-7c3aed)](https://docs.mergify.com/cli/)
 
 Drive [Mergify](https://mergify.com) from your terminal and CI pipelines:
-stacked pull requests, the merge queue, CI Insights, scheduled freezes, and
+stacked pull requests, the merge queue, Test Engine, scheduled freezes, and
 configuration — all from a single self-contained binary that reuses your
 existing GitHub (`gh`) login.
 
 ```shell
 mergify stack push          # turn your local commits into stacked PRs
 mergify queue status        # inspect the merge queue
-mergify ci junit-process report.xml   # upload test results to CI Insights
+mergify ci junit-process report.xml   # upload test results to Test Engine
 ```
 
 - **One static binary.** No runtime, no dependencies — drop it on a developer
@@ -146,7 +146,7 @@ mergify stack sync                 # rebase the stack onto its trunk
 mergify queue status               # current queue state for the repo
 mergify queue status --json        # same, as machine-readable JSON
 
-# CI Insights — from inside your pipeline
+# Test Engine — from inside your pipeline
 mergify ci junit-process report.xml --test-language python
 
 # Configuration
@@ -170,9 +170,9 @@ Every command group maps to a section of the
 - **`mergify events`** — Browse the events Mergify recorded for the
   repository or one pull request, as a timeline or JSON.
 - **`mergify ci`** — Send JUnit results and pull request scopes from any CI
-  provider. [Docs](https://docs.mergify.com/ci-insights/)
+  provider. [Docs](https://docs.mergify.com/test-engine/)
 - **`mergify tests`** — Look up test health and manage the flaky-test
-  quarantine. [Docs](https://docs.mergify.com/ci-insights/)
+  quarantine. [Docs](https://docs.mergify.com/test-engine/)
 - **`mergify freeze`** — Schedule merge freezes for release windows and
   maintenance. [Docs](https://docs.mergify.com/merge-protections/freeze/)
 - **`mergify config`** — Validate your configuration and simulate actions
