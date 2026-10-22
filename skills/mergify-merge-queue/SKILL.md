@@ -239,7 +239,8 @@ They arrive as `abort_code` on an `action.queue.checks_end` event (with `aborted
 Use `mergify queue status` to see the current state of the merge queue:
 
 - **Batches**: groups of PRs being tested together, shown with their CI status and ETA
-- **Waiting PRs**: PRs queued but not yet in a batch, shown with priority and queue time
+- **Forming**: batches still collecting PRs (`○`), shown with their queue rule, scopes (or `all scopes` for a barrier), how many PRs they hold out of the rule's batch size, and when they start at the latest. A forming batch holds no place in the merge order yet: it has no id, runs no CI, and is not part of the batch tree. A PR in it shows `Waiting for mergeability check...` in `queue show`
+- **Waiting PRs**: PRs queued but not yet in a batch, shown with priority and queue time. PRs in a forming batch are listed under Forming instead; `--json` still lists them in `waiting_pull_requests` too
 - **Pause state**: whether the queue is paused and why
 
 Use `--json` when you need to parse the output programmatically.
