@@ -291,28 +291,50 @@ Adds a test to the repository's Test Engine quarantine, so its failures stop
 blocking the CI verdict. Takes a single fully qualified test name; a `--reason`
 is required.
 
+A quarantined test keeps running but stops failing CI, so nothing reminds
+anyone to fix it. **When you quarantine a test, link the issue tracking its
+fix with `--issue-url`**: file the issue first (or find the existing one),
+then pass its URL. Mergify shows the link on the quarantine.
+
 Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
-# Quarantine on all branches.
+# Quarantine on all branches, linked to the issue tracking the fix.
 mergify tests quarantines add -r owner/repo \
-  --reason 'flaky — tracked in MRGFY-1234' \
+  --reason 'flaky: login times out under load' \
+  --issue-url 'https://linear.app/acme/issue/ACME-1234' \
   'test_login'
 
-# Scope the quarantine to one branch (or branch pattern), JSON output.
+# Scope the quarantine to one branch, JSON output.
 mergify tests quarantines add -r owner/repo \
-  --reason 'broken on release branch' --branch 'release/*' --json \
+  --reason 'broken on release branch' --branch-name release/1.0 --json \
   'test_logout'
+
+# Scope it to the one job where the test is flaky, on main.
+mergify tests quarantines add -r owner/repo \
+  --reason 'flaky on the macOS runner' \
+  --branch-name main --pipeline-name ci --job-name 'tests (macos)' \
+  --issue-url 'https://github.com/owner/repo/issues/42' \
+  'test_upload'
 ```
+
+A quarantine's scope is a branch, a pipeline and a job; each one omitted means
+all of them. Scope it as narrowly as the failure: a test flaky in one job stays
+blocking in the others, so real failures there still show. A test can hold one
+quarantine per scope; then `remove` and `get` by name refuse to pick one and
+list the ids: pass the id of the one to target.
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--reason` -- Reason recorded for the quarantine; required.
-- `--branch` / `-b` -- Branch name or pattern to scope to. Omit for all branches.
+- `--branch-name` -- Branch to scope to. Omit for all branches.
+- `--pipeline-name` -- Pipeline to scope to. Omit for all pipelines.
+- `--job-name` -- Job to scope to. Omit for all jobs.
+- `--issue-url` -- Link to the issue tracking the fix, in any issue tracker. Must be an `http` or `https` URL; the API refuses anything else.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
-- `--json` -- Emit `{"id", "test_name", "reason", "branch"}` to stdout.
+- `--json` -- Emit `{"id", "test_name", "reason", "branch_name", "issue_url", "pipeline_name", "job_name"}` to stdout.
 
 **Exit codes:**
 - `0` -- Test quarantined.
@@ -346,6 +368,7 @@ mergify tests quarantines remove -r owner/repo 12345678-1234-5678-1234-567812345
 **Exit codes:**
 - `0` -- Test unquarantined.
 - `6` -- Mergify API error (e.g. the test is not quarantined).
+- `7` -- The test name matches several quarantines; pass an id.
 
 ## Tests Quarantines Get (`tests quarantines get`)
 
@@ -366,20 +389,22 @@ mergify tests quarantines get -r owner/repo --json \
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
-- `--json` -- Emit the record (`id`, `test_name`, `reason`, `branch`, `created_at`,
-  `source`, `is_recovered`) to stdout.
+- `--json` -- Emit the record (`id`, `test_name`, `reason`, `branch_name`, `issue_url`,
+  `pipeline_name`, `job_name`, `created_at`, `source`, `is_recovered`) to stdout.
 
 **Exit codes:**
 - `0` -- Quarantine found and printed.
 - `6` -- Mergify API error (e.g. no matching quarantine).
+- `7` -- The test name matches several quarantines; pass an id.
 
 ## Tests Quarantines List (`tests quarantines list`)
 
 Lists every test currently in the repository's Test Engine quarantine. Takes no
 test argument -- it prints the whole quarantine. Human output is one indented
 block per record -- the test name on its own line (never wrapped mid-name),
-then its id (the value `delete` accepts), branch, source, recovered, and
-reason. `--json` emits the full records.
+then its id (the value `delete` accepts), branch, pipeline, job, source,
+recovered, issue (only when one is linked), and reason. `--json` emits the
+full records.
 
 ```bash
 # Human output (one block per record).
@@ -390,16 +415,19 @@ mergify tests quarantines list -r owner/repo --json \
   | jq -r '.quarantined_tests[] | select(.is_recovered) | .test_name'
 ```
 
-A null `branch` renders as `*` (the quarantine applies to all branches).
+A null `branch_name`, `pipeline_name` or `job_name` renders as `*` (the quarantine
+applies to all branches, pipelines or jobs).
 `source` is `manual` (added by a user) or `auto` (added by flaky detection).
 `is_recovered` flags quarantines whose recent runs suggest they can be removed.
+A null `issue_url` means no issue tracks the fix.
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"quarantined_tests": [...]}` to stdout, each record carrying
-  `id`, `test_name`, `reason`, `branch`, `created_at`, `source`, `is_recovered`.
+  `id`, `test_name`, `reason`, `branch_name`, `issue_url`, `pipeline_name`,
+  `job_name`, `created_at`, `source`, `is_recovered`.
 
 **Exit codes:**
 - `0` -- Always, including an empty quarantine ("No quarantined tests found.").
