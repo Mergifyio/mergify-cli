@@ -19,6 +19,7 @@ mergify ci scopes --config PATH           # Detect scopes impacted by changed fi
 mergify ci scopes-send -s SCOPE           # Report scopes against the pull request's head commit
 mergify ci queue-info                     # Output the current build's merge queue batch metadata (from the git note)
 mergify tests show NAME...                # Look up tests by name and print health, ratios, last failure
+mergify tests runs                        # List a commit's test runs, by the job they arrived under
 mergify tests quarantines add NAME        # Add a test to the Test Engine quarantine
 mergify tests quarantines remove NAME     # Remove a test from the Test Engine quarantine
 mergify tests quarantines get NAME        # Print a single quarantine by test name or id
@@ -52,6 +53,7 @@ what an `admin` key carries. Per command:
 | --- | --- | --- |
 | `ci junit-process`, `ci junit-upload` | yes | quarantine evaluation only — the upload gets a `403`, reported as a rejected upload (the exit code is unaffected) |
 | `ci scopes-send` | yes | **no** — `403` |
+| `tests runs` | yes | yes (and `mergify auth login`) |
 | `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list | yes |
 | `tests show` | **no** — `403` | yes |
 | `tests quarantines add`, `tests quarantines remove` | **no** — `403` | yes |
@@ -239,6 +241,49 @@ mergify tests show -r owner/repo \
 **Exit codes:**
 - `0` -- Tests rendered, or no match at all. Health does **not** affect it.
 - `6` -- Mergify API error, including the `403` a `ci` key gets here.
+
+## Tests Runs (`tests runs`)
+
+A test result upload that fails leaves the job green: the plugin exits 0
+when Mergify refuses the upload, and results sent under the wrong job name
+pass unnoticed. `mergify tests runs` lists the test runs Mergify received
+for a commit (the `Test run ID: …` a plugin prints in the CI log), one line
+per job name they arrived under (`MERGIFY_TEST_JOB_NAME`, else the CI's job
+name — on GitHub Actions the job id, not its displayed name): how many runs,
+how many arrived whole, framework, plugin or converted report and the
+client's version, test counts. Only a run that did not arrive whole gets a
+line of its own.
+
+```bash
+mergify tests runs                 # The commit under test (in CI, the one results are uploaded for; else HEAD)
+mergify tests runs --pr 123        # A pull request's head commit, as the origin remote has it
+mergify tests runs --branch main   # A branch's commit on the origin remote
+mergify tests runs --sha <SHA>     # A full commit SHA
+mergify tests runs --json          # The API response as is, for jq or an agent
+```
+
+Each job name reads in one of these states (`test_results` in `--json`):
+
+| State | Meaning |
+| --- | --- |
+| `results_received` | Every run received so far arrived whole. |
+| `upload_error` | A run arrived incomplete or unreadable (results left out, a missing part). |
+| `ingesting` | Part of a run is still waiting to be ingested: check again shortly. |
+
+It reads what Test Engine received and nothing else, the same on every CI
+provider. So to check a setup, **compare the jobs you configured to upload
+with the job names listed**: a name missing means nothing from that job
+reached Mergify — open the job in your CI to see whether it ran, and read its
+upload output (a plugin that failed before sending, or a refused upload,
+shows there). A name you did not expect, or several jobs under one name,
+means the job name sent is not the one you meant: set `MERGIFY_TEST_JOB_NAME`.
+A repository that refuses every upload (CI Insights not enabled on it) says
+so above the list (`test_results_ingestion` in `--json`).
+
+Each job reads from its latest CI run: a commit run on push and on its pull
+request reads from the later one. A re-run within it shows beside the run it
+repeats, counted as a re-run, each run with its attempt. The command exits 0
+whatever the states: gate on `--json` if you need to.
 
 ## Tests Quarantines Add (`tests quarantines add`)
 
