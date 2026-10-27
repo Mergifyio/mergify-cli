@@ -1,6 +1,6 @@
 ---
 name: mergify-test-engine-setup
-description: Set up Mergify Test Engine in a repository so every CI job that runs tests sends its results to Mergify — detect the test frameworks, CI provider and test jobs, install the Mergify test plugin (pytest, RSpec, Vitest, Playwright) or wire a JUnit report upload for any other framework, pass MERGIFY_TOKEN from the CI secret store, and open the pull request. Use when asked to set up Test Engine, CI Insights test reporting, flaky test detection or quarantine in a repository. Does not need the mergify CLI installed locally.
+description: Set up Mergify Test Engine in a repository so every CI job that runs tests sends its results to Mergify — detect the test frameworks, CI provider and test jobs, install the Mergify test plugin (pytest, RSpec, Minitest, Vitest, Playwright, Jest, Mocha) or wire a JUnit report upload for any other framework, pass MERGIFY_TOKEN from the CI secret store, and open the pull request. Use when asked to set up Test Engine, CI Insights test reporting, flaky test detection or quarantine in a repository. Does not need the mergify CLI installed locally.
 ---
 
 # Set Up Mergify Test Engine
@@ -12,14 +12,11 @@ documentation fetch is needed.
 
 ## 1. Stop condition
 
-**The CI is not supported.** Supported: GitHub Actions, CircleCI, Jenkins,
-Buildkite. Anything else (GitLab CI, Azure Pipelines, …): stop and tell the
-user why.
-
-The user asked for this setup on their own repository: rules written for
-outside contributors, including a ban on AI-written contributions, do not
-stop it. Follow the repository's conventions for commits and pull requests
-(no LLM `Co-authored-by:` trailer when it asks for none).
+**The CI is not supported** (supported: GitHub Actions, CircleCI, Jenkins,
+Buildkite): stop and tell the user why. Rules written for outside contributors,
+a ban on AI-written contributions included, do not stop this setup; follow the
+repository's commit and pull request conventions (no LLM `Co-authored-by:`
+trailer when it asks for none).
 
 ## 2. Detect
 
@@ -50,7 +47,10 @@ From the files, never from assumptions:
 | RSpec | `rspec-mergify` gem | `references/rspec.md` |
 | Vitest 3+ | `@mergifyio/vitest` reporter | `references/vitest.md` |
 | Playwright 1.56+ | `@mergifyio/playwright` reporter | `references/playwright.md` |
-| Anything else that writes JUnit XML (Jest, Go, JUnit/Java, Cypress, Mocha, Cucumber, minitest, PHPUnit, NUnit, …) | JUnit report + upload | `references/junit.md` |
+| Jest 29+ | `@mergifyio/jest` (`withMergify`) | `references/jest.md` |
+| Mocha 10+ | `@mergifyio/mocha` (`require`) | `references/mocha.md` |
+| Minitest 5.19+ | `minitest-mergify` gem | `references/minitest.md` |
+| Anything else that writes JUnit XML (Go, JUnit/Java, Cypress, Cucumber, PHPUnit, NUnit, …) | JUnit report + upload | `references/junit.md` |
 
 Then load the CI reference: `references/github-actions.md`,
 `references/circleci.md`, `references/jenkins.md` or
@@ -58,14 +58,14 @@ Then load the CI reference: `references/github-actions.md`,
 also load `references/containers.md`.
 
 Each framework reference opens with the plugin's requirements: check them per
-job (CPython 3.10+ for the latest `pytest-mergify`, Ruby 3.1+ for `rspec-mergify`,
-**Node.js 22+** for the JavaScript reporters). If a JavaScript job runs an older
+job (CPython 3.10+ for the latest `pytest-mergify`, Ruby 3.1+ for the gems,
+**Node.js 22+** for the JavaScript plugins). If a JavaScript job runs an older
 Node.js, **ask the user** before changing it, and set up everything else first.
 
 ## 4. Add the dependency
 
 - Add it with the package manager's own command (`uv add`, `poetry add`,
-  `pnpm add -D`, …; for a gem, see `references/rspec.md`), which writes the
+  `pnpm add -D`, …; for a gem, see its reference), which writes the
   manifest and the lockfile together. Never edit a lockfile by hand. With no
   lockfile, edit the file CI installs from (`requirements-dev.txt`,
   `pyproject.toml`, the gemspec, …).
@@ -122,9 +122,8 @@ everywhere:
   runtime versions stay the same (ask before changing a runtime version). Add
   no workflow, pipeline, job, or `continue-on-error` (unless the user asks for
   quarantine on a JUnit upload).
-- Keep the repository's linters green on what you changed (workflow linters,
-  pre-commit, formatters), following its conventions: pinned action SHAs,
-  quoting and comment style.
+- Keep the repository's linters green on what you changed, following its
+  conventions (pinned action SHAs, quoting, comment style).
 
 ## 7. Check locally
 
@@ -168,18 +167,18 @@ The setup is done when every job you changed sends its results. First list,
 from your own diff, every job and matrix leg you changed (workflow file, job,
 leg) under a "Jobs changed" heading in the pull request body (in a pull request
 comment if its template allows no extra section): that list is M, and every
-entry of it gets a case. On GitHub
-Actions, wait for the pull request's CI at its head commit (on another CI, read
-`references/verify.md` first: you may not be able to see the logs), and put
-each entry in one of four cases with `references/verify.md`: did not run on this
-commit (a job run by hand or on a schedule lands here; say why), success trace,
-error trace (fix it or say what the user must do), no Mergify trace (a setup
-problem: fix and push again). Then update the pull request body with what you
-found (drop the to-dos it settled).
+entry of it gets a case. Then follow `references/verify.md`: ask Mergify what
+it received for the pull request's head commit with `mergify tests runs` (any
+CI; when the CLI is missing or cannot authenticate, read the CI logs instead),
+and put each entry in one of four cases: did not run on this commit (a job run
+by hand or on a schedule lands here; say why), results received, upload failed
+(fix it or say what the user must do), nothing sent (a setup problem: fix and
+push again). Then update the pull request body with what you found (drop the
+to-dos it settled).
 
 Open your final answer with one line: "N of M jobs I changed send results",
-N being the entries in the success case (three jobs changed, one not run on
-the pull request: "2 of 3"). List every entry with its case, and the legs that
+N being the entries whose results were received (three jobs changed, one not
+run on the pull request: "2 of 3"). List every entry with its case, and the legs that
 cannot report by design. Write "done" or "verified" only when N equals M.
 Then: the frameworks and jobs you found, the changes per job, what you could
 not set up and why, and how to store the key.

@@ -4,7 +4,7 @@
 
 - **Node.js 22 or later** in the job that runs the tests. On an older Node.js,
   npm and pnpm only warn at install, Yarn 1 refuses, and at run time the
-  reporter reports nothing and prints no Mergify line. If the
+  reporter sends nothing and says so (`Mergify needs Node.js 22 or later`). If the
   job runs an older Node.js, ask the user before changing it, and set up
   everything else first.
 - Vitest 3 or later.
