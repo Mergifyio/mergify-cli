@@ -10,7 +10,12 @@
    Buildkite with the `mergifyio/mergify-ci` plugin (`buildkite.md`).
 3. **Ignore the report file** in `.gitignore` if it lands in the working tree.
 
-## Jest
+## Jest and Mocha on Node.js below 22
+
+Jest and Mocha have plugins (`jest.md`, `mocha.md`), which need Node.js 22. A
+job the user keeps on an older Node.js uploads a JUnit report instead.
+
+### Jest
 
 Add `jest-junit` as a dev dependency and register it next to the default
 reporter, where the Jest configuration lives (`jest.config.*` or `package.json`):
@@ -63,7 +68,7 @@ go test -json ./... | go-junit-report -parser gojson > junit.xml
 - Maven Surefire writes `target/surefire-reports/*.xml` by default.
 - Gradle's `test` task writes `build/test-results/test/*.xml` by default.
 
-## Cypress and Mocha
+## Cypress, and Mocha below Node.js 22
 
 Use `cypress-multi-reporters` (Cypress) or `mocha-multi-reporters` (Mocha) with
 `mocha-junit-reporter`, keeping the `spec` reporter for the console:
@@ -84,8 +89,6 @@ Upload with a glob (`results/junit-*.xml`).
 Use the framework's own JUnit option:
 
 - Cucumber: `--format junit --out <dir>`.
-- minitest: the `minitest-junit` gem (`require 'minitest/junit'`) or
-  `minitest-reporters`' JUnit reporter.
 - PHPUnit and Pest: `--log-junit junit.xml`, or `<junit outputFile="junit.xml"/>`
   in the configuration's `<logging>`.
 - NUnit and MSTest: the JUnit test logger,

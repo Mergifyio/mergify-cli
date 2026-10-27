@@ -2,7 +2,10 @@
 
 ## Requirements
 
-- Ruby 3.1 or later, `rspec-core` 3.12 or later.
+- Ruby 3.1 or later, `rspec-core` 3.12 or later. Like `minitest-mergify`, it
+  runs on the precompiled `mergify-ci-core`: JRuby, TruffleRuby, a Ruby newer
+  than the core and a job that sets `force_ruby_platform` cannot report
+  (`minitest.md`).
 
 ## Install
 
