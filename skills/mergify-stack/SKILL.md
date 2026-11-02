@@ -1,9 +1,21 @@
 ---
 name: mergify-stack
-description: Use Mergify stacks for git push, commit, branch, and PR creation. ALWAYS use this skill when pushing code, creating commits, creating branches, or creating PRs. Triggers on push, commit, branch, PR, pull request, stack, stacked, git, rebase, checkout, reorder, move, sync, amend, note, revision history.
+description: Use Mergify stacks for git push, commit, branch, and PR creation in a repository that uses Mergify stacks (its stack commit-msg hook is installed, or its recent commits carry `Change-Id` trailers). In such a repository, ALWAYS use this skill when pushing code, creating commits, creating branches, or creating PRs. In any other repository, use plain git and gh instead. Triggers on push, commit, branch, PR, pull request, stack, stacked, git, rebase, checkout, reorder, move, sync, amend, note, revision history.
 ---
 
 # Mergify Stack Workflow
+
+## First: Does This Repository Use Stacks?
+
+This skill applies only to a repository that uses Mergify stacks. Check before anything else:
+
+```bash
+mergify stack hooks                                # commit-msg "Wrapper: installed" (or "legacy") → uses stacks
+git log -n 20 --format=%B | grep -c '^Change-Id: I'   # any match → uses stacks
+```
+
+- **Either check passes**: follow this skill. If only the trailers are there (the commit-msg wrapper is `not installed` in this clone), run `mergify stack setup` once before committing: the hook is what adds the `Change-Id` trailer, and `mergify stack push` refuses a commit without one.
+- **Neither passes, or `mergify` is not installed**: the repository does not use stacks. Ignore the rest of this skill and use plain `git` and `gh`, following the repository's own conventions. Do not run `mergify stack setup` or suggest it.
 
 ## Stack Philosophy
 
@@ -27,11 +39,10 @@ A branch is a stack. Keep stacks short and focused:
 - **Squash**: Stash any local changes first (`git stash -u`), then use `mergify stack squash SRC... into TARGET [-m "msg"]` to combine multiple commits into one, with an optional custom message. Non-interactive — never use `git rebase -i` for this.
 - **Reword**: Stash any local changes first (`git stash -u`), then use `mergify stack reword <SHA> -m "new message"` to change a commit's message in place. Non-interactive when `-m` is given — never use `git rebase -i` for this.
 - **Drop**: Stash any local changes first (`git stash -u`), then use `mergify stack drop <SHA>...` to remove commits from the stack. Non-interactive — never use `git rebase -i` for this.
-- **Commit titles**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`)
+- **Commit titles**: Follow the repository's own style — read `git log` first, and use [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`) only if the repository does
 - **PR title & body**: `mergify stack` copies the commit message title to the PR title and the commit message body to the PR body — so write commit messages as if they were PR descriptions. **Everything that should appear in the PR (ticket references, context, test plans) MUST go in the commit message.**
 - **Ticket references**: Include ticket/issue references (e.g., `MRGFY-1234`, `Fixes #123`) in the commit message body, not added separately to the PR.
 - **PR lifecycle is fully managed by `mergify stack`**: NEVER edit PR titles, bodies, or labels with `gh pr edit` or the GitHub MCP — they will be overwritten on the next push. NEVER close or merge PRs manually — `mergify stack` handles the entire PR lifecycle (creation, updates, and cleanup).
-- **Draft PRs**: NEVER mark a PR as ready-for-review — all PRs stay as drafts. The user will manually move them out of draft after reviewing.
 - **Each commit must pass CI independently**: Every commit in a stack becomes its own PR. Each PR runs CI separately, so every commit must be self-contained — it must compile, pass linters, and pass tests on its own without depending on later commits in the stack. When formatting or linting fixes are needed, they must be included in the commit that introduced the issue, not deferred to a later commit.
 
 ## Common Mistakes
@@ -100,11 +111,13 @@ default, so GitHub renders it as a stack. Opt out per invocation with
 `git config mergify-cli.stack-github-native false`.
 
 Change-Ids, branch layout and revision history are unchanged, and it degrades
-quietly: where the API isn't available (older GitHub Enterprise, a repo without
-the feature) the push reports `not registered on GitHub` and succeeds exactly
-as it would have.
+quietly: where GitHub does not take the stack, the push reports `not
+registered on GitHub`, says why in a closing line (stacked pull requests not
+enabled on the repository, a pull request already part of another stack, or a
+chain where some base branch is not the head branch below it), and succeeds
+exactly as it would have. A registered stack's line links its page on GitHub.
 
-Three things to know:
+Things to know:
 
 - **A stack needs at least 2 pull requests.** GitHub rejects a 1-PR stack, so a
   single-change stack stays a plain PR — and a 2-PR stack that loses a member
@@ -128,6 +141,15 @@ Three things to know:
   (`PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` → 403) for
   its members. That is GitHub's contract, not ours; it is the reason
   `--no-github-native` exists.
+- **GitHub auto-merge comes off.** GitHub refuses to stack a pull request
+  with auto-merge on, so the push turns it off on each member before
+  registering and prints a line naming the pull request. It does the same,
+  with or without registration, for any pull request whose base it moves: a
+  pull request keeps auto-merge through the move and would merge into its new
+  base on its own. When auto-merge cannot be turned off (an API proxy that only
+  allows `/repos/{owner}/{repo}/…` paths refuses GraphQL), the stack stays
+  unregistered, and a push that would move that pull request stops before
+  changing anything; turn auto-merge off on GitHub and push again.
 
 Pushing stays cheap. Refreshing commits (amend, reword, force-push) leaves the
 registration untouched, and adding a change on top extends the same stack.
@@ -216,8 +238,8 @@ When asked to start a new piece of work, create a new feature, or work on someth
 
 1. **Check current branch**: `git branch --show-current`
 2. **Create a new stack**: `mergify stack new <branch-name>`
-   - Use descriptive branch names following the pattern: `type/short-description` (e.g., `feat/add-login`, `fix/memory-leak`)
-3. **Make commits** following conventional commits
+   - Use a descriptive branch name that follows the repository's own naming (look at its existing branches)
+3. **Make commits** following the repository's commit style
 4. **Push**: `mergify stack push`
 
 ## Adding to Existing Stack
@@ -232,6 +254,8 @@ When continuing work on an existing feature branch:
 
 When a rebase causes conflicts (during `git rebase -i` or `mergify stack push`):
 
+A stack command whose rebase stops exits with code 4 and names the commit it stopped on (with its PR when it knows it), the files in conflict, and the commands to run next. Any other failure exits 1 with git's own message: a dirty worktree is not a conflict.
+
 1. Resolve conflicts in your editor
 2. Stage resolved files with `git add`
 3. Continue with `git rebase --continue`
@@ -239,3 +263,7 @@ When a rebase causes conflicts (during `git rebase -i` or `mergify stack push`):
 To abort instead: `git rebase --abort`
 
 After resolving, run `mergify stack push` to sync the updated stack.
+
+## When a command or flag is missing
+
+If `mergify` rejects a command or flag this skill names, the CLI is probably older than the skill: follow the `mergify-cli-upgrade` skill.

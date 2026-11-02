@@ -10,8 +10,7 @@ by job, for exactly the jobs you changed.
 entry per job name they arrived under, on every CI provider, without reading
 any CI log. It is the check to use whenever the `mergify` CLI is installed
 (2026.10.8 or later) and can authenticate: `MERGIFY_TOKEN` (any application
-key), the credential `mergify auth login` stored, or, deprecated but still
-accepted, the GitHub CLI's token. If the command is missing or refuses to
+key), or the credential `mergify auth login` stored. If the command is missing or refuses to
 authenticate, do not install or log in for the user: read the CI logs instead
 (below), and give the user the command to run themselves.
 

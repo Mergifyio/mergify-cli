@@ -1,6 +1,6 @@
 ---
 name: mergify-merge-protections
-description: Use Mergify merge protections to control when PRs merge — PR dependencies (Depends-On header), delayed merges (Merge-After header), and scheduled freezes (CLI). ALWAYS use this skill when managing merge freezes, deployment windows, temporarily blocking merges, setting up PR dependencies, blocking a PR on another PR, coordinating cross-repo merges, scheduling a merge for a specific time, or adding Depends-On or Merge-After headers to PRs. Triggers on freeze, scheduled freeze, merge freeze, deployment freeze, halt merges, depends on, dependency, block merge, merge after, merge later, schedule merge, delayed merge, cross-repo, merge protection.
+description: Use Mergify merge protections to control when PRs merge — PR dependencies (Depends-On header), delayed merges (Merge-After header), and scheduled freezes (CLI). ALWAYS use this skill when managing Mergify scheduled freezes, or when blocking a PR on another PR or delaying its merge with Mergify's Depends-On or Merge-After headers. Triggers on mergify freeze, Mergify scheduled freeze, Mergify merge freeze, Depends-On, Merge-After, Mergify merge protection.
 ---
 
 # Mergify Merge Protections
@@ -108,7 +108,7 @@ mergify freeze delete FREEZE_ID           # Delete a freeze
 ## Authentication
 
 All commands require a Mergify credential. Run `mergify auth login` once, or:
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--repository` / `-r` -- Repository full name (auto-detected from git remote)
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 
@@ -223,3 +223,7 @@ mergify freeze create \
   -e "label=hotfix" \
   -e "label=security"
 ```
+
+## When a command or flag is missing
+
+If `mergify` rejects a command or flag this skill names, the CLI is probably older than the skill: follow the `mergify-cli-upgrade` skill.

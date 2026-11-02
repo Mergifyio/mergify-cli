@@ -88,13 +88,11 @@ order:
 | 1 | `--token` / `-t` | |
 | 2 | `MERGIFY_TOKEN` | |
 | 3 | the credential stored by `mergify auth login` | keyed by API URL |
-| 4 | `GITHUB_TOKEN` | **deprecated** |
-| 5 | `gh auth token` | **deprecated** |
 
-A GitHub token still authenticates against the Mergify API and prints a
-deprecation warning once per run. It will stop working in a future release;
-run `mergify auth login` instead. In CI, set `MERGIFY_TOKEN` — nothing about
-that changes.
+A GitHub token (`GITHUB_TOKEN`, `gh auth token`) is no longer a fallback: the
+Mergify API is dropping GitHub tokens, and a command with none of the credentials
+above fails and says how to get one. Run `mergify auth login`, or set
+`MERGIFY_TOKEN` in CI.
 
 `mergify ci` skips step 3. Those endpoints require an organization
 application key, which is what `MERGIFY_TOKEN` holds in a CI job; the
@@ -102,7 +100,7 @@ per-user credential `mergify auth login` mints is refused there by design.
 
 `mergify stack` also calls the **GitHub API** directly, and resolves that
 token separately (`--token`, `MERGIFY_TOKEN`, `GITHUB_TOKEN`, `gh auth
-token`). It is unaffected by the deprecation above: `stack` needs a GitHub
+token`). It is unaffected by the change above: `stack` needs a GitHub
 credential and Mergify never issues one. A Mergify-issued token (`mut_…`) is
 skipped there rather than sent to GitHub, which would only answer `401 Bad
 credentials` — in `MERGIFY_TOKEN`, in `GITHUB_TOKEN`, and in what `gh auth
@@ -126,10 +124,9 @@ and the quarantine list. Trace upload and `ci scopes-send` take a `ci` key
 only, and answer an `admin` key or a user credential with `403 Forbidden`.
 Reading test health (`mergify tests show`) and changing the quarantine
 (`mergify tests quarantines add` / `remove`) need an `admin` key or a user
-credential — the one `mergify auth login` stores, or a GitHub PAT — and
-answer a `ci` key with `403 Forbidden`. Note that `GITHUB_TOKEN` inside
-GitHub Actions is the ephemeral installation token, not a PAT, and does not
-reach the Mergify API.
+credential — the one `mergify auth login` stores — and answer a `ci` key with
+`403 Forbidden`. `GITHUB_TOKEN` is not a Mergify credential and does not reach
+the Mergify API.
 
 See the [authentication guide](https://docs.mergify.com/cli/usage) for details.
 
@@ -145,6 +142,7 @@ mergify stack sync                 # rebase the stack onto its trunk
 # Merge queue
 mergify queue status               # current queue state for the repo
 mergify queue status --json        # same, as machine-readable JSON
+mergify queue add 123              # queue a pull request (number or URL)
 
 # Test Engine — from inside your pipeline
 mergify ci junit-process report.xml --test-language python
@@ -214,7 +212,7 @@ These are accepted on every command:
 | Variable | Effect |
 | --- | --- |
 | `MERGIFY_TOKEN` | API token. Takes precedence over a stored `mergify auth login` credential. |
-| `GITHUB_TOKEN` | **Deprecated** as a Mergify API credential (falls back to `gh auth token`); still the GitHub token `mergify stack` uses. |
+| `GITHUB_TOKEN` | Not a Mergify API credential. Still the GitHub token `mergify stack` uses. |
 | `GITHUB_REPOSITORY` | Default `owner/repo` when `--repository` is omitted. |
 | `MERGIFY_API_URL` | API base URL (default `https://api.mergify.com`). |
 | `RUST_LOG` | Fine-grained log filtering; overrides `--verbose`. |
