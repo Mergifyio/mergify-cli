@@ -1,6 +1,6 @@
 ---
 name: mergify-events
-description: Use `mergify events` to browse the Mergify activity log — every event Mergify recorded for a repository or one pull request (queue enters/leaves, merges, commands, CI Insights, freezes), as a human timeline or JSON. ALWAYS use this skill when investigating what Mergify did to a PR or repository and when, reconstructing a pull request's merge-queue lifecycle, auditing Mergify actions, or filtering events by type. Triggers on activity log, event log, events, what did Mergify do, queue lifecycle, queue history, event timeline, event_type, action.queue.
+description: Use `mergify events` to browse the Mergify activity log — every event Mergify recorded for a repository or one pull request (queue enters/leaves, merges, commands, CI Insights, freezes), as a human timeline or JSON. ALWAYS use this skill when investigating what Mergify did to a PR or repository and when, reconstructing a pull request's merge-queue lifecycle, auditing Mergify actions, or filtering events by type. Triggers on mergify events, Mergify activity log, Mergify event log, what did Mergify do, Mergify queue lifecycle, Mergify queue history, event_type, action.queue.
 ---
 
 # Mergify Events
@@ -66,3 +66,7 @@ The window is echoed so an empty `events` is self-describing. Filter with `jq` o
 
 - **"Why was this PR dequeued?"** — `mergify queue show <PR>` (the `mergify-merge-queue` skill) is the dedicated answer: it renders the last leave event with the reason, the failing checks' job URLs, and the head-SHA staleness check. `mergify events` is for the *whole* trail or for non-queue events.
 - **Raw API access** (CLI not installed, or a token refused the log): `GET /v1/repos/{owner}/{repo}/logs` — same data; always pass `received_from` (the API silently defaults to 1 day) and keep the span ≤ 93 days.
+
+## When a command or flag is missing
+
+If `mergify` rejects a command or flag this skill names, the CLI is probably older than the skill: follow the `mergify-cli-upgrade` skill.

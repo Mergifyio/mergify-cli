@@ -1,6 +1,6 @@
 ---
 name: mergify-ci
-description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, and retrieve merge queue metadata. ALWAYS use this skill when working with CI pipelines, test result uploads, quarantine, scopes detection, or merge queue CI context. Triggers on CI, JUnit, test results, quarantine, scopes, git refs, CI insights.
+description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, and retrieve merge queue metadata. ALWAYS use this skill when running `mergify ci` or `mergify tests` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, or reading Mergify merge queue CI context. Triggers on mergify ci, mergify tests, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info.
 ---
 
 # Mergify CI Commands
@@ -38,10 +38,10 @@ CLI calls, the two lists share only the quarantine list.
 | `admin` | Reading test health, the quarantine *list*, and mutating the quarantine. Not trace upload, not `scopes-send`. |
 
 Trace upload and `scopes-send` take a `ci` key only: an `admin` key or a
-GitHub PAT gets a `403`. Every other endpoint below that refuses a `ci` key
-accepts a GitHub PAT instead. `GITHUB_TOKEN` inside GitHub Actions is *not* a
-PAT — it is the ephemeral installation token — so do not reach for it to
-clear one of these `403`s.
+user credential gets a `403`. Every other endpoint below that refuses a `ci`
+key accepts a user credential (`mergify auth login`) instead. `GITHUB_TOKEN`
+inside GitHub Actions is not a Mergify credential at all, so do not reach for
+it to clear one of these `403`s.
 
 The split follows the endpoint each command calls: reads of test health and
 writes to the quarantine are a person inspecting or overriding a repository,
@@ -78,7 +78,7 @@ mergify ci junit-process \
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
 - `--repository` / `-r` -- Repository full name (auto-detected from the CI provider, then the git remote)
-- `--tests-target-branch` / `-b` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`), then the checked-out branch. Without one, quarantine is off for the run: the results are still uploaded, and every failure blocks.
+- `--tests-target-branch` / `-b` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (the base of the open pull request whose head is `CIRCLE_SHA1`, as Mergify knows it, unless `CIRCLE_BRANCH` is the repository's default branch → `CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`), then the checked-out branch. On a branch of GitHub's merge queue (`gh-readonly-queue/<base>/pr-…`), whatever the provider, the branch it merges into. Without one, quarantine is off for the run: the results are still uploaded, and every failure blocks.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 - `--test-framework` -- Test framework name (optional metadata)
 - `--test-language` -- Test language (optional metadata)
@@ -141,6 +141,24 @@ Sources detected (in priority order): merge queue context, GitHub pull request e
 
 The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite builds of the branch, so a merge queue batch built by a `push` trigger with no draft pull request gets the batch's checking base too. A push that creates a branch has no previous commit, so its base is the default branch.
 
+When the base is the commit a GitHub `push` replaced on its branch (the event's `before`), compare it with the head directly, not from their merge base. After a force-push back to an earlier commit, that commit *is* the merge base, so `nx show projects --affected --base --head`, which diffs from the merge base, finds nothing, and so does `git diff base...head`. A shallow checkout lacks that commit, and after a force-push so does a `fetch-depth: 0` one, since it is on no branch any more: fetch it by its SHA, then hand nx the files that differ. Every other base, a pull request's, a merge queue batch's or the default branch a new branch gets, keeps `--base`/`--head`, which count what the head adds on top of it:
+
+```bash
+refs=$(mergify ci git-refs --format=shell) || exit 1
+eval "$refs"
+base=$MERGIFY_GIT_REFS_BASE head=$MERGIFY_GIT_REFS_HEAD
+if [ "${GITHUB_EVENT_NAME:-}" = push ] && [ "$base" = "$(jq -r .before "$GITHUB_EVENT_PATH")" ]; then
+  git cat-file -e "$base^{commit}" 2>/dev/null ||
+    git fetch --quiet --no-tags --depth=1 origin "$base" || exit 1
+  # nx's own diff flags, with paths left unquoted for `--files`.
+  files=$(git -c core.quotePath=false diff --name-only --no-renames --relative \
+    --end-of-options "$base" "$head" --) || exit 1
+  projects=$(nx show projects --affected --files="$(printf '%s\n' "$files" | paste -sd, -)") || exit 1
+else
+  projects=$(nx show projects --affected --base="$base" --head="$head") || exit 1
+fi
+```
+
 ## Scopes (`scopes`)
 
 Detects which CI scopes are impacted by changed files, based on a Mergify configuration file. Used for selective/targeted CI -- only run tests for scopes that have changed files.
@@ -164,6 +182,8 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 
 The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`.
 
+When the base is the `before` commit detected from a GitHub `push` event, the changed files are the ones that differ between it and the pushed commit, compared directly rather than from their merge base: a push back to an earlier commit selects the scopes of the files it reverts. Every other base, an explicit `--base` included, counts what `head` adds on top of it, from their merge base.
+
 On a merge queue batch build (a draft pull request, or a `push` build of the merge queue branch), scopes are not computed from changed files: the command reads the engine's git note for the batch and returns the scopes the merge queue decided (the batch's scopes plus each batched pull request's scopes, including scopes a pull request's CI reported), plus the merge queue scope. A batch the note marks as a barrier (`all_scopes: true`) selects every scope. This also works with a `manual` scopes source. Without a note, or with a note that has no `scopes` list, it falls back to diffing files.
 
 A renamed file counts against **both** of its paths, same as the engine: `git mv critical/guard.txt ignored/guard.txt` touches `critical` and `ignored`.
@@ -174,7 +194,7 @@ Sends scopes tied to a pull request to the Mergify API. Used when scopes are det
 
 The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, or `BUILDKITE_COMMIT`); pass `--head-sha` to name it explicitly. When no head SHA can be resolved -- or the Mergify deployment predates the commit endpoint -- the command falls back to reporting against the pull request number alone, which is what it always did.
 
-Needs a `ci` key — an `admin` key or a GitHub PAT gets a `403`. See
+Needs a `ci` key — an `admin` key or a user credential gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -214,7 +234,7 @@ batch API: pass one or more names (globs supported) and one block per match
 is rendered. It is read-only: it exits `0` once it has rendered the matches,
 whatever their health. Gate on health by consuming `--json`, not the exit code.
 
-Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
+Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -231,7 +251,7 @@ mergify tests show -r owner/repo \
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--pipeline-name`, `--pipeline-name-exclude` -- Restrict / exclude by pipeline.
 - `--job-name`, `--job-name-exclude` -- Restrict / exclude by job.
@@ -296,7 +316,7 @@ anyone to fix it. **When you quarantine a test, link the issue tracking its
 fix with `--issue-url`**: file the issue first (or find the existing one),
 then pass its URL. Mergify shows the link on the quarantine.
 
-Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
+Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -332,7 +352,7 @@ list the ids: pass the id of the one to target.
 - `--pipeline-name` -- Pipeline to scope to. Omit for all pipelines.
 - `--job-name` -- Job to scope to. Omit for all jobs.
 - `--issue-url` -- Link to the issue tracking the fix, in any issue tracker. Must be an `http` or `https` URL; the API refuses anything else.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"id", "test_name", "reason", "branch_name", "issue_url", "pipeline_name", "job_name"}` to stdout.
 
@@ -347,7 +367,7 @@ name (resolved to its quarantine id via the list endpoint) or the quarantine
 id directly (as printed by `tests quarantines add`). A UUID-shaped argument
 is treated as the id and deleted without a lookup.
 
-Needs an `admin` key or a GitHub PAT — a `ci` key gets a `403`. See
+Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -360,7 +380,7 @@ mergify tests quarantines remove -r owner/repo 12345678-1234-5678-1234-567812345
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"id", "test_name"}` to stdout (`test_name` is null when
   addressed by id).
@@ -387,7 +407,7 @@ mergify tests quarantines get -r owner/repo --json \
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit the record (`id`, `test_name`, `reason`, `branch_name`, `issue_url`,
   `pipeline_name`, `job_name`, `created_at`, `source`, `is_recovered`) to stdout.
@@ -423,7 +443,7 @@ A null `issue_url` means no issue tracks the fix.
 
 **Key options:**
 - `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
 - `--json` -- Emit `{"quarantined_tests": [...]}` to stdout, each record carrying
   `id`, `test_name`, `reason`, `branch_name`, `issue_url`, `pipeline_name`,
@@ -485,3 +505,7 @@ jobs:
     steps:
       - run: pytest backend/
 ```
+
+## When a command or flag is missing
+
+If `mergify` rejects a command or flag this skill names, the CLI is probably older than the skill: follow the `mergify-cli-upgrade` skill.

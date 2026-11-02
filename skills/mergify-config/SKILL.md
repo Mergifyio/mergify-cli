@@ -1,6 +1,6 @@
 ---
 name: mergify-config
-description: Use Mergify config commands to validate configuration files, simulate Mergify actions, and write Mergify configuration. ALWAYS use this skill when validating, writing, editing, or simulating Mergify config. Triggers on config validate, config simulate, mergify configuration, mergify.yml, .mergify.yml, merge queue config, workflow rules, conditions.
+description: Use Mergify config commands to validate configuration files, simulate Mergify actions, and write Mergify configuration. ALWAYS use this skill when validating, writing, editing, or simulating Mergify config. Triggers on config validate, config simulate, mergify configuration, mergify.yml, .mergify.yml, Mergify merge queue config, pull_request_rules, queue_rules, Mergify conditions.
 ---
 
 # Mergify Configuration Management
@@ -68,7 +68,7 @@ mergify config simulate https://github.com/owner/repo/pull/123
 - `PULL_REQUEST_URL` -- Full GitHub URL of the pull request to simulate against
 
 **Options:**
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored, then to `GITHUB_TOKEN` / `gh auth token`, both deprecated for the Mergify API.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 
 **Output:** Shows a title and detailed Markdown summary of what actions Mergify would take on the PR with the local configuration.
@@ -143,3 +143,7 @@ jobs:
       - name: Validate Mergify config
         run: mergify config validate
 ```
+
+## When a command or flag is missing
+
+If `mergify` rejects a command or flag this skill names, the CLI is probably older than the skill: follow the `mergify-cli-upgrade` skill.

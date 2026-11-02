@@ -48,7 +48,7 @@ From the files, never from assumptions:
 | Vitest 3+ | `@mergifyio/vitest` reporter | `references/vitest.md` |
 | Playwright 1.56+ | `@mergifyio/playwright` reporter | `references/playwright.md` |
 | Jest 29+ | `@mergifyio/jest` (`withMergify`) | `references/jest.md` |
-| Mocha 10+ | `@mergifyio/mocha` (`require`) | `references/mocha.md` |
+| Mocha 8.2+ | `@mergifyio/mocha` (`require`) | `references/mocha.md` |
 | Minitest 5.19+ | `minitest-mergify` gem | `references/minitest.md` |
 | Anything else that writes JUnit XML (Go, JUnit/Java, Cypress, Cucumber, PHPUnit, NUnit, …) | JUnit report + upload | `references/junit.md` |
 

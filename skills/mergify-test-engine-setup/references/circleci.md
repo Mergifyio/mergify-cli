@@ -29,9 +29,14 @@ reads.
 - The `docker` executor runs the steps in the container: variables reach them.
   When a step starts the tests itself with `docker run` or Docker Compose, load
   `containers.md`.
-- CircleCI publishes no base branch for a pull request build: pull request
-  builds are read like branch builds (Test Engine's pull request features do not
-  apply).
+- CircleCI publishes no base branch for a pull request build: the plugin asks
+  Mergify which open pull request has the build's commit as its head, and
+  reads the build as one into that pull request's base. Nothing to configure.
+  A build Mergify knows no pull request for (pushed before the pull request
+  was opened) is read like a branch build, and so is a build of the
+  repository's default branch, even when a pull request from it is open. A
+  build of GitHub's merge queue
+  names its base in its branch (`gh-readonly-queue/<base>/…`).
 
 ## JUnit jobs
 
