@@ -24,12 +24,13 @@ the pull request says so.
 
 - **`CI`**: Jenkins does not set it. When the tests behave differently under
   `CI` (grep them for it), set `MERGIFY_CI_ENABLE = 'true'` instead.
-- **Job name**: the plugins file tests under `JOB_NAME`, as both the pipeline
-  and the job name. In a multibranch pipeline it includes the branch or pull
-  request (`my-repo/PR-123`), so each branch and pull request keeps its own
-  test history, whatever you set: leave `MERGIFY_TEST_JOB_NAME` alone and tell
-  the user. Set it only when a scheduled job and the pull request job have
-  different Jenkins names but run the same tests.
+- **Job name**: tests are filed under `JOB_NAME`, as both the pipeline and
+  the job name. A multibranch pipeline's builds are filed under the
+  multibranch project instead (`my-repo`, not `my-repo/PR-123`), so every
+  branch and pull request shares one test history. `MERGIFY_TEST_JOB_NAME`
+  replaces the job name, not the pipeline name: set it as SKILL.md says (per
+  `matrix` cell or `parallel` branch that runs the suite, per suite), never to
+  merge two Jenkins jobs' histories.
 
 ## JUnit jobs
 
