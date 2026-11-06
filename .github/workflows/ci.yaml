@@ -1,5 +1,6 @@
 name: Continuous Integration
-permissions: read-all
+# No scope by default: each job asks for the ones it needs.
+permissions: {}
 
 on:
   pull_request:
@@ -24,6 +25,8 @@ jobs:
     if: github.event.pull_request.user.login != 'mergify-ci-bot'
     timeout-minutes: 5
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -43,6 +46,8 @@ jobs:
           fi
           echo "no synced file changed"
 
+  # wait-jobs only reads the `needs` context given as `jobs`, and installs the
+  # CLI from public URLs: it needs no token scope.
   ci-gate:
     if: ${{ !cancelled() }}
     needs:
