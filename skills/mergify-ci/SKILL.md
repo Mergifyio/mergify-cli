@@ -127,8 +127,10 @@ mergify ci git-refs
 - `json` — single-line JSON object with `base`, `head`, `source` keys. `base` may be `null` when it can't be detected (e.g., `workflow_dispatch` events); use `jq -r '.base // ""'` to coalesce to empty string.
 
 ```bash
-# Consume values in a shell script without parsing:
-eval "$(mergify ci git-refs --format=shell)"
+# Consume values in a shell script without parsing (a failure inside
+# `eval "$(...)"` would go unnoticed):
+refs=$(mergify ci git-refs --format=shell) || exit 1
+eval "$refs"
 nx show projects --affected \
   --base="$MERGIFY_GIT_REFS_BASE" \
   --head="$MERGIFY_GIT_REFS_HEAD"
@@ -137,27 +139,13 @@ nx show projects --affected \
 BASE=$(mergify ci git-refs --format=json | jq -r '.base // ""')
 ```
 
-Sources detected (in priority order): merge queue context, GitHub pull request event, GitHub push event, fallback to last commit.
+Sources detected (in priority order): merge queue context, GitHub pull request event, GitHub push event, Jenkins change request, fallback to last commit.
+
+On a Jenkins change request build (`CHANGE_ID` set by a multibranch pipeline), the base is the branch the pull request targets (`CHANGE_TARGET`), printed as the commit `origin/<branch>` names, and the head is `HEAD`. Jenkins fetches `origin/<branch>` when it merges the pull request into its target, and checks out the pull request alone otherwise: `git-refs` then fetches the target branch from `origin`, with the history it shares with `HEAD`, and fails when it cannot. That `git fetch` needs the repository's credentials in the step.
 
 The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite builds of the branch, so a merge queue batch built by a `push` trigger with no draft pull request gets the batch's checking base too. A push that creates a branch has no previous commit, so its base is the default branch.
 
-When the base is the commit a GitHub `push` replaced on its branch (the event's `before`), compare it with the head directly, not from their merge base. After a force-push back to an earlier commit, that commit *is* the merge base, so `nx show projects --affected --base --head`, which diffs from the merge base, finds nothing, and so does `git diff base...head`. A shallow checkout lacks that commit, and after a force-push so does a `fetch-depth: 0` one, since it is on no branch any more: fetch it by its SHA, then hand nx the files that differ. Every other base, a pull request's, a merge queue batch's or the default branch a new branch gets, keeps `--base`/`--head`, which count what the head adds on top of it:
-
-```bash
-refs=$(mergify ci git-refs --format=shell) || exit 1
-eval "$refs"
-base=$MERGIFY_GIT_REFS_BASE head=$MERGIFY_GIT_REFS_HEAD
-if [ "${GITHUB_EVENT_NAME:-}" = push ] && [ "$base" = "$(jq -r .before "$GITHUB_EVENT_PATH")" ]; then
-  git cat-file -e "$base^{commit}" 2>/dev/null ||
-    git fetch --quiet --no-tags --depth=1 origin "$base" || exit 1
-  # nx's own diff flags, with paths left unquoted for `--files`.
-  files=$(git -c core.quotePath=false diff --name-only --no-renames --relative \
-    --end-of-options "$base" "$head" --) || exit 1
-  projects=$(nx show projects --affected --files="$(printf '%s\n' "$files" | paste -sd, -)") || exit 1
-else
-  projects=$(nx show projects --affected --base="$base" --head="$head") || exit 1
-fi
-```
+On a GitHub `push` that did not fast-forward (the event's `forced`), such as a push back to an earlier commit, the head is a commit `git-refs` makes in the local clone: the pushed commit's files, with the base, the commit the push replaced, as its only parent. Its merge base with the base is the base, so the `nx show projects --affected --base --head` call above, `git diff base...head` and the other tools that compare from the merge base see every file the push changed, a rollback's included. `git-refs` fetches the base by its SHA when the clone lacks it, and prints the pushed commit with a warning when it cannot, or out of a clone. No ref names that head and no other clone has it: run `mergify ci git-refs` in the clone that compares, where it makes the same commit, rather than passing its head to another job.
 
 ## Scopes (`scopes`)
 
@@ -192,7 +180,7 @@ A renamed file counts against **both** of its paths, same as the engine: `git mv
 
 Sends scopes tied to a pull request to the Mergify API. Used when scopes are determined manually or from a file rather than auto-detected.
 
-The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, or `BUILDKITE_COMMIT`); pass `--head-sha` to name it explicitly. When no head SHA can be resolved -- or the Mergify deployment predates the commit endpoint -- the command falls back to reporting against the pull request number alone, which is what it always did.
+The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, or `CIRCLE_SHA1`); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), Jenkins, any other CI. On Jenkins, `GIT_COMMIT` is the head only when the GitHub Branch Source plugin builds "The current pull request revision", the default for sources created since 2023; a source that merges the pull request into its target branch makes `GIT_COMMIT` that merge. The pull request number is detected on Jenkins (`CHANGE_ID`), so `--head-sha` is the only flag a Jenkins change request build needs. When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
 Needs a `ci` key — an `admin` key or a user credential gets a `403`. See
 [Authentication](#authentication).
@@ -211,19 +199,20 @@ mergify ci scopes-send --scopes-file scopes.txt -p 123
 # e.g. a build-system or CI-workflow change
 mergify ci scopes-send -s build-system --all -p 123
 
-# Name the revision explicitly (the pull request head, not the
-# revision a `pull_request` job checked out)
+# Name the revision explicitly wherever it is not detected (the pull
+# request head, not the revision a `pull_request` job or a Jenkins
+# merge build checked out)
 mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 ```
 
 **Key options:**
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify `ci` application key
 - `--repository` / `-r` -- Repository full name (auto-detected)
-- `--pull-request` / `-p` -- Pull request number (auto-detected in GitHub Actions)
+- `--pull-request` / `-p` -- Pull request number (auto-detected under GitHub Actions pull request events, Buildkite and Jenkins)
 - `--scope` / `-s` -- Scope name (repeatable)
 - `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
 - `--scopes-file` -- Plain-text file with one scope per line
-- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected from the CI environment)
+- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite and CircleCI)
 - `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
 
 ## Tests Show (`tests show`)

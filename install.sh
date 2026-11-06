@@ -34,6 +34,14 @@ die() {
     exit 1
 }
 
+# GitHub's release downloads fail now and then for minutes at a time, with a
+# 502 or a 504: curl tries again on those and on a timeout, for about four
+# minutes, its wait doubling from one second. A 404, a version that was never
+# released, still fails at once.
+fetch() {
+    curl -fsSL --retry 8 "$@"
+}
+
 # Map `uname -s` / `uname -m` to the Rust target triple the release
 # workflow tags its assets with. Anything we don't ship a binary for
 # bails — no auto-build fallback because that would imply a working
@@ -117,7 +125,7 @@ main() {
     if [ "${VERSION}" = "latest" ]; then
         if [ -n "${MERGIFY_BASE_URL:-}" ]; then
             # Fixture mode: the stub JSON lives next to the assets.
-            VERSION=$(curl -fsSL "${MERGIFY_BASE_URL}/latest-release.json" \
+            VERSION=$(fetch "${MERGIFY_BASE_URL}/latest-release.json" \
                 | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
                 | sed 's/.*"tag_name":[[:space:]]*"//; s/".*//')
         else
@@ -131,7 +139,7 @@ main() {
             # (HTTP 200, no `/tag/`), so require the segment before
             # stripping rather than letting the full URL flow into the
             # asset name.
-            VERSION=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            VERSION=$(fetch -o /dev/null -w '%{url_effective}' \
                 "https://github.com/${REPO}/releases/latest")
             case "${VERSION}" in
                 */tag/*) VERSION="${VERSION##*/tag/}" ;;
@@ -174,10 +182,10 @@ main() {
     trap 'rm -rf "${tmp}"' EXIT INT HUP TERM
 
     printf 'Downloading %s\n' "${url}"
-    curl -fsSL "${url}" -o "${tmp}/${asset}"
+    fetch "${url}" -o "${tmp}/${asset}"
 
     printf 'Downloading checksums\n'
-    curl -fsSL "${sums_url}" -o "${tmp}/SHA256SUMS"
+    fetch "${sums_url}" -o "${tmp}/SHA256SUMS"
 
     # `SHA256SUMS` is one line per asset; pull ours out by exact
     # second-field match so the lookup can't accidentally pick up
