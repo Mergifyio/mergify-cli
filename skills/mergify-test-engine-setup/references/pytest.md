@@ -9,10 +9,11 @@ configuration change. It uploads at the end of the session.
   2026.10.5 is the last one for 3.8 and 3.9. When the project supports Python
   below 3.10, require `pytest-mergify>=2026.10.5` and let the resolver pick per
   interpreter. `pytest-mergify` ships compiled wheels and no source
-  distribution: Linux (x86_64, aarch64; glibc and musl), macOS (x86_64, arm64),
-  Windows (x86_64). There is no wheel for **PyPy** or **free-threaded** CPython
-  (`3.13t`, `3.14t`); pip then falls back to an old release that compiles Rust,
-  or fails.
+  distribution: Linux (x86_64, aarch64; glibc 2.28 or newer, and musl), macOS
+  (arm64; x86_64 as best effort, not tested before a release), Windows
+  (x86_64). There is no wheel for **PyPy** or **free-threaded** CPython
+  (`3.13t`, `3.14t`); pip then falls back to an old release that compiles
+  Rust, or fails.
 - pytest 7.0 or later.
 
 When a matrix has PyPy legs, add the requirement with an environment marker:

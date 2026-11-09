@@ -31,6 +31,10 @@ the pull request says so.
   replaces the job name, not the pipeline name: set it as SKILL.md says (per
   `matrix` cell or `parallel` branch that runs the suite, per suite), never to
   merge two Jenkins jobs' histories.
+- **Pull request builds**: tests are filed under the branch the pull request
+  comes from (`CHANGE_BRANCH`) and its head commit, not `PR-123`. Under the
+  merge strategy the head is read from the merge Jenkins made in the
+  checkout: tests run outside the checkout are filed under that merge.
 
 ## JUnit jobs
 

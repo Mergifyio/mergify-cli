@@ -22,7 +22,8 @@ mergify ci junit-process report.xml   # upload test results to Test Engine
   `--token` for scripting.
 - **Built for pipelines.** Logs to stderr, structured `--json` output on read
   commands, and stable [exit codes](#exit-codes) for scripts and runbooks.
-- **Cross-platform.** Linux, macOS (x86_64 + aarch64), and Windows.
+- **Cross-platform.** Linux (x86_64 + aarch64, glibc 2.28 or newer), macOS
+  (aarch64; x86_64 as best effort, not tested before a release), and Windows.
 
 ## Installation
 
@@ -37,7 +38,7 @@ The fully-qualified name taps and installs in one step. Upgrade with
 Homebrew-managed binary. See the [tap](https://github.com/Mergifyio/homebrew-tap)
 for tap-trust and short-name details.
 
-### Install script (recommended for Linux; also macOS — x86_64 and aarch64)
+### Install script (recommended for Linux; also macOS)
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh

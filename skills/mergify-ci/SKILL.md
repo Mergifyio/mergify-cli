@@ -443,9 +443,14 @@ A null `issue_url` means no issue tracks the fix.
 
 ## Queue Info (`queue-info`)
 
-Outputs the current build's merge queue batch metadata as JSON. Reads the `refs/notes/mergify/<branch>` git note Mergify writes on the merge queue branch head for the current `HEAD`; exits `INVALID_STATE` (7) when no note is found (i.e. not a merge queue batch build). Takes no arguments and needs no GitHub token.
+Outputs the current build's merge queue batch metadata as JSON. Reads the `refs/notes/mergify/<branch>` git note Mergify writes on the merge queue branch head the build is for; exits `INVALID_STATE` (7) when no note is found (i.e. not a merge queue batch build, or a pull request from a fork). Takes no arguments and needs no GitHub token.
 
-On a Jenkins change request (`CHANGE_ID` set), it reads only the note `ci git-refs` reads: the one for the branch the change request comes from (`CHANGE_BRANCH`), which it fetches alone, on `HEAD`, or on its first parent when `HEAD` is a merge, as when Jenkins merged a target that moved on since into the draft. A fork's change request (`CHANGE_FORK`) gets none.
+It reads the note `ci git-refs` reads, fetching that branch's notes ref alone. On a pull request build it reads no other:
+
+- On a GitHub Actions pull request event (`pull_request`, `pull_request_target`, a review), the note for the pull request's branch on its head (`pull_request.head`), so the default `actions/checkout` of a `pull_request` event, GitHub's merge of the draft into its base, is fine. A pull request from a fork gets none.
+- On a Jenkins change request (`CHANGE_ID` set), the note for the branch the change request comes from (`CHANGE_BRANCH`), on `HEAD`, or on its first parent when `HEAD` is a merge, as when Jenkins merged a target that moved on since into the draft. A fork's change request (`CHANGE_FORK`) gets none.
+
+On a branch build it reads the note for the branch built, on the commit built: the pushed branch on GitHub Actions `push`, `BUILDKITE_BRANCH` on `BUILDKITE_COMMIT` on Buildkite, `GIT_BRANCH` (else `BRANCH_NAME`) on `HEAD` on a Jenkins branch build. Without that note, it reads the note on `HEAD`, as on any other build.
 
 The note's full payload is emitted verbatim (every field Mergify wrote, e.g. `checking_base_sha`, `pull_requests` with per-PR `scopes`, `previous_failed_batches`, top-level `scopes`). New fields appear automatically without a CLI update, so don't assume a fixed schema.
 
@@ -456,7 +461,7 @@ The note's full payload is emitted verbatim (every field Mergify wrote, e.g. `ch
 mergify ci queue-info
 ```
 
-Mergify attaches the batch metadata as a git note to the MQ branch head commit, so reading it needs only git, no PR body and no GitHub token. Off a Jenkins change request, the command runs `git fetch origin "refs/notes/mergify/*"` itself (notes aren't fetched by default), then returns the note attached to `HEAD`. Requirements: the `origin` remote is reachable and the checkout is at the MQ branch head commit (on a Jenkins change request, that commit or Jenkins' merge of it with its target), which is the normal state inside a merge-queue CI run. A detached HEAD is fine.
+Mergify attaches the batch metadata as a git note to the MQ branch head commit, so reading it needs only git, no PR body and no GitHub token. To read the note on `HEAD` (GitLab, CircleCI, another GitHub Actions event, a branch build without its branch's note, ...), the command runs `git fetch origin "refs/notes/mergify/*"` itself (notes aren't fetched by default), then returns the note attached to `HEAD`. Requirements: the `origin` remote is reachable and, off a pull request build, the checkout is at the MQ branch head commit, which is the normal state inside a merge-queue CI run. A detached HEAD is fine.
 
 This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch.
 

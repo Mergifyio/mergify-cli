@@ -28,6 +28,10 @@ Jenkins: JENKINS_URL BUILD_ID BUILD_URL JOB_NAME BRANCH_NAME NODE_NAME GIT_URL
 - **On GitHub Actions in a container**, also mount the file `GITHUB_EVENT_PATH`
   points to, at the same path: without it the run is recorded against the
   merge commit instead of the pull request's head commit.
+- **On a Jenkins pull request build in a container**, mount the checkout with
+  its `.git` as the working directory, readable by the container's user:
+  under the merge strategy the run reads the pull request's head commit from
+  it, and is recorded against Jenkins' merge commit without it.
 - The image has no `.git`? The repository name comes from the variables above,
   which is why they must all be passed.
 - Shards (`--shard`): every shard keeps the same job name.
