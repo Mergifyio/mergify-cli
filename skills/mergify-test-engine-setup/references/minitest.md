@@ -5,11 +5,11 @@
 - Ruby 3.1 or later with Minitest 5.19 or later; Minitest 6 needs Ruby 3.2.
 - It runs on `mergify-ci-core`, which Bundler installs with it, precompiled for
   CRuby 3.1 up to the latest release (not a development `ruby-head`) on Linux
-  (glibc 2.30 or newer, and musl), macOS and Windows. Where Bundler takes the
-  source gem instead (JRuby, TruffleRuby, a Ruby newer than the core, a job that
-  sets `force_ruby_platform`), it has no compiled core and sends nothing: gate
-  the gem on `RUBY_ENGINE == "ruby"` too, and list those legs as cannot
-  report.
+  (glibc 2.28 or newer, and musl), macOS (Intel Macs as best effort) and
+  Windows. Where Bundler takes the source gem instead (JRuby, TruffleRuby, a
+  Ruby newer than the core, a job that sets `force_ruby_platform`), it has no
+  compiled core and sends nothing: gate the gem on `RUBY_ENGINE == "ruby"` too,
+  and list those legs as cannot report.
 
 ## Install
 
