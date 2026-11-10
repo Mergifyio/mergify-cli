@@ -1,6 +1,6 @@
 ---
 name: mergify-config
-description: Use Mergify config commands to validate configuration files, simulate Mergify actions, and write Mergify configuration. ALWAYS use this skill when validating, writing, editing, or simulating Mergify config. Triggers on config validate, config simulate, mergify configuration, mergify.yml, .mergify.yml, Mergify merge queue config, pull_request_rules, queue_rules, Mergify conditions.
+description: Use Mergify config commands to validate configuration files, simulate Mergify actions, and write Mergify configuration. ALWAYS use this skill when validating, writing, editing, or simulating Mergify config. Triggers on config validate, config simulate, mergify configuration, mergify.yml, .mergify.yml, Mergify merge queue config, pull_request_rules, queue_rules, Mergify conditions, conflict_resolvers, automatic merge conflict resolution.
 ---
 
 # Mergify Configuration Management
@@ -121,6 +121,45 @@ squash, update), fetch the specific action page at
 5. **Simulate** (optional): run `mergify config simulate <PR_URL>` against a
    real PR to verify the rules behave as expected
 
+## Resolving merge conflicts (`conflict_resolvers`)
+
+**Preview:** it may still change, and is available on request.
+
+The top-level `conflict_resolvers` key has Mergify resolve conflicts with the
+base branch on the files its entries name, instead of leaving them to the pull
+request's author. Start from the `auto` entry, which
+leaves Mergify to pick a strategy file by file for every file it has one for
+(a package manager's manifest and lockfile, source files by language,
+Markdown, JSON, changelogs):
+
+```yaml
+conflict_resolvers:
+  - auto: true
+```
+
+- `auto` never picks a strategy that keeps one side's change only. A conflict
+  its strategy declines (two pull requests changing the same key or the same
+  dependency two ways) is still a conflict, and a file it has no strategy for
+  merges as git would.
+- `directories` (literal paths starting with `/`, default `/`) limits an
+  entry to part of the repository.
+- The other entry kinds name files explicitly: `paths` with a `strategy`,
+  `package-manager` with its `directories`, or `language`. When several
+  entries match a file the last one wins, except that any other entry beats
+  `auto` wherever it sits, so an explicit entry is how to keep a file from
+  `auto`'s strategy.
+- `ours`, `theirs`, `prefer-ours` and `prefer-theirs` discard one side's
+  change. Name one only when the user asks for that trade.
+- What it does depends on the queue rule's `merge_method`: `merge-batch` and
+  `fast-forward` land the resolved batch; with `merge` and `squash`, once the
+  entries settle every conflict, Mergify pushes the merge into the pull
+  request while it is not queued; `rebase` resolves nothing.
+
+The `conflict_resolvers` description in the JSON schema
+(`https://docs.mergify.com/mergify-configuration-schema.json`) lists every
+strategy, language and package manager. Run `mergify config validate` after
+editing.
+
 ## Common Patterns
 
 ### Test config changes before pushing
@@ -136,8 +175,10 @@ mergify config simulate https://github.com/myorg/myrepo/pull/42
 jobs:
   validate-mergify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install mergify-cli
         run: pip install mergify-cli
       - name: Validate Mergify config

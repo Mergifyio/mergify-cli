@@ -20,7 +20,7 @@ plugin's `env`. List every name the reporter reads, plus the token and `CI`
 
 ```yaml
 plugins:
-  - docker-compose#v5.4.1:
+  - docker-compose#7681d079a131d9bca8e09fc69ba9b6dbc695eae9: # v5.4.1
       run: app
       env:
         - MERGIFY_TOKEN
@@ -41,7 +41,11 @@ plugins:
 ```
 
 Add `MERGIFY_TEST_JOB_NAME` if you set it. Keep the plugin version the
-pipeline already uses.
+pipeline already uses. To update the pin, take a newer tag from
+`https://github.com/buildkite-plugins/docker-compose-buildkite-plugin/tags`,
+write its commit
+(`gh api repos/buildkite-plugins/docker-compose-buildkite-plugin/commits/<tag> --jq .sha`)
+and keep the tag as the comment.
 
 ## JUnit jobs
 
