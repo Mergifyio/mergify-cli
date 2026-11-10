@@ -1,6 +1,6 @@
 ---
 name: mergify-merge-queue
-description: Use Mergify merge queue to queue/dequeue PRs, to monitor and inspect the queue, and to diagnose a dequeued PR — whether it is queued, why it was dequeued, where its CI failure is, and what to do next. ALWAYS use this skill when queuing or dequeuing a PR in the Mergify merge queue, checking its status, finding out why Mergify dequeued a PR, pausing/unpausing the Mergify merge queue, or debugging a merge the Mergify queue did not make. Triggers on mergify queue, @mergifyio queue, @mergifyio dequeue, Mergify merge queue, Mergify queue status, why did Mergify dequeue my PR, Mergify dequeue reason, Mergify queue pause, Mergify batch, Mergify bisecting, CHECKS_FAILED, PULL_REQUEST_UPDATED.
+description: Use Mergify merge queue to queue/dequeue PRs, to monitor and inspect the queue, and to diagnose a dequeued PR — whether it is queued, why it was dequeued, where its CI failure is, and what to do next. ALWAYS use this skill when queuing or dequeuing a PR in the Mergify merge queue, checking its status, finding out why Mergify dequeued a PR, pausing/unpausing the Mergify merge queue, or debugging a merge the Mergify queue did not make. Triggers on mergify queue, @mergifyio queue, @mergifyio dequeue, Mergify merge queue, Mergify queue status, why did Mergify dequeue my PR, Mergify dequeue reason, Mergify queue pause, Mergify batch, Mergify bisecting, CHECKS_FAILED, PULL_REQUEST_UPDATED, CONFLICT_WITH_BASE_BRANCH, CONFLICT_WITH_PULL_AHEAD, Mergify merge conflict.
 ---
 
 # Mergify Merge Queue
@@ -147,14 +147,18 @@ REPO=owner/repo
 PR=1234
 FROM=$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-90d +%Y-%m-%dT%H:%M:%SZ)
 
-curl -sS -H "Authorization: Bearer ${MERGIFY_TOKEN:?set a Mergify token}" \
-  "https://api.mergify.com/v1/repos/$REPO/logs?pull_request=$PR&event_type=action.queue.leave&received_from=$FROM" \
-| jq 'if .events == [] then "no leave event in window — never queued (or aged out)"
+curl -sS -H @- \
+  "https://api.mergify.com/v1/repos/$REPO/logs?pull_request=$PR&event_type=action.queue.leave&received_from=$FROM" <<EOF |
+Authorization: Bearer ${MERGIFY_TOKEN:?set a Mergify token}
+EOF
+jq 'if .events == [] then "no leave event in window — never queued (or aged out)"
       else .events[0].metadata
            | {merged, dequeue_code, reason,
               failing: [.unsuccessful_checks[]? | {name, state, details_url}]}
       end'
 ```
+
+The header goes through standard input, so the key stays out of the process list and `set -x` traces.
 
 ```json
 {
@@ -240,8 +244,8 @@ Caveat: this comment can be turned off per repository (`merge_queue.status_comme
 | `CHECKS_TIMEOUT` | `checks_timeout` elapsed before conditions were satisfied | Check the reason's details: checks that **never reported** mean the check names in your conditions don't match what CI publishes (fix the config, not the PR). Checks **still running** mean CI is too slow or stuck |
 | `PULL_REQUEST_UPDATED` | Someone pushed to the PR while it was queued | Stop pushing to a queued PR. Requeue when the branch is final |
 | `DRAFT_PULL_REQUEST_CHANGED` | The queue's draft/batch PR got commits Mergify did not create | Never push to the merge-queue draft branch. Requeue the original PR |
-| `CONFLICT_WITH_BASE_BRANCH` | The PR conflicts with its base branch | Rebase or merge the base branch, resolve conflicts, then requeue |
-| `CONFLICT_WITH_PULL_AHEAD` | The PR conflicts with a PR ahead of it in the queue | Wait for the PR ahead to merge, then rebase and requeue |
+| `CONFLICT_WITH_BASE_BRANCH` | The PR conflicts with its base branch | Read the conflicting files in the reason, then see [Conflicts](#conflicts) before resolving by hand |
+| `CONFLICT_WITH_PULL_AHEAD` | The PR conflicts with a PR ahead of it in the queue | If the reason names PRs ahead, wait for them: once one merges, handle it as a conflict with the base branch; if they leave the queue unmerged, requeue as-is. If it says none of them changes the conflicting files, handle it as a conflict with the base branch now. See [Conflicts](#conflicts) |
 | `BRANCH_UPDATE_FAILED` | Mergify could not update the PR's head branch | Read the reason details, update the branch yourself, requeue |
 | `BASE_BRANCH_MISSING` / `BASE_BRANCH_CHANGED` | The base branch is gone or changed | Retarget the PR to a live base branch, then requeue |
 | `PR_MANUALLY_DEQUEUED` | A human removed it (command, dashboard, or API) | The reason names who and how. Requeue only once you know why they pulled it |
@@ -257,6 +261,15 @@ Caveat: this comment can be turned off per repository (`merge_queue.status_comme
 `PR_AHEAD_DEQUEUED`, `BATCH_AHEAD_FAILED`, `PR_WITH_HIGHER_PRIORITY_QUEUED`, `MERGE_QUEUE_RESET`, `SCHEDULED_FREEZE_STATUS_CHANGED`, `SPECULATIVE_CHECK_NUMBER_REDUCED`, `INTERMEDIATE_RESULTS_SKIPPED`, `CHECKS_RETRIED`, `BATCH_SCOPES_CHANGED`, `SCHEDULE_BLOCKED_AHEAD_YIELDED`, `PR_CHECKS_STOPPED_BECAUSE_MERGE_QUEUE_PAUSE`
 
 They arrive as `abort_code` on an `action.queue.checks_end` event (with `aborted: true`) rather than as `dequeue_code` on a leave event, and the check-run title reads `Checks restarted — …` or `Checks aborted — …` rather than `Dequeued — …`. The authoritative test for "did it actually leave the queue" is an `action.queue.leave` event with `merged: false` — not the presence of a code from this list.
+
+### Conflicts
+
+A conflict reason lists the files the merge stopped on under `Conflicting files:`. A file followed by `(<strategy> declined: both sides changed <name>)` was handed to a conflict resolver, which found both sides changing the same thing; `(<strategy> could not read it)` means it could not parse the file. A file with nothing after it was handed to no resolver.
+
+Then look for `conflict_resolvers` in the repository's Mergify configuration (see the `mergify-config` skill):
+
+- **No `conflict_resolvers`, or no entry covering the listed files**: the conflict is the author's to settle. Update the PR with its base branch (merge or rebase), resolve the conflicts, push, and requeue — a PR queued by a rule comes back on its own once updated, one queued with a command needs `mergify queue add <PR>` again. If the reason adds that automatic conflict resolution can merge a conflict like this one, tell the user: `conflict_resolvers` (Preview, available on request) settles such conflicts from then on, but adding it is the repository's choice, not a step to unblock one PR.
+- **An entry covers them**: first fetch the PR's head. When the queue rule merges or squashes and the entries settle every conflict, Mergify pushes the merge into the PR itself, so there may be nothing left to resolve. Otherwise what the reason lists is a conflict the strategies declined or could not reach: resolve those files by hand as above. A queue rule with `merge_method: rebase` resolves nothing, whatever the entries say.
 
 ## Checking Queue Status
 

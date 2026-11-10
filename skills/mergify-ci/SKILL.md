@@ -67,11 +67,12 @@ The primary CI command. Parses JUnit XML reports, checks quarantine status for f
 
 ```bash
 mergify ci junit-process \
-  --token "$MERGIFY_TOKEN" \
   --repository owner/repo \
   --tests-target-branch main \
   path/to/junit-results.xml
 ```
+
+The key is read from `MERGIFY_TOKEN`: set it in the job's environment from a secret rather than passing `--token`, which would put it in the process list.
 
 `FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Always quote the pattern so Mergify expands it rather than the shell — this is the recommended approach for large, sharded test suites.
 
@@ -143,7 +144,7 @@ Sources detected (in priority order): merge queue context, GitHub pull request e
 
 On a Jenkins change request build (`CHANGE_ID` set by a multibranch pipeline) that is not a merge queue draft (below), the base is the branch the pull request targets (`CHANGE_TARGET`), printed as the commit `origin/<branch>` names, and the head is `HEAD`. Jenkins fetches `origin/<branch>` when it merges the pull request into its target, and checks out the pull request alone otherwise: `git-refs` then fetches the target branch from `origin`, with the history it shares with `HEAD`, and fails when it cannot. That `git fetch` needs the repository's credentials in the step.
 
-The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite and Jenkins builds of the branch, so a merge queue batch a CI builds as a branch, by a `push` trigger or a branch job, rather than as its draft pull request, gets the batch's checking base too. On a Jenkins branch build, the branch is `GIT_BRANCH`, or `BRANCH_NAME` in a scripted pipeline, which does not export `GIT_BRANCH`, and the head is `HEAD`. On a Jenkins change request, the branch is the one it comes from (`CHANGE_BRANCH`), unless that is a fork's (`CHANGE_FORK`), and the head is the commit the note is on: `HEAD`, or its first parent when Jenkins merged a target that moved on since into the draft. The base, the commit the batch was built on, is fetched from `origin` when a shallow clone lacks it, and `git-refs` fails when it cannot. The note's `git fetch` needs the repository's credentials in the step; without them the build is read as any other change request or branch build. A push that creates a branch has no previous commit, so its base is the default branch.
+The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite and Jenkins builds of the branch, so a merge queue batch a CI builds as a branch, by a `push` trigger or a branch job, rather than as its draft pull request, gets the batch's checking base too. On a Jenkins branch build, the branch is `GIT_BRANCH`, or `BRANCH_NAME` in a scripted pipeline, which does not export `GIT_BRANCH`, and the head is `HEAD`. On a Jenkins change request, the branch is the one it comes from (`CHANGE_BRANCH`), unless that is a fork's (`CHANGE_FORK`), and the head is the commit the note is on: the commit Jenkins checked out (`GIT_COMMIT`, else `HEAD`), or its first parent when Jenkins merged a target that moved on since into the draft. The base, the commit the batch was built on, is fetched from `origin` when a shallow clone lacks it, and `git-refs` fails when it cannot. The note's `git fetch` needs the repository's credentials in the step; without them the build is read as any other change request or branch build. A push that creates a branch has no previous commit, so its base is the default branch.
 
 On a GitHub `push` that did not fast-forward (the event's `forced`), such as a push back to an earlier commit, the head is a commit `git-refs` makes in the local clone: the pushed commit's files, with the base, the commit the push replaced, as its only parent. Its merge base with the base is the base, so the `nx show projects --affected --base --head` call above, `git diff base...head` and the other tools that compare from the merge base see every file the push changed, a rollback's included. `git-refs` fetches the base by its SHA when the clone lacks it, and prints the pushed commit with a warning when it cannot, or out of a clone. No ref names that head and no other clone has it: run `mergify ci git-refs` in the clone that compares, where it makes the same commit, rather than passing its head to another job.
 
@@ -180,7 +181,7 @@ A renamed file counts against **both** of its paths, same as the engine: `git mv
 
 Sends scopes tied to a pull request to the Mergify API. Used when scopes are determined manually or from a file rather than auto-detected.
 
-The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, or `CIRCLE_SHA1`); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), Jenkins, any other CI. On Jenkins, `GIT_COMMIT` is the head only when the GitHub Branch Source plugin builds "The current pull request revision", the default for sources created since 2023; a source that merges the pull request into its target branch makes `GIT_COMMIT` that merge. The pull request number is detected on Jenkins (`CHANGE_ID`), so `--head-sha` is the only flag a Jenkins change request build needs. When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
+The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, `CIRCLE_SHA1`, or a Jenkins pull request build's checkout); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), any other CI. A Jenkins multibranch pull request build needs no flag: the number comes from `CHANGE_ID`, and the head is the commit checked out (`GIT_COMMIT`, else `HEAD`) or, when the GitHub Branch Source plugin merges the pull request into its target branch, the first parent of the merge Jenkins made. No head is detected where git cannot read the checkout, such as a container without its `.git`, nor on an agent that merges with JGit, whose merge Jenkins does not make under its own name: pass `--head-sha` with the pull request's head there, or switch the source's strategy to "The current pull request revision". When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
 Needs a `ci` key — an `admin` key or a user credential gets a `403`. See
 [Authentication](#authentication).
@@ -212,7 +213,7 @@ mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 - `--scope` / `-s` -- Scope name (repeatable)
 - `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
 - `--scopes-file` -- Plain-text file with one scope per line
-- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite and CircleCI)
+- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite, CircleCI and Jenkins pull request builds)
 - `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
 
 ## Tests Show (`tests show`)
@@ -448,7 +449,7 @@ Outputs the current build's merge queue batch metadata as JSON. Reads the `refs/
 It reads the note `ci git-refs` reads, fetching that branch's notes ref alone. On a pull request build it reads no other:
 
 - On a GitHub Actions pull request event (`pull_request`, `pull_request_target`, a review), the note for the pull request's branch on its head (`pull_request.head`), so the default `actions/checkout` of a `pull_request` event, GitHub's merge of the draft into its base, is fine. A pull request from a fork gets none.
-- On a Jenkins change request (`CHANGE_ID` set), the note for the branch the change request comes from (`CHANGE_BRANCH`), on `HEAD`, or on its first parent when `HEAD` is a merge, as when Jenkins merged a target that moved on since into the draft. A fork's change request (`CHANGE_FORK`) gets none.
+- On a Jenkins change request (`CHANGE_ID` set), the note for the branch the change request comes from (`CHANGE_BRANCH`), on the commit Jenkins checked out (`GIT_COMMIT`, else `HEAD`), or on the first parent of a merge, as when Jenkins merged a target that moved on since into the draft. A fork's change request (`CHANGE_FORK`) gets none.
 
 On a branch build it reads the note for the branch built, on the commit built: the pushed branch on GitHub Actions `push`, `BUILDKITE_BRANCH` on `BUILDKITE_COMMIT` on Buildkite, `GIT_BRANCH` (else `BRANCH_NAME`) on `HEAD` on a Jenkins branch build. Without that note, it reads the note on `HEAD`, as on any other build.
 
@@ -472,7 +473,7 @@ This command is useful in CI workflows that need to know whether the current run
 jobs:
   test:
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run tests
         run: pytest --junitxml=results.xml
       - name: Upload and evaluate
@@ -489,7 +490,7 @@ jobs:
     outputs:
       scopes: ${{ steps.scopes.outputs.scopes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: scopes
