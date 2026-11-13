@@ -93,7 +93,7 @@ The key is read from `MERGIFY_TOKEN`: set it in the job's environment from a sec
 4. Prints a summary: tests run, failures, quarantined vs blocking
 5. Exits with code 0 if all failures are quarantined, code 1 if any are blocking
 6. If `--test-exit-code` is non-zero but no test failures are found, exits with code 1 (silent failure detection)
-7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (refused by the schema check, or HTTP 4xx except 408/429, e.g. a token without CI Insights access) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
+7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (refused by the schema check, or HTTP 4xx except 408/429, e.g. a token without access to the repository, or Test Engine turned off for it: the annotation then gives Mergify's reason) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
 
 **GitHub Actions example:**
 ```yaml
@@ -287,7 +287,7 @@ reached Mergify — open the job in your CI to see whether it ran, and read its
 upload output (a plugin that failed before sending, or a refused upload,
 shows there). A name you did not expect, or several jobs under one name,
 means the job name sent is not the one you meant: set `MERGIFY_TEST_JOB_NAME`.
-A repository that refuses every upload (CI Insights not enabled on it) says
+A repository that refuses every upload (Test Engine turned off for it) says
 so above the list (`test_results_ingestion` in `--json`).
 
 Each job reads from its latest CI run: a commit run on push and on its pull

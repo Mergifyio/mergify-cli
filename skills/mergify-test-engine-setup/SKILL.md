@@ -151,8 +151,8 @@ unless Dependabot's list already has it: Dependabot's pull requests run the
 tests but never see Actions secrets, even organization ones. On another
 CI, the CI reference's "The key" section says where it goes.
 
-The repository also needs **CI Insights enabled** on the Repositories page of
-the Mergify dashboard. Without it, uploads are refused while CI stays green.
+The repository also needs **Test Engine turned on** in the Mergify dashboard.
+Without it, uploads are refused while CI stays green.
 
 ## 9. Open the pull request
 
