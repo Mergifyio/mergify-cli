@@ -98,6 +98,9 @@ above fails and says how to get one. Run `mergify auth login`, or set
 `mergify ci` skips step 3. Those endpoints require an organization
 application key, which is what `MERGIFY_TOKEN` holds in a CI job; the
 per-user credential `mergify auth login` mints is refused there by design.
+With an application key in `MERGIFY_TOKEN`, `mergify auth status` names the
+key, its permissions and when it expires: a refused request never says which
+permission it lacked.
 
 `mergify stack` also calls the **GitHub API** directly, and resolves that
 token separately (`--token`, `MERGIFY_TOKEN`, `GITHUB_TOKEN`, `gh auth

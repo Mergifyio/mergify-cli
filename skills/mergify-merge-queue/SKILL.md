@@ -1,6 +1,6 @@
 ---
 name: mergify-merge-queue
-description: Use Mergify merge queue to queue/dequeue PRs, to monitor and inspect the queue, and to diagnose a dequeued PR — whether it is queued, why it was dequeued, where its CI failure is, and what to do next. ALWAYS use this skill when queuing or dequeuing a PR in the Mergify merge queue, checking its status, finding out why Mergify dequeued a PR, pausing/unpausing the Mergify merge queue, or debugging a merge the Mergify queue did not make. Triggers on mergify queue, @mergifyio queue, @mergifyio dequeue, Mergify merge queue, Mergify queue status, why did Mergify dequeue my PR, Mergify dequeue reason, Mergify queue pause, Mergify batch, Mergify bisecting, CHECKS_FAILED, PULL_REQUEST_UPDATED, CONFLICT_WITH_BASE_BRANCH, CONFLICT_WITH_PULL_AHEAD, Mergify merge conflict.
+description: Use Mergify merge queue to queue/dequeue PRs, to monitor and inspect the queue, to diagnose a dequeued PR — whether it is queued, why it was dequeued, where its CI failure is, and what to do next — and to decide whether a change to a PR already in the queue is worth pushing now. ALWAYS use this skill when queuing or dequeuing a PR in the Mergify merge queue, checking its status, finding out why Mergify dequeued a PR, about to push, amend or rebase a PR that is in the Mergify merge queue, pausing/unpausing the Mergify merge queue, or debugging a merge the Mergify queue did not make. Triggers on mergify queue, @mergifyio queue, @mergifyio dequeue, Mergify merge queue, Mergify queue status, why did Mergify dequeue my PR, Mergify dequeue reason, push to a PR in the Mergify merge queue, review comment on a PR in the Mergify merge queue, Mergify queue pause, Mergify batch, Mergify bisecting, CHECKS_FAILED, PULL_REQUEST_UPDATED, CONFLICT_WITH_BASE_BRANCH, CONFLICT_WITH_PULL_AHEAD, Mergify merge conflict.
 ---
 
 # Mergify Merge Queue
@@ -45,6 +45,45 @@ The same actions are available as **comments on the pull request**:
 `@mergifyio requeue` is accepted, but it is a deprecated alias that runs the same command as `@mergifyio queue` — there is no separate requeue behavior. Post `@mergifyio queue`.
 
 When Mergify processes the comment, it adds a 👍 (thumbs up) reaction to the comment to acknowledge receipt. After queuing, use `mergify queue show <PR_NUMBER>` to watch the PR's status as it progresses through the queue.
+
+## Pushing to a queued PR
+
+Any new commit on a queued PR's head takes it out of the queue: a push, an amend, a rebase, GitHub's **Update branch** button, a suggestion accepted on GitHub. Only the merge queue's own updates of the branch do not count. A change to make on a queued PR — a late review comment, a fix someone asked for, a rebase — is therefore a trade-off between what the push costs the PR and what holding the change back costs. Make that call **before** pushing: `PULL_REQUEST_UPDATED` in the [reason table](#dequeue-reasons-and-what-to-do-next) is what comes after.
+
+Start with `mergify queue show <PR>`. A PR that is not queued can take the push, with one catch: a push also cancels a queue request (`queue add`, `@mergifyio queue`) still waiting for the queue conditions, so request it again after the push.
+
+### What a push costs
+
+- **Its checks.** The PR leaves the queue with `PULL_REQUEST_UPDATED` and the CI the queue ran on it is lost. Back in the queue, it is checked again from the start.
+- **Other PRs' checks.** The PRs tested in the same batch, and those whose checks were built on top of it, restart theirs (`PR_AHEAD_DEQUEUED`).
+- **Its eligibility.** The new head needs its own CI green and the queue conditions met again. Where approvals are dismissed on push (a branch protection setting, or Mergify's `dismiss_reviews` action), it needs a new approval first.
+- **Its queue request**, when it was queued with `mergify queue add`, `@mergifyio queue` or the requeue checkbox: it stays out until queued again. A PR queued by a rule (a `queue` action in `pull_request_rules`, or `auto_merge_conditions`) comes back on its own once those conditions match on the new head.
+
+The cost grows with how far the PR has gone: small while it waits with no checks running, largest while its checks run in a batch with other PRs or when the queue's CI is long. `queue show` gives its position and CI state.
+
+### What holding the change back costs
+
+- The queued head merges as it is, and the change goes into a follow-up PR with its own review, CI and pass through the queue.
+- Until that follow-up merges, the base branch carries whatever the change fixes, and every PR merged meanwhile builds on it.
+- Nothing is saved when the queued head is going to fail anyway (`queue show` lists its checks failing): it leaves with `CHECKS_FAILED` and needs the push regardless.
+
+### Deciding
+
+| The change | Do |
+|---|---|
+| Fixes something that must not reach the base branch: a bug, a broken build or test, a leaked secret, a blocking review comment | `mergify queue remove <PR>` **first**, since the queue can merge the PR while you write the fix. Then push the fix and requeue |
+| Fixes a failure the queued head will hit in the queue's checks anyway | Push it |
+| Has to merge together with the PR: an interface change and its callers, a migration and the code that needs it | Push it |
+| Improves code that is correct as queued: a nit, a rename, a comment, a non-blocking suggestion, a refactor | Leave the PR in the queue and make the change in a follow-up PR |
+| Brings the branch up to date with its base branch | Don't push it. The queue tests the PR against the latest base branch itself, so a rebase or a merge of the base branch only dequeues it. Update it only once it leaves with `CONFLICT_WITH_BASE_BRANCH`: see [Conflicts](#conflicts) |
+
+When the case is not clear and someone else asked for the change, tell them what the push costs and let them choose between this PR and a follow-up rather than dequeuing it for them.
+
+In a Mergify stack, a new commit on top becomes a new PR and leaves the queued ones alone. Amending a commit changes its PR and every PR above it, and each of those that is queued leaves the queue.
+
+### After pushing
+
+Make every push first, then requeue once with `mergify queue add <PR>`. The request waits for the queue conditions to match on the new head, so it can go right after the last push, but a push made after it cancels it. Confirm with `mergify queue show <PR>`. If a rule already put the PR back, `queue add` is refused with `PULL_REQUEST_ALREADY_QUEUED`: there is nothing more to do.
 
 ## Commands
 
@@ -240,9 +279,9 @@ Caveat: this comment can be turned off per repository (`merge_queue.status_comme
 |---|---|---|
 | `PR_MERGED` | Merged by the queue | Nothing — this is success |
 | `PR_MANUALLY_MERGED` | Merged outside the queue | Nothing |
-| `CHECKS_FAILED` | Required checks failed on the merge commit | Read `unsuccessful_checks[].details_url`, fix the CI. Pushing a fix requeues it automatically once conditions match again; if it was flaky, requeue as-is with `mergify queue add <PR>` (or `@mergifyio queue`) |
+| `CHECKS_FAILED` | Required checks failed on the merge commit | Read `unsuccessful_checks[].details_url`, fix the CI, push the fix, then requeue with `mergify queue add <PR>` (see [After pushing](#after-pushing)). If it was flaky, requeue as-is with `mergify queue add <PR>` (or `@mergifyio queue`) |
 | `CHECKS_TIMEOUT` | `checks_timeout` elapsed before conditions were satisfied | Check the reason's details: checks that **never reported** mean the check names in your conditions don't match what CI publishes (fix the config, not the PR). Checks **still running** mean CI is too slow or stuck |
-| `PULL_REQUEST_UPDATED` | Someone pushed to the PR while it was queued | Stop pushing to a queued PR. Requeue when the branch is final |
+| `PULL_REQUEST_UPDATED` | A new commit reached the PR's head while it was queued: a push, a rebase, GitHub's Update branch | Requeue with `mergify queue add <PR>` once the branch is final; a PR queued by a rule comes back on its own. Before the next push to a queued PR, see [Pushing to a queued PR](#pushing-to-a-queued-pr) |
 | `DRAFT_PULL_REQUEST_CHANGED` | The queue's draft/batch PR got commits Mergify did not create | Never push to the merge-queue draft branch. Requeue the original PR |
 | `CONFLICT_WITH_BASE_BRANCH` | The PR conflicts with its base branch | Read the conflicting files in the reason, then see [Conflicts](#conflicts) before resolving by hand |
 | `CONFLICT_WITH_PULL_AHEAD` | The PR conflicts with a PR ahead of it in the queue | If the reason names PRs ahead, wait for them: once one merges, handle it as a conflict with the base branch; if they leave the queue unmerged, requeue as-is. If it says none of them changes the conflicting files, handle it as a conflict with the base branch now. See [Conflicts](#conflicts) |

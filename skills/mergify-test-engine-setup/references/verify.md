@@ -20,9 +20,9 @@ mergify tests runs --sha "$(git rev-parse HEAD)" --json   # HEAD = the commit yo
 
 What to read in the JSON:
 
-- `test_results_ingestion`: `not_enabled` means CI Insights is off on the
-  repository and Mergify refuses every upload: the user enables it on the
-  Repositories page of the Mergify dashboard. `paused` means Mergify is not
+- `test_results_ingestion`: `not_enabled` means Test Engine is turned off
+  for the repository and Mergify refuses every upload: the user turns it on
+  in the Mergify dashboard. `paused` means Mergify is not
   ingesting for the organization right now: say so and stop.
 - `pending_uploads` above 0: uploads still waiting to be ingested. Ask again
   in a minute.
@@ -183,10 +183,12 @@ nothing either.
 
 What to do on an error:
 
-- **`HTTP 422` … `CI Insights is not enabled on this repository`** (in the
-  `Error:` line, or `test_results_ingestion: not_enabled`): the user enables CI
-  Insights for the repository on the Repositories page of the Mergify
-  dashboard, then re-runs the job.
+- **`HTTP 422` with `TEST_RESULTS_INGESTION_NOT_ENABLED`, `Test Engine is
+  turned off for this repository`, or, from an older Mergify, `CI Insights is
+  not enabled on this repository`** (in the `Error:` line or the upload's
+  details, or `test_results_ingestion: not_enabled`): Test Engine is off for
+  the repository. The user turns it on in the Mergify dashboard (the refusal
+  links the page), then re-runs the job.
 - **No token** (`MERGIFY_TOKEN is not set`; before 2026.10.6 `No token
   configured` or `WARNING: MERGIFY_TOKEN is not set`): the secret is not
   stored yet, or not passed to that step. Check the step's `env`; if it is
