@@ -142,7 +142,7 @@ for run in $(gh run list --commit "$sha" --json databaseId --jq '.[].databaseId'
   gh run view "$run" --json jobs --jq '.jobs[]|[.databaseId,.name,.conclusion]|@tsv'
 done
 gh api --allow-escape-sequences repos/<owner>/<repository>/actions/jobs/<job id>/logs \
-  | grep -n -E "Test run ID|Run ID:|report uploaded|upload this run|Failed to upload|is deprecated; set|No token configured|MERGIFY_TOKEN is not set|MERGIFY_TEST_RUN_ID"
+  | grep -n -E "Test run ID|Run ID:|report uploaded|upload this run|Failed to upload|is deprecated; set|No token configured|MERGIFY_TOKEN is not set|ID token|MERGIFY_TEST_RUN_ID"
 ```
 
 - The jobs API returns a finished job's log even while GitHub still shows the
@@ -159,7 +159,8 @@ From 2026.10.6, every plugin ends its run with a `Mergify CI` section (RSpec:
 |---|---|
 | `Test run ID: … (use it when contacting Mergify support)`, and no "couldn't upload" line | **success** |
 | `Mergify couldn't upload this run's test results, so Test Engine won't show this run.` then `Error: …` | **error**: the upload failed (the run ID can still print) |
-| `Mergify won't upload this run's test results: MERGIFY_TOKEN is not set.` | **error**: no token (missing or empty) |
+| `Mergify won't upload this run's test results: MERGIFY_TOKEN is not set.` | **error**: no token (missing or empty), and no ID token to exchange |
+| `Mergify won't upload this run's test results: MERGIFY_TOKEN is not set, and the job's ID token could not be exchanged for a Mergify token.` then `Error: …` | **error**: OIDC, the exchange failed or Mergify refused it, for the reason the `Error:` line gives |
 | `Mergify won't upload this run's test results: the repository is unknown.` | **error**: the CI variables did not reach the tests (`containers.md`) |
 | `… is deprecated; set … instead.` | a warning: rename the variable |
 
@@ -192,7 +193,22 @@ What to do on an error:
 - **No token** (`MERGIFY_TOKEN is not set`; before 2026.10.6 `No token
   configured` or `WARNING: MERGIFY_TOKEN is not set`): the secret is not
   stored yet, or not passed to that step. Check the step's `env`; if it is
-  there, the user stores `MERGIFY_TOKEN` and re-runs the job.
+  there, the user stores `MERGIFY_TOKEN` and re-runs the job. A job meant to
+  use OIDC that prints only this found no ID token: it lacks `id-token: write`
+  (for a reusable workflow, check the calling job), it runs in a container
+  that was not passed `ACTIONS_ID_TOKEN_REQUEST_URL` and
+  `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, its plugin is older than 2026.11.2, or the
+  run is for a fork's pull request.
+- **ID token refused** (`… could not be exchanged for a Mergify token.` then
+  `Error: Mergify refused the job's ID token: …`): `<organization> has no
+  trust policy` or `No trust policy of <organization> matches this job`, then
+  the reason names the exchange: read it with
+  `mergify oidc exchanges show <id> --org <owner>`, which says which line of
+  each policy refused the job, and widen a policy or write one with the
+  user's go (SKILL.md, step 8). `Mergify's GitHub App has no access to …`:
+  the user adds the repository to the app's installation. `Mergify could not
+  exchange the job's ID token` alone: Mergify or GitHub was unreachable, run
+  the job again.
 - **An error from the plugin itself** (for example `Failed to flush spans`):
   a plugin bug, not a setup mistake. Report it with the line, and do not call
   that job set up.

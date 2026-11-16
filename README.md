@@ -175,6 +175,11 @@ Every command group maps to a section of the
   provider. [Docs](https://docs.mergify.com/test-engine/)
 - **`mergify tests`** — Look up test health and manage the flaky-test
   quarantine. [Docs](https://docs.mergify.com/test-engine/)
+- **`mergify oidc`** — Write the trust policies that let GitHub Actions jobs
+  reach Mergify with their ID token instead of a stored key, and read why a
+  job's exchange was refused. Takes the organization with `--org`, else the
+  owner of the repository.
+  [Docs](https://docs.mergify.com/integrations/gha/oidc/)
 - **`mergify freeze`** — Schedule merge freezes for release windows and
   maintenance. [Docs](https://docs.mergify.com/merge-protections/freeze/)
 - **`mergify config`** — Validate your configuration and simulate actions
