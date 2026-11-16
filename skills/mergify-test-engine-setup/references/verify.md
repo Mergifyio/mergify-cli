@@ -10,9 +10,13 @@ by job, for exactly the jobs you changed.
 entry per job name they arrived under, on every CI provider, without reading
 any CI log. It is the check to use whenever the `mergify` CLI is installed
 (2026.10.8 or later) and can authenticate: `MERGIFY_TOKEN` (any application
-key), or the credential `mergify auth login` stored. If the command is missing or refuses to
-authenticate, do not install or log in for the user: read the CI logs instead
-(below), and give the user the command to run themselves.
+key), or the credential `mergify auth login` stored. If the command is missing,
+do not install it for the user: read the CI logs instead (below), and give the
+user the command to run themselves. If it says `no Mergify credential found`,
+do not run `mergify auth login` yourself either: it waits until a person
+approves it in a browser. Ask the user to run it (in Claude Code, by typing
+`! mergify auth login` at the prompt) and run `mergify tests runs` again once
+they say it's done, or read the CI logs instead if they would rather not log in.
 
 ```bash
 mergify tests runs --sha "$(git rev-parse HEAD)" --json   # HEAD = the commit you pushed
@@ -99,8 +103,10 @@ done
 jq -r '.jobs[] | [.pipeline_name, .job_name, .test_results] | @tsv' /tmp/mergify-runs.json
 ```
 
-- A run on a pull request from a branch of the same repository receives the
-  repository's secrets, so the upload is real.
+- A run on a pull request from a branch of the same repository gets an ID
+  token and the repository's secrets, so the upload is real once a trust
+  policy matches the job (a refused exchange only warns in a plugin job: read
+  the log, SKILL.md step 8).
 - If you cannot finish (rate limit, a job still going after about 20 minutes),
   report the remaining jobs as **not verified yet**, with the commands above
   for the user to run.
@@ -152,8 +158,9 @@ gh api --allow-escape-sequences repos/<owner>/<repository>/actions/jobs/<job id>
   it is installed and authenticated; otherwise give the user the traces below
   to look for.
 
-From 2026.10.6, every plugin ends its run with a `Mergify CI` section (RSpec:
-`Mergify CI:`) holding the same lines:
+Every plugin ends its run with a `Mergify Test Engine` section (RSpec:
+`Mergify Test Engine:`, Minitest: `# Mergify Test Engine:`; earlier releases,
+from 2026.10.6, say `Mergify CI` there) holding the same lines:
 
 | Line | Meaning |
 |---|---|
@@ -190,15 +197,15 @@ What to do on an error:
   details, or `test_results_ingestion: not_enabled`): Test Engine is off for
   the repository. The user turns it on in the Mergify dashboard (the refusal
   links the page), then re-runs the job.
-- **No token** (`MERGIFY_TOKEN is not set`; before 2026.10.6 `No token
-  configured` or `WARNING: MERGIFY_TOKEN is not set`): the secret is not
-  stored yet, or not passed to that step. Check the step's `env`; if it is
-  there, the user stores `MERGIFY_TOKEN` and re-runs the job. A job meant to
-  use OIDC that prints only this found no ID token: it lacks `id-token: write`
-  (for a reusable workflow, check the calling job), it runs in a container
-  that was not passed `ACTIONS_ID_TOKEN_REQUEST_URL` and
-  `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, its plugin is older than 2026.11.2, or the
-  run is for a fork's pull request.
+- **No credential** (`MERGIFY_TOKEN is not set`; before 2026.10.6 `No token
+  configured` or `WARNING: MERGIFY_TOKEN is not set`): on GitHub Actions, the
+  job found no ID token: it lacks `id-token: write` (for a reusable workflow,
+  check the calling job), it runs in a container that was not passed
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, its
+  plugin is older than 2026.11.2, or the run is for a fork's pull request.
+  With a key, the secret is not stored yet, or not passed to that step: check
+  the step's `env`; if it is there, the user stores `MERGIFY_TOKEN` and
+  re-runs the job.
 - **ID token refused** (`… could not be exchanged for a Mergify token.` then
   `Error: Mergify refused the job's ID token: …`): `<organization> has no
   trust policy` or `No trust policy of <organization> matches this job`, then

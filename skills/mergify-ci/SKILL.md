@@ -41,9 +41,11 @@ CLI calls, the two lists share only the quarantine list.
 | `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
 | `admin` | Reading test health, the quarantine *list*, and mutating the quarantine. Not trace upload, not `scopes-send`. |
 
-Trace upload and `scopes-send` take a `ci` key only: an `admin` key or a
-user credential gets a `403`. Every other endpoint below that refuses a `ci`
-key accepts a user credential (`mergify auth login`) instead. `GITHUB_TOKEN`
+Trace upload and `scopes-send` take only a `ci` key, or on GitHub Actions the
+job's ID token ([below](#github-actions-jobs-need-no-key-oidc)): an `admin`
+key or a user credential gets a `403`. Every other endpoint below that refuses a `ci`
+key accepts a user credential (`mergify auth login`, which your user runs: see
+[below](#when-a-command-says-there-is-no-mergify-credential)) instead. `GITHUB_TOKEN`
 inside GitHub Actions is not a Mergify credential at all, so do not reach for
 it to clear one of these `403`s.
 
@@ -72,8 +74,8 @@ trades its GitHub ID token for a short-lived token that does what a `ci` key
 does, on its own repository only, when a trust policy of the organization
 matches the job: `ci junit-process`, `ci scopes-send` and the test framework
 plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that is set
-always wins. Writing a trust policy needs the Enterprise plan, and an
-organization admin or CI Admin: see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
+always wins. Writing a trust policy needs an organization admin or CI Admin:
+see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
 Fork pull requests get no ID token, as they get no secret. Jobs outside
 GitHub Actions keep a `ci` key.
 
@@ -88,7 +90,7 @@ mergify ci junit-process \
   path/to/junit-results.xml
 ```
 
-The key is read from `MERGIFY_TOKEN`: set it in the job's environment from a secret rather than passing `--token`, which would put it in the process list.
+On GitHub Actions, a job granted `id-token: write` needs no key (see [GitHub Actions jobs need no key](#github-actions-jobs-need-no-key-oidc)). On any other CI, the key is read from `MERGIFY_TOKEN`: set it in the job's environment from a secret rather than passing `--token`, which would put it in the process list.
 
 `FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Always quote the pattern so Mergify expands it rather than the shell — this is the recommended approach for large, sharded test suites.
 
@@ -110,21 +112,27 @@ The key is read from `MERGIFY_TOKEN`: set it in the job's environment from a sec
 5. Exits with code 0 if all failures are quarantined, code 1 if any are blocking
 6. If `--test-exit-code` is non-zero but no test failures are found, exits with code 1 (silent failure detection)
 7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (refused by the schema check, or HTTP 4xx except 408/429, e.g. a token without access to the repository, or Test Engine turned off for it: the annotation then gives Mergify's reason) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
+8. With no `MERGIFY_TOKEN`, a job whose ID token Mergify refuses (no trust policy matches it yet) or does not exchange carries on without Mergify: nothing is uploaded and no test is quarantined, so it exits as points 5 and 6 say with every failure blocking. The report says `MERGIFY_TOKEN is not set, skipping the test results upload and the quarantine check.`, followed by Mergify's reason when it refused, and so does a `::warning::` annotation on GitHub Actions; `$GITHUB_OUTPUT` gets `test_results_upload=rejected`. A Mergify that cannot answer the exchange is an outage instead, reported as in point 7
 
 **GitHub Actions example:**
 ```yaml
-- name: Run tests
-  id: tests
-  run: pytest --junitxml=results.xml || echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+jobs:
+  test:
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # ...
+      - name: Run tests
+        id: tests
+        run: pytest --junitxml=results.xml || echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
-- name: Process test results
-  if: always()
-  run: |
-    mergify ci junit-process \
-      --test-exit-code ${{ steps.tests.outputs.exit_code || 0 }} \
-      results.xml
-  env:
-    MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+      - name: Process test results
+        if: always() && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          mergify ci junit-process \
+            --test-exit-code ${{ steps.tests.outputs.exit_code || 0 }} \
+            results.xml
 ```
 
 ## Git References (`git-refs`)
@@ -199,8 +207,8 @@ Sends scopes tied to a pull request to the Mergify API. Used when scopes are det
 
 The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, `CIRCLE_SHA1`, or a Jenkins pull request build's checkout); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), any other CI. A Jenkins multibranch pull request build needs no flag: the number comes from `CHANGE_ID`, and the head is the commit checked out (`GIT_COMMIT`, else `HEAD`) or, when the GitHub Branch Source plugin merges the pull request into its target branch, the first parent of the merge Jenkins made. No head is detected where git cannot read the checkout, such as a container without its `.git`, nor on an agent that merges with JGit, whose merge Jenkins does not make under its own name: pass `--head-sha` with the pull request's head there, or switch the source's strategy to "The current pull request revision". When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
-Needs a `ci` key — an `admin` key or a user credential gets a `403`. See
-[Authentication](#authentication).
+Needs a `ci` key, or on GitHub Actions the job's ID token; an `admin` key or a
+user credential gets a `403`. See [Authentication](#authentication).
 
 ```bash
 # Send specific scopes
@@ -464,18 +472,16 @@ A GitHub Actions job gets a Mergify token for its ID token when one trust
 policy of its organization matches it, and a policy matches when each of its
 lines does: repositories, workflows, events and environments. Policies only
 allow, with no order and no deny, so a narrow one cannot hold back a broad one.
+OIDC is in Preview, open to every organization: it may still change.
 
 Every `mergify oidc` command takes the organization with `--org`, else the
 owner of the current repository, and the credential of one of its admins or CI
 Admins (`mergify auth login`), or an application key with the OIDC trust
 policies permission, and the repositories one to name repositories (an
-`admin` key has both); a `ci` key gets a `403`. Creating or editing a policy
-needs a plan that includes CI authentication with OIDC: without it Mergify
-answers HTTP 402, and the jobs keep a `ci` key. Listing, deleting and the
-exchanges never need it. Every command takes `--json`, which prints what
-Mergify answered; `exchanges list --json` puts the exchanges under
-`exchanges`, beside `since` and `truncated` (true when `--limit` left some
-out).
+`admin` key has both); a `ci` key gets a `403`. Every command takes `--json`,
+which prints what Mergify answered; `exchanges list --json` puts the exchanges
+under `exchanges`, beside `since` and `truncated` (true when `--limit` left
+some out).
 
 ```bash
 # Every policy, line by line.
@@ -559,15 +565,16 @@ This command is useful in CI workflows that need to know whether the current run
 ```yaml
 jobs:
   test:
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run tests
         run: pytest --junitxml=results.xml
       - name: Upload and evaluate
-        if: always()
+        if: always() && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository)
         run: mergify ci junit-process results.xml
-        env:
-          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
 ```
 
 ### Selective testing with scopes
@@ -589,6 +596,17 @@ jobs:
     steps:
       - run: pytest backend/
 ```
+
+## When a command says there is no Mergify credential
+
+On your user's machine, `no Mergify credential found` from `tests show`, `tests runs`, `tests quarantines` or `oidc` means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
+
+- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
+- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
+- Wait until they say it's done, then run the same command again.
+- Don't read another source instead (CI logs, the GitHub API) without asking them first.
+
+`ci junit-process` and `ci scopes-send` say something else when they find no credential: they need an application key in `MERGIFY_TOKEN` (or OIDC on GitHub Actions), which logging in does not provide.
 
 ## When a command or flag is missing
 

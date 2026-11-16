@@ -54,13 +54,14 @@ export default defineConfig({
   browser mode and in custom pools (Cloudflare's Workers pool), and a `runner`
   the configuration sets keeps running underneath. A custom `runner` that
   overrides `onBeforeRunTask` without calling `super` loses it: the
-  `Mergify CI` summary then names the project. Do not change that runner; say
+  `Mergify Test Engine` summary then names the project. Do not change that runner; say
   so in the pull request and in your final answer.
 
 ## CI
 
-- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step
-  that runs Vitest.
+- GitHub Actions: nothing to add on the step that runs Vitest, the job's
+  `id-token: write` is enough (`github-actions.md`). With a key,
+  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step.
 - Matrix: `MERGIFY_TEST_JOB_NAME` per leg (for example
   `test (node ${{ matrix.node-version }})`). `--shard` legs share one name.
 
@@ -68,10 +69,11 @@ export default defineConfig({
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key |
+| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set (was `VITEST_MERGIFY_ENABLE`) |
 | `MERGIFY_CI_DEBUG` | print the spans instead of uploading them |
 
 Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true npx vitest run` prints
-the spans and a `Mergify CI` summary.
+the spans and a `Mergify Test Engine` summary (`Mergify CI` in earlier
+releases).

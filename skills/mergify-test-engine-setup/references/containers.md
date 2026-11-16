@@ -1,9 +1,11 @@
 # Tests inside tox, Docker or Docker Compose
 
 tox, `docker run` and Docker Compose start the tests in an environment that
-does not inherit the CI job's variables. Pass through `MERGIFY_TOKEN`, `CI`,
-`MERGIFY_TEST_JOB_NAME` if you set it, and every variable the plugin reads to
-identify the run. tox's `pass_env` accepts globs (`GITHUB_*`); Docker Compose
+does not inherit the CI job's variables. Pass through the credential (on
+GitHub Actions, `ACTIONS_ID_TOKEN_REQUEST_URL` and
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, which GitHub sets in a job granted
+`id-token: write`; `MERGIFY_TOKEN` with a key), `CI`, `MERGIFY_TEST_JOB_NAME`
+if you set it, and every variable the plugin reads to identify the run. tox's `pass_env` accepts globs (`GITHUB_*`); Docker Compose
 (`environment:`), `docker run -e` and the Buildkite Docker Compose plugin need
 each name:
 
@@ -25,10 +27,6 @@ Jenkins: JENKINS_URL BUILD_ID BUILD_URL JOB_NAME BRANCH_NAME NODE_NAME GIT_URL
 
 - Pass them by name (`- GITHUB_SHA` in a Compose `environment:` list, or
   `-e GITHUB_SHA`), never by writing a value into a file.
-- **On GitHub Actions with OIDC** (no `MERGIFY_TOKEN`), pass
-  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` instead:
-  GitHub sets them in a job granted `id-token: write`, and without them the
-  plugin has no ID token to exchange.
 - **On GitHub Actions in a container**, also mount the file `GITHUB_EVENT_PATH`
   points to, at the same path: without it the run is recorded against the
   merge commit instead of the pull request's head commit.

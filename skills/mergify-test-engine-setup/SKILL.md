@@ -97,10 +97,10 @@ Node.js, **ask the user** before changing it, and set up everything else first.
 The framework and CI references give the exact steps. The rules that apply
 everywhere:
 
-- **Decide first how the jobs reach Mergify** (step 8): OIDC or a key. With
-  OIDC, a GitHub Actions job is granted `id-token: write` and gets no
-  `MERGIFY_TOKEN`: leave out the `MERGIFY_TOKEN` line a framework reference
-  gives, and follow the OIDC section of `references/github-actions.md`.
+- **How the jobs reach Mergify** (step 8): on GitHub Actions, with their ID
+  token (OIDC): each job is granted `id-token: write` and gets no
+  `MERGIFY_TOKEN` (`references/github-actions.md`). On another CI, or when
+  step 8 picks a key, with `MERGIFY_TOKEN`.
 - **`MERGIFY_TOKEN` comes from the CI's secret store**, never from a file.
   Never ask for its value, never write a token anywhere.
 - **The plugins report only when `CI` is `true`** (or their enable variable is
@@ -117,11 +117,11 @@ everywhere:
     environments);
   - per called workflow, when reusable workflows share a job id;
   - never per shard: shards of one suite share one name.
-- **Without a token** (fork pull requests; Dependabot's until its own secret is
-  stored), the plugins upload nothing and the tests run as usual. The JUnit
-  upload step needs a guard (`references/github-actions.md`). On Jenkins a
-  missing credential fails the stage (`references/jenkins.md`). With OIDC,
-  fork pull requests get no ID token either, and Dependabot's get one.
+- **Without a credential** (pull requests from forks get no ID token and no
+  secret; with a key, Dependabot's get none until its own secret is stored),
+  the plugins upload nothing and the tests run as usual. The JUnit upload step
+  needs a guard (`references/github-actions.md`). On Jenkins a missing
+  credential fails the stage (`references/jenkins.md`).
 
 ## 6. Keep everything else as it was
 
@@ -144,18 +144,22 @@ written. Check that the CI files still parse.
 
 ## 8. How the jobs reach Mergify
 
-**On GitHub Actions, prefer OIDC.** A job granted `id-token: write` with no
+**On GitHub Actions, OIDC.** A job granted `id-token: write` with no
 `MERGIFY_TOKEN` trades its GitHub ID token for a short-lived Mergify token,
 limited to its repository, when a trust policy of the organization matches
-it. Writing a policy needs the Enterprise plan and an organization admin or
-CI Admin. Decide with the `mergify` CLI (`mergify-ci` skill, OIDC Trust
-Policies), signed in as the user (`mergify auth status`; never log in for
-them):
+it: no secret to store, Dependabot's included. The plugins and `mergify ci`
+need release 2026.11.2 or later (raise an older pin or lock), and
+`mergifyio/gha-mergify-ci` v30 or later.
+Until a policy matches, Mergify refuses the job's ID token: the plugins upload
+nothing, and the JUnit upload step fails the job. An organization admin or CI
+Admin writes the policy. Check with the `mergify` CLI (`mergify-ci` skill, OIDC
+Trust Policies), signed in as the user (`mergify auth status`; never log in
+for them):
 
 1. `mergify oidc trust-policies list --org <owner>` shows each policy line by
    line, its repositories by name. A policy whose lines cover every job you
    changed (the repository, the events that start them, their workflows and
-   environments): use OIDC.
+   environments): nothing to write.
 2. No such policy: **ask the user before writing one**, since it decides which
    jobs of the organization get a token. Propose the narrowest that covers the
    jobs, usually
@@ -163,23 +167,22 @@ them):
    (CI events, any workflow, any environment), or
    `mergify oidc trust-policies update <id> --org <owner> --repository …` to
    add the repository to an existing one (list every repository it already
-   holds: the flags replace the line). With their go, run it. HTTP 402: the
-   organization's plan does not include it, use a key. HTTP 403: they are
-   neither an admin nor a CI Admin: give them the command for one, or use a
-   key.
+   holds: the flags replace the line). With their go, run it. HTTP 403: they
+   are neither an admin nor a CI Admin: give them the command to hand to one.
 3. Without the CLI, or when it cannot authenticate or read the policies, ask
-   the user whether the organization trusts its GitHub Actions jobs with OIDC.
-   If they do not know, use a key, and tell them OIDC replaces it on the
-   Enterprise plan.
+   the user whether a trust policy of the organization covers the
+   repository's GitHub Actions jobs. If none does, or they do not know, give
+   them the `create` command above for an organization admin or CI Admin.
 
-With OIDC, the plugins and `mergify ci` need release 2026.11.2 or later, and
-`mergifyio/gha-mergify-ci` its latest major. Then there is no secret to
-store, Dependabot's included.
+While no policy covers the jobs, open the pull request as a draft, and say in
+it that it leaves draft once the policy exists, with the command: its JUnit
+upload jobs fail until then. A user who would rather not wait uses a key.
 
-**The key**, on any other CI or without OIDC: the user creates a Mergify
-application key with the `ci` scope in the Mergify dashboard and stores it as
-`MERGIFY_TOKEN`. Before telling them it is missing,
-check what already exists (GitHub: repository secrets with
+**A key instead**, on any other CI, and on GitHub Actions when the user asks
+for one rather than a trust policy: the user creates a Mergify application
+key with the `ci` scope in the Mergify dashboard and stores it as
+`MERGIFY_TOKEN`. Before telling them it is missing, check what already exists
+(GitHub: repository secrets with
 `gh secret list --repo <owner>/<repository>`, organization secrets with
 `gh api repos/<owner>/<repository>/actions/organization-secrets --jq '.secrets[].name'`,
 Dependabot's with `gh secret list --app dependabot --repo <owner>/<repository>`).
@@ -197,8 +200,8 @@ Without it, uploads are refused while CI stays green.
 ## 9. Open the pull request
 
 One pull request with the change. Say per job what changed and why, which jobs
-cannot report and why, and what the user still has to do (the key or the trust
-policy, a Node.js upgrade they did not approve). Describe the lockfile change in words. Follow the
+cannot report and why, and what the user still has to do (the trust policy or
+the key, a Node.js upgrade they did not approve). Describe the lockfile change in words. Follow the
 repository's conventions for the commit message and the pull request.
 
 ## 10. Check that results arrive
