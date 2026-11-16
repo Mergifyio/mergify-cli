@@ -107,7 +107,7 @@ mergify freeze delete FREEZE_ID           # Delete a freeze
 
 ## Authentication
 
-All commands require a Mergify credential. Run `mergify auth login` once, or:
+All commands require a Mergify credential: the one `mergify auth login` stores (your user runs it, see [below](#when-a-command-says-there-is-no-mergify-credential)), or:
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--repository` / `-r` -- Repository full name (auto-detected from git remote)
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
@@ -223,6 +223,15 @@ mergify freeze create \
   -e "label=hotfix" \
   -e "label=security"
 ```
+
+## When a command says there is no Mergify credential
+
+`no Mergify credential found` means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
+
+- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
+- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
+- Wait until they say it's done, then run the same command again.
+- Don't do it some other way, or read another source, without asking them first.
 
 ## When a command or flag is missing
 
