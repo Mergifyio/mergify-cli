@@ -63,6 +63,12 @@ step, results upload but quarantined tests still fail the run.
   reports to Mergify, it renames every test: set it only if the user asks.
 - Tests in a Docker Compose service: load `containers.md`.
 - No `continue-on-error`: quarantine is applied by the `test` import.
+- Once the run is over, on a repository with flaky detection on, the reporter
+  reruns the tests it measures in a `playwright test` of its own (the same
+  configuration file, one worker, only its own reporter), so the step takes
+  longer, within a time budget. On a pull request, a new test it finds flaky
+  fails the step, though Playwright's summary lists it as passed. A run with
+  no configuration file reruns nothing.
 
 ## Variables
 

@@ -1,13 +1,13 @@
 ---
 name: mergify-ci
-description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, and retrieve merge queue metadata. ALWAYS use this skill when running `mergify ci` or `mergify tests` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, or reading Mergify merge queue CI context. Triggers on mergify ci, mergify tests, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info.
+description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, retrieve merge queue metadata, and write the OIDC trust policies that let GitHub Actions jobs reach Mergify without a key. ALWAYS use this skill when running `mergify ci`, `mergify tests` or `mergify oidc` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, reading Mergify merge queue CI context, or finding out why a job's ID token was refused. Triggers on mergify ci, mergify tests, mergify oidc, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info, trust policy, OIDC, id-token.
 ---
 
 # Mergify CI Commands
 
 ## Overview
 
-The `mergify ci` command group provides tools for CI pipelines: uploading JUnit test results to Mergify Test Engine, detecting git references for diff-based operations, managing CI scopes for selective testing, and retrieving merge queue batch metadata.
+The `mergify ci` command group provides tools for CI pipelines: uploading JUnit test results to Mergify Test Engine, detecting git references for diff-based operations, managing CI scopes for selective testing, and retrieving merge queue batch metadata. `mergify oidc` writes the trust policies that let a GitHub Actions job reach Mergify with its ID token instead of a key, and reads why a job was refused.
 
 ## Commands
 
@@ -24,6 +24,10 @@ mergify tests quarantines add NAME        # Add a test to the Test Engine quaran
 mergify tests quarantines remove NAME     # Remove a test from the Test Engine quarantine
 mergify tests quarantines get NAME        # Print a single quarantine by test name or id
 mergify tests quarantines list            # List the tests currently in the Test Engine quarantine
+mergify oidc trust-policies list          # List the organization's OIDC trust policies
+mergify oidc trust-policies create        # Write a trust policy (show, update, delete too)
+mergify oidc exchanges list               # List the latest ID token exchanges, and why one was refused
+mergify oidc exchanges show ID            # Show the exchange a refused job's log names
 ```
 
 ## Authentication
@@ -60,6 +64,18 @@ what an `admin` key carries. Per command:
 
 `ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
 no token at all.
+
+### GitHub Actions jobs need no key (OIDC)
+
+On GitHub Actions, a job granted `id-token: write` with no `MERGIFY_TOKEN`
+trades its GitHub ID token for a short-lived token that does what a `ci` key
+does, on its own repository only, when a trust policy of the organization
+matches the job: `ci junit-process`, `ci scopes-send` and the test framework
+plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that is set
+always wins. Writing a trust policy needs the Enterprise plan, and an
+organization admin or CI Admin: see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
+Fork pull requests get no ID token, as they get no secret. Jobs outside
+GitHub Actions keep a `ci` key.
 
 ## JUnit Processing (`junit-process`)
 
@@ -441,6 +457,77 @@ A null `issue_url` means no issue tracks the fix.
 
 **Exit codes:**
 - `0` -- Always, including an empty quarantine ("No quarantined tests found.").
+
+## OIDC Trust Policies (`mergify oidc`)
+
+A GitHub Actions job gets a Mergify token for its ID token when one trust
+policy of its organization matches it, and a policy matches when each of its
+lines does: repositories, workflows, events and environments. Policies only
+allow, with no order and no deny, so a narrow one cannot hold back a broad one.
+
+Every `mergify oidc` command takes the organization with `--org`, else the
+owner of the current repository, and the credential of one of its admins or CI
+Admins (`mergify auth login`), or an application key with the OIDC trust
+policies permission, and the repositories one to name repositories (an
+`admin` key has both); a `ci` key gets a `403`. Creating or editing a policy
+needs a plan that includes CI authentication with OIDC: without it Mergify
+answers HTTP 402, and the jobs keep a `ci` key. Listing, deleting and the
+exchanges never need it. Every command takes `--json`, which prints what
+Mergify answered; `exchanges list --json` puts the exchanges under
+`exchanges`, beside `since` and `truncated` (true when `--limit` left some
+out).
+
+```bash
+# Every policy, line by line.
+mergify oidc trust-policies list --org acme
+
+# The narrowest useful policy: one repository's CI jobs, on the CI events
+# (push, pull_request, merge_group, schedule, workflow_dispatch), any
+# workflow, any environment.
+mergify oidc trust-policies create --org acme --name "api CI" --repository api
+
+# Deploys only: one workflow, on push, in the production environment.
+mergify oidc trust-policies create --org acme --name "api deploys" \
+  --repository api --workflow .github/workflows/deploy.yml \
+  --event push --environment production
+
+# Change only the lines named; the others keep their values.
+mergify oidc trust-policies update 12 --org acme --repository api --repository web
+
+mergify oidc trust-policies delete 12 --org acme
+```
+
+A line no flag names is the default on `create`: every repository, any
+workflow, the CI events, any environment. `--name` alone therefore trusts every
+CI job of the organization: ask the user before writing a policy, it decides
+which jobs get a token.
+
+**Lines:**
+- `--repository NAME` (repeatable) -- only these repositories; `--except-repository NAME` -- every repository but these; `--all-repositories`. `NAME` or `OWNER/NAME`, of the organization's repositories Mergify's GitHub App can access.
+- `--workflow PATH` (repeatable) -- the workflow file of the job's own repository its run started from, `.github/workflows/ci.yml`, at any ref; `--reusable-workflow OWNER/REPOSITORY/PATH[@REF]` -- a reusable workflow the job runs, even one of its own repository (`uses: ./.github/workflows/...`), optionally pinned to a full ref (`refs/heads/main`) or a commit sha; `--any-workflow`.
+- `--event EVENT` (repeatable) -- replaces the CI events; `--any-event`. `pull_request_target`, `workflow_run` and `issue_comment` run with the repository's identity for people who cannot push to it: add them only when the user asks.
+- `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
+
+**Why a job was refused.** The job's log prints Mergify's reason, which names
+the exchange: `The exchange report lists it as exchange 345`. Read it:
+
+```bash
+mergify oidc exchanges show 345 --org acme
+mergify oidc exchanges list --org acme --result refused --repository api --since 1d
+```
+
+A refused exchange lists, per policy, the first line the job did not match
+(`policy 12  events: pull_request_target is not one of its events`): widen that
+policy, or write another, with the user's go. `exchanges list` reads the last
+7 days by default (`--since`, up to the 90 days the report keeps), latest
+first, 20 at most (`--limit`). The refusal reasons:
+
+| Reason | What to do |
+| --- | --- |
+| `no_policy` | The organization has no trust policy: write one. |
+| `no_matching_policy` | No policy matches the job: see each policy's line above. |
+| `repository_not_installed` | Mergify's GitHub App cannot access the repository: the user adds it to the app's installation. `--repository` cannot name such a repository: list without it. |
+| `audience_mismatch` | The job asked for a token for another Mergify: check `MERGIFY_API_URL`. |
 
 ## Queue Info (`queue-info`)
 

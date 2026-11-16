@@ -25,6 +25,10 @@ Jenkins: JENKINS_URL BUILD_ID BUILD_URL JOB_NAME BRANCH_NAME NODE_NAME GIT_URL
 
 - Pass them by name (`- GITHUB_SHA` in a Compose `environment:` list, or
   `-e GITHUB_SHA`), never by writing a value into a file.
+- **On GitHub Actions with OIDC** (no `MERGIFY_TOKEN`), pass
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` instead:
+  GitHub sets them in a job granted `id-token: write`, and without them the
+  plugin has no ID token to exchange.
 - **On GitHub Actions in a container**, also mount the file `GITHUB_EVENT_PATH`
   points to, at the same path: without it the run is recorded against the
   merge commit instead of the pull request's head commit.

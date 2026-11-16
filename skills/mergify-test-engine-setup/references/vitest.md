@@ -49,9 +49,13 @@ export default defineConfig({
 - **`test.projects`**: every project reports under the same job name. Two
   projects running the same files (Node and browser) report each test twice
   under one identity. Do not split the CI job yourself: tell the user.
-- No `continue-on-error`: quarantine is applied by a runner the reporter
-  installs (not in browser mode, and not when the configuration sets its own
-  `runner`; the reporter logs a warning then).
+- No `continue-on-error`: the reporter adds a setup file to every project, so
+  quarantine applies in a single configuration, under `test.projects`, in
+  browser mode and in custom pools (Cloudflare's Workers pool), and a `runner`
+  the configuration sets keeps running underneath. A custom `runner` that
+  overrides `onBeforeRunTask` without calling `super` loses it: the
+  `Mergify CI` summary then names the project. Do not change that runner; say
+  so in the pull request and in your final answer.
 
 ## CI
 
@@ -69,7 +73,5 @@ export default defineConfig({
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set (was `VITEST_MERGIFY_ENABLE`) |
 | `MERGIFY_CI_DEBUG` | print the spans instead of uploading them |
 
-From 2026.10.6 the reporter ends each run with a `Mergify CI` summary (2026.10.5
-and earlier print nothing when the upload works). Check:
-`MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true npx vitest run` prints the
-spans.
+Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true npx vitest run` prints
+the spans and a `Mergify CI` summary.

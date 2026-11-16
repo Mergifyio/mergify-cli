@@ -134,7 +134,7 @@ gh pr view 1234 --json headRefOid -q .headRefOid                 # 340361aae580�
 
 Two limits to keep in mind. History goes back **90 days** (the activity log's retention), so an older dequeue reads as "no activity". And the command does not check that the PR exists, so a typo'd number prints the same "not in the merge queue" notice — confirm the PR is real (`gh pr view <PR>`) before concluding it was never queued.
 
-Do not use the presence of a `Mergify Merge Queue` check run as the test — a PR that merely *matches* the queue conditions gets one titled `Waiting for queue conditions` without ever being queued. A `# Merge Queue Status` comment is a reliable positive signal (the pre-queue "Queue this pull request" offer comment deliberately carries no such heading), but its absence proves nothing, since the comment can be disabled per repository.
+Do not use the presence of a `Mergify Merge Queue` check run as the test — a PR that merely *matches* the queue conditions gets one titled `Waiting for queue conditions` without ever being queued. A [status comment](#4-the-status-comment) shows that a queue request was made, and its payload's `state` says how far it went (`waiting`: the PR has not entered the queue). Its absence proves nothing, since the comment can be turned off per repository. The pre-queue "Queue this pull request" offer comment is not a status comment and carries no payload.
 
 ## Diagnosing a dequeued PR
 
@@ -249,31 +249,66 @@ Titles map to state without any parsing:
 
 Caveat: the check run lives on the **head SHA it was written against**. If the dequeue was caused by a push (`PULL_REQUEST_UPDATED`, `DRAFT_PULL_REQUEST_CHANGED`), the current head has a *fresh* check run and the dequeue report sits on the previous SHA. Use surface 1 or 4 in that case — surface 1 names the SHA (`Head SHA` / `queue_leave_head_sha`), so it is the one that lets you *detect* the mismatch rather than fall into it. Note also that `gh pr view --json statusCheckRollup` returns a null `title` — go through `gh api .../check-runs` as above.
 
-### 4. The `# Merge Queue Status` comment
+### 4. The status comment
 
-`mergify[bot]` posts one comment per queue session, so **read the last one**. It survives pushes, which makes it the most robust GitHub-side surface.
+`mergify[bot]` posts one status comment per queue session and edits it as the PR moves through the queue, so **read the last one**. It survives pushes, which makes it the most robust GitHub-side surface.
+
+Read its hidden payload, not its prose. The headings and sentences are written for people, and their wording changes; the payload is a versioned schema. It opens the comment, as one line of JSON between two marker lines inside an HTML comment:
+
+```
+<!---
+DO NOT EDIT
+-*- Mergify Payload -*-
+{"version": 1, "state": "dequeued", "queue_rule_name": "default", ...}
+-*- Mergify Payload End -*-
+-->
+```
+
+No other Mergify comment carries this block, so it is also how to pick the status comment out of the others:
 
 ```bash
 gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" \
-| jq -r '[.[][] | select(.user.login=="mergify[bot]")
-              | select(.body|contains("# Merge Queue Status"))] | last | .body'
+| jq '[.[][] | select(.user.login=="mergify[bot]") | .body
+       | capture("-\\*- Mergify Payload -\\*-\\n(?<json>.*)\\n-\\*- Mergify Payload End -\\*-")
+       | .json | fromjson] | last'
 ```
 
-`--paginate` matters: the endpoint returns 30 comments per page and the newest are on the *last* page, so without it `last` silently hands you a stale status comment (or none) on any PR with real discussion. `--slurp` collects the pages into an array of arrays — hence `.[][]` to flatten — and is incompatible with `-q`, so the filter goes through `jq` instead.
+`null` means no comment on the PR carries a payload. `--paginate` matters: the endpoint returns 30 comments per page and the newest are on the *last* page, so without it `last` silently hands you a stale status comment (or none) on any PR with real discussion. `--slurp` collects the pages into an array of arrays — hence `.[][]` to flatten — and is incompatible with `-q`, so the filter goes through `jq` instead.
 
-Its structure, in order: a hidden JSON payload, a timeline, the merge conditions, then `## Reason`, `Failing checks:` (each with a `[job log]` link), and `## Hint`. The hidden payload gives the state without parsing prose:
+`version` is `1`. Ignore keys you do not know: new ones are added without changing the version.
 
-```
-<!--- ... {"version": 1, "state": "dequeued", "queue_rule_name": "default", ...} ... -->
-```
+| `state` | Meaning |
+|---|---|
+| `waiting` | A queue request was made, but the PR has not entered the queue yet |
+| `checking` | In the queue. `step` says what the queue is doing with it: `checks_running`, `waiting_for_batch`, `waiting_for_checks_slot`, `waiting_for_previous_batches`, `waiting_for_schedule`, `ready_to_merge`, … |
+| `paused` | In the queue, and the queue is paused: `pause.reason`, `pause.since` |
+| `frozen` | In the queue, its batch held by a freeze: `freeze.name`, when a single freeze holds it |
+| `bisecting` | Its batch failed and is being split to find the PR that broke it: round `bisection.round` of `bisection.max_rounds` |
+| `merged` | Merged by the queue, at `left_at` |
+| `dequeued` | Left the queue without merging, at `left_at`. Why is in `dequeue_reason` |
 
-`state` is one of `waiting`, `checking`, `frozen`, `bisecting`, `merged`, `dequeued`. It does **not** carry the dequeue code — that is in the `## Reason` prose below it.
+A `state` missing from this table is newer than this skill: use `mergify queue show <PR>` for it.
 
-Caveat: this comment can be turned off per repository (`merge_queue.status_comments: none`, or `outcomes` for terminal events only). Absence of a comment does not prove the PR was never queued.
+`dequeue_reason`, on a `dequeued` payload whose reason has a named code:
+
+- `code`: the `dequeue_code` of the [reason table](#dequeue-reasons-and-what-to-do-next)
+- `label`: the code in words; `message`: the reason in one sentence
+- `checks`: the failing checks' names, at most 10; `checks_count`: how many failed in all
+- `by`: who removed it, for a removal by hand, when known
+- `conditions`: the merge conditions as they stood when it left, for a PR dequeued because they stopped matching. Each node has `description`, `match` and `subconditions`
+
+The other fields: `queue_rule_name`, `queued_at`, `estimated_time_of_merge` (while queued, to the minute), `speculative_check_pr` (the draft PR running its checks, when there is one), `required_conditions` (the merge conditions while its checks run, same nodes as above), `blocked_by` (the PRs ahead it waits on), `checks` (`attempt`, `max_attempts`, `timeout_at`) and `batch` (`size`, `target`, `max`, `proceeds_at`) while it waits for a batch to fill.
+
+The payload carries no job-log URLs. Get them from surface 1 or 2 (`unsuccessful_checks[].details_url`).
+
+Caveats:
+
+- The comment can be turned off per repository (`merge_queue.status_comments: none`, or `outcomes` to post only when the PR leaves the queue). Absence of a comment does not prove the PR was never queued.
+- A queue request cancelled before the PR entered the queue rewrites its comment without a payload, and a comment too long for GitHub with the payload drops it. The filter above skips those comments, so its `last` can be an older session's: `mergify queue show <PR>` has no such gap.
 
 ## Dequeue reasons and what to do next
 
-`dequeue_code` values and the action they call for. The engine ships a per-reason `## Hint` in the report — for a code not listed here, read that Hint rather than guessing.
+`dequeue_code` values and the action they call for. For a code not listed here, read the reason Mergify gives (`reason` on the leave event, `dequeue_reason.message` in the status comment's payload) and the next steps the status comment lists under it, rather than guessing.
 
 | `dequeue_code` | What happened | What to do next |
 |---|---|---|
@@ -373,7 +408,7 @@ mergify queue unpause
 
 **PR stuck in queue:**
 - Check CI state: `mergify queue show <PR_NUMBER>`
-- If checks are failing, `-v` names them; for the job logs, read the `Failing checks:` links in the `# Merge Queue Status` comment or the `Mergify Merge Queue` check-run summary
+- If checks are failing, `-v` names them; for the job logs, follow the links in the `Mergify Merge Queue` check-run summary or the [status comment](#4-the-status-comment)
 - If the queue is paused, check who paused it: `mergify queue status`
 
 **PR disappeared from the queue:**
