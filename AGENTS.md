@@ -37,3 +37,10 @@ against the binary that release ships, so they aren't checked again here. CI
 (`.github/workflows/ci.yaml`, gated by `ci-gate`) runs:
 
 - `synced-files`: the published files only change through the sync.
+
+## Comments and docstrings
+
+Default to none. A comment says, in one line, a why the code cannot;
+a docstring states intent in one sentence. Longer rationale goes in
+the commit message. Never narrate the code, paraphrase a name, or
+record an incident, ticket or customer.
