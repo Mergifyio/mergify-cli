@@ -105,8 +105,9 @@ jq -r '.jobs[] | [.pipeline_name, .job_name, .test_results] | @tsv' /tmp/mergify
 
 - A run on a pull request from a branch of the same repository gets an ID
   token and the repository's secrets, so the upload is real once a trust
-  policy matches the job (a refused exchange only warns in a plugin job: read
-  the log, SKILL.md step 8).
+  policy matches the job (a refused exchange only warns, but fails a JUnit
+  upload step that runs a mergify-cli older than 2026.11.10: read the log,
+  SKILL.md step 8).
 - If you cannot finish (rate limit, a job still going after about 20 minutes),
   report the remaining jobs as **not verified yet**, with the commands above
   for the user to run.
@@ -148,7 +149,7 @@ for run in $(gh run list --commit "$sha" --json databaseId --jq '.[].databaseId'
   gh run view "$run" --json jobs --jq '.jobs[]|[.databaseId,.name,.conclusion]|@tsv'
 done
 gh api --allow-escape-sequences repos/<owner>/<repository>/actions/jobs/<job id>/logs \
-  | grep -n -E "Test run ID|Run ID:|report uploaded|upload this run|Failed to upload|is deprecated; set|No token configured|MERGIFY_TOKEN is not set|ID token|MERGIFY_TEST_RUN_ID"
+  | grep -n -E "Test run ID|Run ID:|reports? uploaded|upload this run|Failed to upload|not uploaded|is deprecated; set|No token configured|MERGIFY_TOKEN is not set|Mergify credential|ID token|MERGIFY_TEST_RUN_ID"
 ```
 
 - The jobs API returns a finished job's log even while GitHub still shows the
@@ -179,7 +180,9 @@ the upload works, so without `mergify tests runs` such a job is "no error,
 upload not visible in the log", never confirmed.
 
 The JUnit upload (`junit-process`, `gha-mergify-ci`) prints `Run ID:` and
-`report uploaded` on success, `Failed to upload test results` on failure.
+`report uploaded` (`N reports uploaded` for several files) on success,
+`Failed to upload test results` on failure, and `Test results not uploaded`
+with its reason when it sent nothing.
 
 A JavaScript plugin (Jest, Mocha, Vitest, Playwright) on Node.js below 22
 prints `Mergify needs Node.js 22 or later (this is …), so nothing will be
@@ -197,17 +200,20 @@ What to do on an error:
   details, or `test_results_ingestion: not_enabled`): Test Engine is off for
   the repository. The user turns it on in the Mergify dashboard (the refusal
   links the page), then re-runs the job.
-- **No credential** (`MERGIFY_TOKEN is not set`; before 2026.10.6 `No token
-  configured` or `WARNING: MERGIFY_TOKEN is not set`): on GitHub Actions, the
-  job found no ID token: it lacks `id-token: write` (for a reusable workflow,
-  check the calling job), it runs in a container that was not passed
-  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, its
-  plugin is older than 2026.11.2, or the run is for a fork's pull request.
+- **No credential** (`MERGIFY_TOKEN is not set` with no `could not be
+  exchanged` after it, or the JUnit upload's `no Mergify credential found`;
+  before 2026.10.6 `No token configured` or `WARNING: MERGIFY_TOKEN is not
+  set`): on GitHub Actions, the job found no ID token: it lacks
+  `id-token: write` (for a reusable workflow, check the calling job), it runs
+  in a container that was not passed `ACTIONS_ID_TOKEN_REQUEST_URL` and
+  `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, its plugin is older than 2026.11.2, or the
+  run is for a fork's pull request. A job that has its ID token says the same
+  when Mergify does not offer its organization the exchange: use a key.
   With a key, the secret is not stored yet, or not passed to that step: check
   the step's `env`; if it is there, the user stores `MERGIFY_TOKEN` and
   re-runs the job.
-- **ID token refused** (`… could not be exchanged for a Mergify token.` then
-  `Error: Mergify refused the job's ID token: …`): `<organization> has no
+- **ID token refused** (`… could not be exchanged for a Mergify token`, then
+  `Mergify refused the job's ID token: …`): `<organization> has no
   trust policy` or `No trust policy of <organization> matches this job`, then
   the reason names the exchange: read it with
   `mergify oidc exchanges show <id> --org <owner>`, which says which line of

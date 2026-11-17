@@ -80,8 +80,16 @@ jobs:
 - **The upload step fails without a credential**: it exits 8 on pull requests
   from forks, which get no ID token. The second condition skips it on a pull
   request whose head is in another repository; `head.repo.fork` would also
-  skip every pull request of a repository that is itself a fork. The step also
-  fails while no trust policy matches the job (SKILL.md, step 8).
+  skip every pull request of a repository that is itself a fork.
+- **While no trust policy matches the job** (SKILL.md, step 8): from
+  mergify-cli 2026.11.10, the step uploads nothing, warns, and passes or fails
+  as the tests did; with an older CLI, it fails the job. The step runs the CLI
+  its `mergify_cli_version` input names (`latest` is the latest release),
+  else the one its gha-mergify-ci release installs, which the first line of
+  the release's notes names
+  (`gh release view <tag> -R Mergifyio/gha-mergify-ci`): v30 installs
+  2026.11.8. When you cannot tell (a version from an expression, a commit
+  that is no release), count it as older.
 - `test_step_outcome` lets Mergify detect a runner that crashed while the report
   looks clean.
 - **Matrix**: add `job_name: <name per leg>` to the action's inputs.
@@ -118,7 +126,7 @@ exchange.
 ## A refused job
 
 A job no trust policy matches prints Mergify's reason after
-`Error: Mergify refused the job's ID token:`, naming its exchange
+`Mergify refused the job's ID token:`, naming its exchange
 (`mergify-ci` skill, OIDC Trust Policies, says how to read it).
 
 ## With a key

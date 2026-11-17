@@ -150,11 +150,13 @@ limited to its repository, when a trust policy of the organization matches
 it: no secret to store, Dependabot's included. The plugins and `mergify ci`
 need release 2026.11.2 or later (raise an older pin or lock), and
 `mergifyio/gha-mergify-ci` v30 or later.
-Until a policy matches, Mergify refuses the job's ID token: the plugins upload
-nothing, and the JUnit upload step fails the job. An organization admin or CI
-Admin writes the policy. Check with the `mergify` CLI (`mergify-ci` skill, OIDC
-Trust Policies), signed in as the user (`mergify auth status`; never log in
-for them):
+Until a policy matches, Mergify refuses the job's ID token: nothing is
+uploaded or quarantined, the log warns, and the job passes or fails as its
+tests do. A JUnit upload step does so from mergify-cli 2026.11.10, and fails
+the job with an older CLI (`references/github-actions.md` says which CLI a
+step runs). An organization admin or CI Admin writes the policy. Check with the `mergify` CLI
+(`mergify-ci` skill, OIDC Trust Policies), signed in as the user
+(`mergify auth status`; never log in for them):
 
 1. `mergify oidc trust-policies list --org <owner>` shows each policy line by
    line, its repositories by name. A policy whose lines cover every job you
@@ -174,9 +176,11 @@ for them):
    repository's GitHub Actions jobs. If none does, or they do not know, give
    them the `create` command above for an organization admin or CI Admin.
 
-While no policy covers the jobs, open the pull request as a draft, and say in
-it that it leaves draft once the policy exists, with the command: its JUnit
-upload jobs fail until then. A user who would rather not wait uses a key.
+While no policy covers the jobs, say in the pull request that they send
+nothing until it exists, with the command. When a JUnit upload step runs a
+mergify-cli older than 2026.11.10, also open the pull request as a draft that
+leaves draft once the policy exists: that step fails its job until then. A
+user who would rather not wait uses a key.
 
 **A key instead**, on any other CI, and on GitHub Actions when the user asks
 for one rather than a trust policy: the user creates a Mergify application
