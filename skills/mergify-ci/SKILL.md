@@ -526,7 +526,7 @@ mergify oidc exchanges list --org acme --result refused --repository api --since
 ```
 
 A refused exchange lists, per policy, the first line the job did not match
-(`policy  <ID> events: pull_request_target is not one of its events`): widen
+(`policy  <NAME> (<ID>) events: pull_request_target is not one of its events`): widen
 that policy, or write another, with the user's go. `exchanges list` reads the last
 7 days by default (`--since`, up to the 90 days the report keeps), latest
 first, 20 at most (`--limit`). The refusal reasons:
