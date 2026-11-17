@@ -497,10 +497,12 @@ mergify oidc trust-policies create --org acme --name "api deploys" \
   --repository api --workflow .github/workflows/deploy.yml \
   --event push --environment production
 
-# Change only the lines named; the others keep their values.
-mergify oidc trust-policies update 12 --org acme --repository api --repository web
+# Change only the lines named; the others keep their values. A policy's ID
+# is the UUID `list` shows before its name.
+mergify oidc trust-policies update 0b6f3c2e-5f1d-4c7a-9e2b-8d4a1f0c3e57 --org acme \
+  --repository api --repository web
 
-mergify oidc trust-policies delete 12 --org acme
+mergify oidc trust-policies delete 0b6f3c2e-5f1d-4c7a-9e2b-8d4a1f0c3e57 --org acme
 ```
 
 A line no flag names is the default on `create`: every repository, any
@@ -515,16 +517,17 @@ which jobs get a token.
 - `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
 
 **Why a job was refused.** The job's log prints Mergify's reason, which names
-the exchange: `The exchange report lists it as exchange 345`. Read it:
+the exchange: `The exchange report lists it as exchange
+5e0c9a7d-2b14-4f3e-8a61-c9d07b2e4f83`. Read it:
 
 ```bash
-mergify oidc exchanges show 345 --org acme
+mergify oidc exchanges show 5e0c9a7d-2b14-4f3e-8a61-c9d07b2e4f83 --org acme
 mergify oidc exchanges list --org acme --result refused --repository api --since 1d
 ```
 
 A refused exchange lists, per policy, the first line the job did not match
-(`policy 12  events: pull_request_target is not one of its events`): widen that
-policy, or write another, with the user's go. `exchanges list` reads the last
+(`policy  <ID> events: pull_request_target is not one of its events`): widen
+that policy, or write another, with the user's go. `exchanges list` reads the last
 7 days by default (`--since`, up to the 90 days the report keeps), latest
 first, 20 at most (`--limit`). The refusal reasons:
 
