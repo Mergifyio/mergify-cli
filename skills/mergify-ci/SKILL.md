@@ -142,7 +142,7 @@ jobs:
 
 ## Git References (`git-refs`)
 
-Detects the base and head git references for the current pull request context. Writes results to `GITHUB_OUTPUT` when running in GitHub Actions, and to Buildkite meta-data (`mergify-ci.base`, `mergify-ci.head`, `mergify-ci.source`) when running in Buildkite.
+Detects the base and head git references for the current pull request context. Writes results to `GITHUB_OUTPUT` (`base`, `head`, `source`) when running in GitHub Actions, and to Buildkite meta-data (`mergify-ci.base`, `mergify-ci.head`, `mergify-ci.source`) when running in Buildkite.
 
 ```bash
 mergify ci git-refs
@@ -198,7 +198,7 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 - `--head` -- Head git reference (default: HEAD)
 - `--write` / `-w` -- Write detected scopes to a JSON file
 
-The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`.
+The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`. On GitHub Actions it also writes the references it compared, as the `base`, `head` and `source` outputs `git-refs` writes, so one step gives both.
 
 When the base is the `before` commit detected from a GitHub `push` event, the changed files are the ones that differ between it and the pushed commit, compared directly rather than from their merge base: a push back to an earlier commit selects the scopes of the files it reverts. Every other base, an explicit `--base` included, counts what `head` adds on top of it, from their merge base.
 
@@ -206,9 +206,11 @@ On a merge queue batch build (a draft pull request, or a `push` build of the mer
 
 A renamed file counts against **both** of its paths, same as the engine: `git mv critical/guard.txt ignored/guard.txt` touches `critical` and `ignored`.
 
+With a source that declares `manual` beside `files`, the command detects the `files` part and says on stderr that Mergify adds the scopes sent with `scopes-send` to them: see [Adding scopes to the file patterns](#adding-scopes-to-the-file-patterns). With `manual` alone it fails outside a merge queue batch build, as there are no patterns to match.
+
 ## Scopes Send (`scopes-send`)
 
-Sends scopes tied to a pull request to the Mergify API. Used when scopes are determined manually or from a file rather than auto-detected.
+Sends scopes tied to a pull request to the Mergify API. The merge queue takes them from a scopes source that declares `manual`: alone, they are the pull request's only scopes; beside `files`, they are added to those the file patterns match.
 
 The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, `CIRCLE_SHA1`, or a Jenkins pull request build's checkout); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), any other CI. A Jenkins multibranch pull request build needs no flag: the number comes from `CHANGE_ID`, and the head is the commit checked out (`GIT_COMMIT`, else `HEAD`) or, when the GitHub Branch Source plugin merges the pull request into its target branch, the first parent of the merge Jenkins made. No head is detected where git cannot read the checkout, such as a container without its `.git`, nor on an agent that merges with JGit, whose merge Jenkins does not make under its own name: pass `--head-sha` with the pull request's head there, or switch the source's strategy to "The current pull request revision". When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
@@ -244,6 +246,31 @@ mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 - `--scopes-file` -- Plain-text file with one scope per line
 - `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite, CircleCI and Jenkins pull request builds)
 - `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
+
+### Adding scopes to the file patterns
+
+To add scopes on top of the file patterns, declare `manual: null` beside `files` (`barrier_files` still applies):
+
+```yaml
+scopes:
+  source:
+    files:
+      frontend:
+        include:
+          - apps/web/**/*
+    manual: null
+```
+
+A pull request's scopes are then those its changed files match plus those reported for its head commit. It is a barrier when it changes a `barrier_files` file or the report carries `--all`. The merge queue waits for that report, so send one for every pull request, even with nothing to add. Only a report addressed by the head SHA counts. With `files` alone, the merge queue reads the file patterns and `barrier_files`, not what `scopes-send` reports.
+
+Send extra scopes for what the patterns cannot see, such as the projects a build tool finds affected through dependencies, or a decision a CI step makes. Send `--all` for a change that impacts every scope and that `barrier_files` does not catch.
+
+Send the detection and the extras in **one** report, since a second report for the same head commit replaces the first:
+
+```bash
+mergify ci scopes --write scopes.json
+mergify ci scopes-send --scopes-json scopes.json -s api-contract -s e2e
+```
 
 ## Tests Show (`tests show`)
 
@@ -547,7 +574,6 @@ A GitHub Actions job gets a Mergify OIDC CI token for its ID token when one
 trust policy of its organization matches it, and a policy matches when each of
 its lines does: repositories, workflows, events and environments. Policies only
 allow, with no order and no deny, so a narrow one cannot hold back a broad one.
-OIDC is in Preview, open to every organization: it may still change.
 
 Every `mergify oidc` command takes the organization with `--org`, else the
 owner of the current repository, and the credential of one of its admins or CI
