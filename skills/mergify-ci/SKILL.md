@@ -1,6 +1,6 @@
 ---
 name: mergify-ci
-description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, retrieve merge queue metadata, and write the OIDC trust policies that let GitHub Actions jobs reach Mergify without a key. ALWAYS use this skill when running `mergify ci`, `mergify tests` or `mergify oidc` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, reading Mergify merge queue CI context, or finding out why a job's ID token was refused. Triggers on mergify ci, mergify tests, mergify oidc, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info, trust policy, OIDC, id-token.
+description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, retrieve merge queue metadata, and write the OIDC trust policies that let GitHub Actions jobs reach Mergify without a key. ALWAYS use this skill when running `mergify ci`, `mergify tests` or `mergify oidc` commands, uploading test results to Mergify, managing Mergify test quarantines, turning Mergify test retry on or off, detecting Mergify CI scopes, reading Mergify merge queue CI context, or finding out why a job's ID token was refused. Triggers on mergify ci, mergify tests, mergify oidc, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify test retry, Mergify scopes, scopes-send, git-refs, queue-info, trust policy, OIDC, id-token.
 ---
 
 # Mergify CI Commands
@@ -24,6 +24,10 @@ mergify tests quarantines add NAME        # Add a test to the Test Engine quaran
 mergify tests quarantines remove NAME     # Remove a test from the Test Engine quarantine
 mergify tests quarantines get NAME        # Print a single quarantine by test name or id
 mergify tests quarantines list            # List the tests currently in the Test Engine quarantine
+mergify tests retry show                  # Say whether test retry is on, and with which settings
+mergify tests retry on                    # Turn test retry on (or change its settings)
+mergify tests retry set                   # Change the settings of test retry while it is on
+mergify tests retry off                   # Turn test retry off
 mergify oidc trust-policies list          # List the organization's OIDC trust policies
 mergify oidc trust-policies create        # Write a trust policy (show, update, delete too)
 mergify oidc exchanges list               # List the latest ID token exchanges, and why one was refused
@@ -39,7 +43,7 @@ CLI calls, the two lists share only the quarantine list.
 | Key | Reaches |
 | --- | --- |
 | `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
-| `admin` | Reading test health, the quarantine *list*, and mutating the quarantine. Not trace upload, not `scopes-send`. |
+| `admin` | Reading test health, the quarantine *list*, mutating the quarantine, and test retry's settings. Not trace upload, not `scopes-send`. |
 
 Trace upload and `scopes-send` take only a `ci` key, or on GitHub Actions the
 job's ID token ([below](#github-actions-jobs-need-no-key-oidc)): an `admin`
@@ -63,6 +67,7 @@ what an `admin` key carries. Per command:
 | `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list | yes |
 | `tests show` | **no** — `403` | yes |
 | `tests quarantines add`, `tests quarantines remove` | **no** — `403` | yes |
+| `tests retry show`, `on`, `set`, `off` | **no** — `403` | yes |
 
 `ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
 no token at all.
@@ -70,12 +75,12 @@ no token at all.
 ### GitHub Actions jobs need no key (OIDC)
 
 On GitHub Actions, a job granted `id-token: write` with no `MERGIFY_TOKEN`
-trades its GitHub ID token for a short-lived token that does what a `ci` key
-does, on its own repository only, when a trust policy of the organization
-matches the job: `ci junit-process`, `ci scopes-send` and the test framework
-plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that is set
-always wins. Writing a trust policy needs an organization admin or CI Admin:
-see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
+trades its GitHub ID token for a short-lived Mergify OIDC CI token that does
+what a `ci` key does, on its own repository only, when a trust policy of the
+organization matches the job: `ci junit-process`, `ci scopes-send` and the test
+framework plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that
+is set always wins. Writing a trust policy needs an organization admin or CI
+Admin: see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
 Fork pull requests get no ID token, as they get no secret. Jobs outside
 GitHub Actions keep a `ci` key.
 
@@ -248,6 +253,13 @@ batch API: pass one or more names (globs supported) and one block per match
 is rendered. It is read-only: it exits `0` once it has rendered the matches,
 whatever their health. Gate on health by consuming `--json`, not the exit code.
 
+A last run whose first attempt failed and that then passed on a retry reads
+`✓ passed on a retry (its first attempt failed)`. In `--json`, each test's
+`last_run_passed_on_retry` is then `true`, and its `last_conclusion` stays
+`failed`, as it reports the first attempt. An engine that does not report
+retries yet leaves `last_run_passed_on_retry` out: absent means unknown, not
+`false`.
+
 Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
 [Authentication](#authentication).
 
@@ -285,8 +297,12 @@ for a commit (the `Test run ID: …` a plugin prints in the CI log), one line
 per job name they arrived under (`MERGIFY_TEST_JOB_NAME`, else the CI's job
 name — on GitHub Actions the job id, not its displayed name): how many runs,
 how many arrived whole, framework, plugin or converted report and the
-client's version, test counts. Only a run that did not arrive whole gets a
-line of its own.
+client's version, test counts, and how many of the failures then passed on a
+retry. Only a run that did not arrive whole gets a line of its own. In
+`--json`, that count is `passed_on_retry` on each run under
+`jobs[].test_runs[]`, each such test also counted in the run's `failed`; an
+engine that does not report retries yet leaves it out: absent means unknown,
+not zero.
 
 ```bash
 mergify tests runs                 # The commit under test (in CI, the one results are uploaded for; else HEAD)
@@ -466,11 +482,70 @@ A null `issue_url` means no issue tracks the fix.
 **Exit codes:**
 - `0` -- Always, including an empty quarantine ("No quarantined tests found.").
 
+## Tests Retry (`tests retry`)
+
+With test retry, the Mergify plugin runs a failing test again in the same job,
+so a flaky failure no longer fails the build. It runs on pushes to the default
+branch and in the runs the merge queue checks, in jobs that run a Mergify test
+framework plugin: a JUnit report upload never retries. It is set per
+repository, and is available on plans that include quarantine. A job whose
+environment sets `MERGIFY_TEST_RETRY_ENABLE=false` never retries.
+
+Two settings limit it: the **Retry Budget**, the extra time a job may spend on
+retries as a percentage of its tests' usual duration, and the **Retries per
+Test**, how many times one failing test may run again.
+
+Reading it needs read access to the repository, and changing it write access,
+with a user credential (`mergify auth login`); or an application key with the
+Test Retry Settings permission, such as an `admin` key. A `ci` key gets a
+`403`. See [Authentication](#authentication).
+
+```bash
+# On or off, with the settings and who changed them last.
+mergify tests retry show -r owner/repo
+
+# Turn it on: settings left out keep Mergify's defaults.
+mergify tests retry on -r owner/repo
+mergify tests retry on -r owner/repo --retry-budget 10% --retries-per-test 3
+
+# Change a setting while it is on, or put Mergify's default back.
+mergify tests retry set -r owner/repo --retry-budget default
+
+# Turn it off: its settings are forgotten.
+mergify tests retry off -r owner/repo
+```
+
+`set` never turns test retry on: on a repository with it off, it fails and
+says `mergify tests retry on` does. `off` on a repository with it off
+succeeds and says it was already off. Mergify refuses a value out of range and
+says what it takes, in its own terms: the budget is a ratio there
+(`budget_ratio`, 5% is `0.05`).
+
+**Key options:**
+- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored.
+- `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
+- `--retry-budget PERCENT` (`on`, `set`) -- The Retry Budget, written with its `%`, such as `5%`: a bare number is refused, as `--json` gives the budget as a ratio (`0.05`). `set` also takes `default`.
+- `--retries-per-test N` (`on`, `set`) -- The Retries per Test; `set` also takes `default`.
+- `--json` -- Emit `{"enabled": true, "configuration": {...}}` with the
+  configuration as Mergify answered it (`budget_ratio`, the budget as a
+  ratio, and `max_retries_per_test`, each `{value, chosen, default}`, then `created_at`,
+  `created_by`, `updated_at`, `updated_by`), or `{"enabled": false,
+  "defaults": {"budget_ratio": 0.05, "max_retries_per_test": 5}}` when it is
+  off, `off` included.
+
+**Exit codes:**
+- `0` -- Done, or read; off is an answer, not an error.
+- `2` -- An option the CLI cannot read, such as a budget without its `%`.
+- `6` -- Mergify API error: no access, a plan without test retry, a Mergify that does not offer it, or an answer this CLI cannot read (after `on`, `set` or `off`, the change was made all the same: `--json` prints the answer).
+- `7` -- `set` on a repository with test retry off.
+- `8` -- A configuration problem: Mergify refused a setting's value, no token was found, or no repository was given or detected.
+
 ## OIDC Trust Policies (`mergify oidc`)
 
-A GitHub Actions job gets a Mergify token for its ID token when one trust
-policy of its organization matches it, and a policy matches when each of its
-lines does: repositories, workflows, events and environments. Policies only
+A GitHub Actions job gets a Mergify OIDC CI token for its ID token when one
+trust policy of its organization matches it, and a policy matches when each of
+its lines does: repositories, workflows, events and environments. Policies only
 allow, with no order and no deny, so a narrow one cannot hold back a broad one.
 OIDC is in Preview, open to every organization: it may still change.
 

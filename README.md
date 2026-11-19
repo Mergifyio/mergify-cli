@@ -100,11 +100,12 @@ above fails and says how to get one. Run `mergify auth login`, or set
 per-user one `mergify auth login` mints by design. In a GitHub Actions job
 granted `id-token: write`, with neither `--token` nor `MERGIFY_TOKEN`,
 `mergify ci junit-process` and `mergify ci scopes-send` exchange the job's ID
-token for a short-lived Mergify token, once a trust policy of the organization
-allows the job (`mergify oidc`, below). On any other CI, `MERGIFY_TOKEN` holds
-an organization application key with the `ci` scope. With an application key
-in `MERGIFY_TOKEN`, `mergify auth status` names the key, its permissions and
-when it expires: a refused request never says which permission it lacked.
+token for a short-lived Mergify OIDC CI token, once a trust policy of the
+organization allows the job (`mergify oidc`, below). On any other CI,
+`MERGIFY_TOKEN` holds an organization application key with the `ci` scope.
+With an application key in `MERGIFY_TOKEN`, `mergify auth status` names the
+key, its permissions and when it expires: a refused request never says which
+permission it lacked.
 
 `mergify stack` also calls the **GitHub API** directly, and resolves that
 token separately (`--token`, `MERGIFY_TOKEN`, `GITHUB_TOKEN`, `gh auth
@@ -130,11 +131,11 @@ endpoints rather than one being a subset of the other. A `ci` key is scoped
 to what a CI job does — trace upload, `ci scopes-send`, quarantine evaluation
 and the quarantine list. Trace upload and `ci scopes-send` take a `ci` key
 only, and answer an `admin` key or a user credential with `403 Forbidden`.
-Reading test health (`mergify tests show`) and changing the quarantine
-(`mergify tests quarantines add` / `remove`) need an `admin` key or a user
-credential — the one `mergify auth login` stores — and answer a `ci` key with
-`403 Forbidden`. `GITHUB_TOKEN` is not a Mergify credential and does not reach
-the Mergify API.
+Reading test health (`mergify tests show`), changing the quarantine
+(`mergify tests quarantines add` / `remove`) and test retry
+(`mergify tests retry`) need an `admin` key or a user credential — the one
+`mergify auth login` stores — and answer a `ci` key with `403 Forbidden`.
+`GITHUB_TOKEN` is not a Mergify credential and does not reach the Mergify API.
 
 See the [authentication guide](https://docs.mergify.com/cli/usage) for details.
 
@@ -177,8 +178,9 @@ Every command group maps to a section of the
   repository or one pull request, as a timeline or JSON.
 - **`mergify ci`** — Send JUnit results and pull request scopes from any CI
   provider. [Docs](https://docs.mergify.com/test-engine/)
-- **`mergify tests`** — Look up test health and manage the flaky-test
-  quarantine. [Docs](https://docs.mergify.com/test-engine/)
+- **`mergify tests`** — Look up test health, manage the flaky-test
+  quarantine, and turn test retry on or off.
+  [Docs](https://docs.mergify.com/test-engine/)
 - **`mergify oidc`** — Write the trust policies that let GitHub Actions jobs
   reach Mergify with their ID token instead of a stored key, and read why a
   job's exchange was refused. Takes the organization with `--org`, else the
