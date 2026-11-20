@@ -52,9 +52,8 @@ step, results upload but quarantined tests still fail the run.
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs Playwright, the job's
-  `id-token: write` is enough (`github-actions.md`). With a key,
-  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step
+  that runs Playwright.
 - Matrix: `MERGIFY_TEST_JOB_NAME` per environment leg. `--shard` legs share one
   name: never put the shard index in it.
 - **Several projects** (browsers) in one config share a test identity by
@@ -64,18 +63,12 @@ step, results upload but quarantined tests still fail the run.
   reports to Mergify, it renames every test: set it only if the user asks.
 - Tests in a Docker Compose service: load `containers.md`.
 - No `continue-on-error`: quarantine is applied by the `test` import.
-- Once the run is over, on a repository with flaky detection on, the reporter
-  reruns the tests it measures in a `playwright test` of its own (the same
-  configuration file, one worker, only its own reporter), so the step takes
-  longer, within a time budget. On a pull request, a new test it finds flaky
-  fails the step, though Playwright's summary lists it as passed. A run with
-  no configuration file reruns nothing.
 
 ## Variables
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set (was `PLAYWRIGHT_MERGIFY_ENABLE`) |
 | `MERGIFY_PLAYWRIGHT_INCLUDE_PROJECT_IN_TEST_NAME` | prefix test names with the project (was `PLAYWRIGHT_MERGIFY_INCLUDE_PROJECT_IN_TEST_NAME`) |

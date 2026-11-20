@@ -48,25 +48,23 @@ the pull request which legs cannot report.
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs RSpec, the job's
-  `id-token: write` is enough (`github-actions.md`). With a key,
-  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` in the step's `env`.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` in the `env` of
+  the step that runs RSpec.
 - Matrix: `MERGIFY_TEST_JOB_NAME` per leg. Shards of one suite (a
   `ci_node_index` matrix, Knapsack, `parallel_tests`): keep one name for all
   shards; the default (the job id) already does.
 - No `continue-on-error`: quarantine is applied inside RSpec.
-- A job with no credential (a pull request from a fork gets no ID token and no
-  secret) makes the gem warn that the token is not set; tests are not
-  affected.
+- An empty or missing `MERGIFY_TOKEN` (fork pull requests) makes the gem warn
+  that the token is not set; tests are not affected.
 
 ## Variables
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set (was `RSPEC_MERGIFY_ENABLE`) |
 | `MERGIFY_CI_DEBUG` | print the spans instead of uploading them (was `RSPEC_MERGIFY_DEBUG`) |
 
 Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true bundle exec rspec`
-prints a `Mergify Test Engine:` section (`Mergify CI:` in earlier releases).
+prints a `Mergify CI:` section.

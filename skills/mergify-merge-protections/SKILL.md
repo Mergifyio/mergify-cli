@@ -1,6 +1,6 @@
 ---
 name: mergify-merge-protections
-description: Use Mergify merge protections to control when pull requests merge — make one wait for other pull requests to merge (Depends-On header), hold one until a date and time (Merge-After header), and pause merges with scheduled freezes (CLI). In a repository that uses Mergify, ALWAYS use this skill when a pull request must not merge before another pull request, in the same repository or in another repository of the organization; when a change split across repositories has to land in order; when a pull request must not merge before a date or a time; when a ready pull request has to be held back; or when managing Mergify scheduled freezes. Triggers on merge after another PR, wait for a PR to merge first, land in order, merge order across repositories, do not merge before, merge on a date, hold back a PR, hold the merge, Depends-On, Merge-After, mergify freeze, Mergify merge freeze, Mergify merge protection.
+description: Use Mergify merge protections to control when PRs merge — PR dependencies (Depends-On header), delayed merges (Merge-After header), and scheduled freezes (CLI). ALWAYS use this skill when managing Mergify scheduled freezes, or when blocking a PR on another PR or delaying its merge with Mergify's Depends-On or Merge-After headers. Triggers on mergify freeze, Mergify scheduled freeze, Mergify merge freeze, Depends-On, Merge-After, Mergify merge protection.
 ---
 
 # Mergify Merge Protections
@@ -14,8 +14,6 @@ Merge protections control when PRs are allowed to merge:
 | **Scheduled Freezes** | Repository-wide or conditional | CLI commands (`mergify freeze`) |
 
 `Depends-On` and `Merge-After` are built-in — just add the header to the PR description (or commit message body when using `mergify stack push`) and Mergify enforces them automatically, no `.mergify.yml` configuration needed. Freezes are managed via CLI commands.
-
-They work only on a repository where Mergify runs: one with a Mergify configuration file (`.mergify.yml`, `.mergify/config.yml` or `.github/mergify.yml`), or whose pull requests get Mergify's checks or comments. Anywhere else a `Depends-On:` or `Merge-After:` line holds nothing back, so tell your user rather than rely on it.
 
 ## Depends-On
 
@@ -42,9 +40,7 @@ All three formats are supported — use `#NNN` for same-repo, full URL or `org/r
 
 ### With `mergify stack push`
 
-The stack tool orders the PRs of a stack itself: it writes `Depends-On: #NNN` between consecutive PRs, or leaves it out when GitHub holds the stack. For a PR *outside* the stack, in another repository or in this one, add the header manually to the **commit message body** — it will be copied to the PR description on push.
-
-Write that reference as `owner/repo#NNN` or as a URL, even for a PR of the same repository. On every push, `mergify stack push` removes every `Depends-On: #NNN` line and writes back only its own marker for the PR below in the stack, so a short-form reference to any other PR disappears from the description. A `Merge-After:` line in the commit message body is copied as is.
+The stack tool **automatically** adds `Depends-On: #NNN` between consecutive PRs in a stack. For dependencies *outside* the stack (cross-repo or unrelated PRs), add the header manually to the **commit message body** — it will be copied to the PR description on push.
 
 ### When to suggest
 
@@ -111,7 +107,7 @@ mergify freeze delete FREEZE_ID           # Delete a freeze
 
 ## Authentication
 
-All commands require a Mergify credential: the one `mergify auth login` stores (your user runs it, see [below](#when-a-command-says-there-is-no-mergify-credential)), or:
+All commands require a Mergify credential. Run `mergify auth login` once, or:
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--repository` / `-r` -- Repository full name (auto-detected from git remote)
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
@@ -227,15 +223,6 @@ mergify freeze create \
   -e "label=hotfix" \
   -e "label=security"
 ```
-
-## When a command says there is no Mergify credential
-
-`no Mergify credential found` means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
-
-- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
-- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
-- Wait until they say it's done, then run the same command again.
-- Don't do it some other way, or read another source, without asking them first.
 
 ## When a command or flag is missing
 
