@@ -161,8 +161,11 @@ step runs). An organization admin or CI Admin writes the policy. Check with the 
 (`mergify auth status`; never log in for them):
 
 1. `mergify oidc trust-policies list --org <owner>` shows each policy line by
-   line, its repositories by name. A policy whose lines cover every job you
-   changed (the repository, the events that start them, their workflows and
+   line, its repositories by name, or by visibility (`every internal or
+   private repository`, which covers the repository when it has one of those
+   visibilities, unless its jobs' ID tokens give none, as an older GitHub
+   Enterprise Server's). A policy whose lines cover every job you changed
+   (the repository, the events that start them, their workflows and
    environments): nothing to write.
 2. No such policy: **ask the user before writing one**, since it decides which
    jobs of the organization get a token. Propose the narrowest that covers the
@@ -171,7 +174,8 @@ step runs). An organization admin or CI Admin writes the policy. Check with the 
    (CI events, any workflow, any environment), or
    `mergify oidc trust-policies update <id> --org <owner> --repository …` to
    add the repository to an existing one (list every repository it already
-   holds: the flags replace the line). With their go, run it. HTTP 403: they
+   holds: the flags replace the line; never on a policy by visibility, whose
+   line it would replace: write a new policy instead). With their go, run it. HTTP 403: they
    are neither an admin nor a CI Admin: give them the command to hand to one.
 3. Without the CLI, or when it cannot authenticate or read the policies, ask
    the user whether a trust policy of the organization covers the
