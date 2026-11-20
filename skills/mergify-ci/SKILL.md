@@ -593,6 +593,11 @@ mergify oidc trust-policies list --org acme
 # workflow, any environment.
 mergify oidc trust-policies create --org acme --name "api CI" --repository api
 
+# Every private and internal repository, new ones included, never a public
+# one.
+mergify oidc trust-policies create --org acme --name "private CI" \
+  --repository-visibility private --repository-visibility internal
+
 # Deploys only: one workflow, on push, in the production environment.
 mergify oidc trust-policies create --org acme --name "api deploys" \
   --repository api --workflow .github/workflows/deploy.yml \
@@ -612,10 +617,21 @@ CI job of the organization: ask the user before writing a policy, it decides
 which jobs get a token.
 
 **Lines:**
-- `--repository NAME` (repeatable) -- only these repositories; `--except-repository NAME` -- every repository but these; `--all-repositories`. `NAME` or `OWNER/NAME`, of the organization's repositories Mergify's GitHub App can access.
+- `--repository NAME` (repeatable) -- only these repositories; `--except-repository NAME` -- every repository but these; `--all-repositories`. `NAME` or `OWNER/NAME`, of the organization's repositories Mergify's GitHub App can access. Or `--repository-visibility VISIBILITY` (repeatable: `public`, `internal`, `private`) -- every repository of these visibilities, which `list` shows as `every internal or private repository`.
 - `--workflow PATH` (repeatable) -- the workflow file of the job's own repository its run started from, `.github/workflows/ci.yml`, at any ref; `--reusable-workflow OWNER/REPOSITORY/PATH[@REF]` -- a reusable workflow the job runs, even one of its own repository (`uses: ./.github/workflows/...`), optionally pinned to a full ref (`refs/heads/main`) or a commit sha; `--any-workflow`.
 - `--event EVENT` (repeatable) -- replaces the CI events; `--any-event`. `pull_request_target`, `workflow_run` and `issue_comment` run with the repository's identity for people who cannot push to it: add them only when the user asks.
 - `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
+
+**Visibility or a list.** Pick `--repository-visibility` when the rule is the
+visibility itself, such as every private and internal repository and never a
+public one: a repository created later gets tokens without editing the policy,
+once Mergify's GitHub App can access it, and one made public stops getting them
+at once. Pick `--repository` when only
+some repositories' jobs should get a token, which is the narrowest policy, and
+`--except-repository` to leave a few out. Mergify reads the visibility in the
+job's ID token (`repository_visibility`): on a GitHub Enterprise Server whose
+tokens do not give it, a policy by visibility matches no job, so name the
+repositories there.
 
 **Why a job was refused.** The job's log prints Mergify's reason, which names
 the exchange: `The exchange report lists it as exchange
