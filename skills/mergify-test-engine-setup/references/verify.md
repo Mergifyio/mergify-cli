@@ -10,13 +10,9 @@ by job, for exactly the jobs you changed.
 entry per job name they arrived under, on every CI provider, without reading
 any CI log. It is the check to use whenever the `mergify` CLI is installed
 (2026.10.8 or later) and can authenticate: `MERGIFY_TOKEN` (any application
-key), or the credential `mergify auth login` stored. If the command is missing,
-do not install it for the user: read the CI logs instead (below), and give the
-user the command to run themselves. If it says `no Mergify credential found`,
-do not run `mergify auth login` yourself either: it waits until a person
-approves it in a browser. Ask the user to run it (in Claude Code, by typing
-`! mergify auth login` at the prompt) and run `mergify tests runs` again once
-they say it's done, or read the CI logs instead if they would rather not log in.
+key), or the credential `mergify auth login` stored. If the command is missing or refuses to
+authenticate, do not install or log in for the user: read the CI logs instead
+(below), and give the user the command to run themselves.
 
 ```bash
 mergify tests runs --sha "$(git rev-parse HEAD)" --json   # HEAD = the commit you pushed
@@ -24,9 +20,9 @@ mergify tests runs --sha "$(git rev-parse HEAD)" --json   # HEAD = the commit yo
 
 What to read in the JSON:
 
-- `test_results_ingestion`: `not_enabled` means Test Engine is turned off
-  for the repository and Mergify refuses every upload: the user turns it on
-  in the Mergify dashboard. `paused` means Mergify is not
+- `test_results_ingestion`: `not_enabled` means CI Insights is off on the
+  repository and Mergify refuses every upload: the user enables it on the
+  Repositories page of the Mergify dashboard. `paused` means Mergify is not
   ingesting for the organization right now: say so and stop.
 - `pending_uploads` above 0: uploads still waiting to be ingested. Ask again
   in a minute.
@@ -103,11 +99,8 @@ done
 jq -r '.jobs[] | [.pipeline_name, .job_name, .test_results] | @tsv' /tmp/mergify-runs.json
 ```
 
-- A run on a pull request from a branch of the same repository gets an ID
-  token and the repository's secrets, so the upload is real once a trust
-  policy matches the job (a refused exchange only warns, but fails a JUnit
-  upload step that runs a mergify-cli older than 2026.11.10: read the log,
-  SKILL.md step 8).
+- A run on a pull request from a branch of the same repository receives the
+  repository's secrets, so the upload is real.
 - If you cannot finish (rate limit, a job still going after about 20 minutes),
   report the remaining jobs as **not verified yet**, with the commands above
   for the user to run.
@@ -149,7 +142,7 @@ for run in $(gh run list --commit "$sha" --json databaseId --jq '.[].databaseId'
   gh run view "$run" --json jobs --jq '.jobs[]|[.databaseId,.name,.conclusion]|@tsv'
 done
 gh api --allow-escape-sequences repos/<owner>/<repository>/actions/jobs/<job id>/logs \
-  | grep -n -E "Test run ID|Run ID:|reports? uploaded|upload this run|Failed to upload|not uploaded|is deprecated; set|No token configured|MERGIFY_TOKEN is not set|Mergify credential|ID token|MERGIFY_TEST_RUN_ID"
+  | grep -n -E "Test run ID|Run ID:|report uploaded|upload this run|Failed to upload|is deprecated; set|No token configured|MERGIFY_TOKEN is not set|MERGIFY_TEST_RUN_ID"
 ```
 
 - The jobs API returns a finished job's log even while GitHub still shows the
@@ -159,16 +152,14 @@ gh api --allow-escape-sequences repos/<owner>/<repository>/actions/jobs/<job id>
   it is installed and authenticated; otherwise give the user the traces below
   to look for.
 
-Every plugin ends its run with a `Mergify Test Engine` section (RSpec:
-`Mergify Test Engine:`, Minitest: `# Mergify Test Engine:`; earlier releases,
-from 2026.10.6, say `Mergify CI` there) holding the same lines:
+From 2026.10.6, every plugin ends its run with a `Mergify CI` section (RSpec:
+`Mergify CI:`) holding the same lines:
 
 | Line | Meaning |
 |---|---|
 | `Test run ID: … (use it when contacting Mergify support)`, and no "couldn't upload" line | **success** |
 | `Mergify couldn't upload this run's test results, so Test Engine won't show this run.` then `Error: …` | **error**: the upload failed (the run ID can still print) |
-| `Mergify won't upload this run's test results: MERGIFY_TOKEN is not set.` | **error**: no token (missing or empty), and no ID token to exchange |
-| `Mergify won't upload this run's test results: MERGIFY_TOKEN is not set, and the job's ID token could not be exchanged for a Mergify token.` then `Error: …` | **error**: OIDC, the exchange failed or Mergify refused it, for the reason the `Error:` line gives |
+| `Mergify won't upload this run's test results: MERGIFY_TOKEN is not set.` | **error**: no token (missing or empty) |
 | `Mergify won't upload this run's test results: the repository is unknown.` | **error**: the CI variables did not reach the tests (`containers.md`) |
 | `… is deprecated; set … instead.` | a warning: rename the variable |
 
@@ -180,9 +171,7 @@ the upload works, so without `mergify tests runs` such a job is "no error,
 upload not visible in the log", never confirmed.
 
 The JUnit upload (`junit-process`, `gha-mergify-ci`) prints `Run ID:` and
-`report uploaded` (`N reports uploaded` for several files) on success,
-`Failed to upload test results` on failure, and `Test results not uploaded`
-with its reason when it sent nothing.
+`report uploaded` on success, `Failed to upload test results` on failure.
 
 A JavaScript plugin (Jest, Mocha, Vitest, Playwright) on Node.js below 22
 prints `Mergify needs Node.js 22 or later (this is …), so nothing will be
@@ -194,34 +183,14 @@ nothing either.
 
 What to do on an error:
 
-- **`HTTP 422` with `TEST_RESULTS_INGESTION_NOT_ENABLED`, `Test Engine is
-  turned off for this repository`, or, from an older Mergify, `CI Insights is
-  not enabled on this repository`** (in the `Error:` line or the upload's
-  details, or `test_results_ingestion: not_enabled`): Test Engine is off for
-  the repository. The user turns it on in the Mergify dashboard (the refusal
-  links the page), then re-runs the job.
-- **No credential** (`MERGIFY_TOKEN is not set` with no `could not be
-  exchanged` after it, or the JUnit upload's `no Mergify credential found`;
-  before 2026.10.6 `No token configured` or `WARNING: MERGIFY_TOKEN is not
-  set`): on GitHub Actions, the job found no ID token: it lacks
-  `id-token: write` (for a reusable workflow, check the calling job), it runs
-  in a container that was not passed `ACTIONS_ID_TOKEN_REQUEST_URL` and
-  `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, its plugin is older than 2026.11.2, or the
-  run is for a fork's pull request. A job that has its ID token says the same
-  when Mergify does not offer its organization the exchange: use a key.
-  With a key, the secret is not stored yet, or not passed to that step: check
-  the step's `env`; if it is there, the user stores `MERGIFY_TOKEN` and
-  re-runs the job.
-- **ID token refused** (`… could not be exchanged for a Mergify token`, then
-  `Mergify refused the job's ID token: …`): `<organization> has no
-  trust policy` or `No trust policy of <organization> matches this job`, then
-  the reason names the exchange: read it with
-  `mergify oidc exchanges show <id> --org <owner>`, which says which line of
-  each policy refused the job, and widen a policy or write one with the
-  user's go (SKILL.md, step 8). `Mergify's GitHub App has no access to …`:
-  the user adds the repository to the app's installation. `Mergify could not
-  exchange the job's ID token` alone: Mergify or GitHub was unreachable, run
-  the job again.
+- **`HTTP 422` … `CI Insights is not enabled on this repository`** (in the
+  `Error:` line, or `test_results_ingestion: not_enabled`): the user enables CI
+  Insights for the repository on the Repositories page of the Mergify
+  dashboard, then re-runs the job.
+- **No token** (`MERGIFY_TOKEN is not set`; before 2026.10.6 `No token
+  configured` or `WARNING: MERGIFY_TOKEN is not set`): the secret is not
+  stored yet, or not passed to that step. Check the step's `env`; if it is
+  there, the user stores `MERGIFY_TOKEN` and re-runs the job.
 - **An error from the plugin itself** (for example `Failed to flush spans`):
   a plugin bug, not a setup mistake. Report it with the line, and do not call
   that job set up.

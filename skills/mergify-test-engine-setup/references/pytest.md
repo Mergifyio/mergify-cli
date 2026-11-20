@@ -8,14 +8,11 @@ configuration change. It uploads at the end of the session.
 - **CPython only.** Releases from 2026.10.6 need Python 3.10 or later;
   2026.10.5 is the last one for 3.8 and 3.9. When the project supports Python
   below 3.10, require `pytest-mergify>=2026.10.5` and let the resolver pick per
-  interpreter. 2026.10.5 cannot exchange an ID token: on GitHub Actions with
-  OIDC, the legs on Python 3.8 or 3.9 report nothing (say so in the pull
-  request). `pytest-mergify` ships compiled wheels and no source
-  distribution: Linux (x86_64, aarch64; glibc 2.28 or newer, and musl), macOS
-  (arm64; x86_64 as best effort, not tested before a release), Windows
-  (x86_64). There is no wheel for **PyPy** or **free-threaded** CPython
-  (`3.13t`, `3.14t`); pip then falls back to an old release that compiles
-  Rust, or fails.
+  interpreter. `pytest-mergify` ships compiled wheels and no source
+  distribution: Linux (x86_64, aarch64; glibc and musl), macOS (x86_64, arm64),
+  Windows (x86_64). There is no wheel for **PyPy** or **free-threaded** CPython
+  (`3.13t`, `3.14t`); pip then falls back to an old release that compiles Rust,
+  or fails.
 - pytest 7.0 or later.
 
 When a matrix has PyPy legs, add the requirement with an environment marker:
@@ -41,9 +38,8 @@ Add it where the project's test dependencies live, with its tool:
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs pytest, the job's
-  `id-token: write` is enough (`github-actions.md`). With a key,
-  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` in the step's `env`.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` in the `env` of
+  the step that runs pytest (see `github-actions.md`).
 - Matrix: `MERGIFY_TEST_JOB_NAME` per leg from the matrix values.
 - One job running pytest twice (for example with and without optional
   dependencies): a distinct `MERGIFY_TEST_JOB_NAME` on each step.
@@ -67,13 +63,11 @@ pass_env =
     MERGIFY_*
     GITHUB_*
     RUNNER_*
-    ACTIONS_ID_TOKEN_REQUEST_*
 ```
 
 Use the same keys as the project (`deps`, `dependency_groups`, `extras`; old
-projects use `passenv`). `ACTIONS_ID_TOKEN_REQUEST_*` lets the plugin ask for
-the job's ID token. On another CI, replace `GITHUB_*`, `RUNNER_*` and
-`ACTIONS_ID_TOKEN_REQUEST_*` with that CI's variables (`containers.md`). When one `tox` call runs several
+projects use `passenv`). On another CI, replace `GITHUB_*` and `RUNNER_*` with
+that CI's variables (`containers.md`). When one `tox` call runs several
 environments (`py312-crypto`, `py312-nocrypto`), give each its own name:
 
 ```ini
@@ -85,12 +79,11 @@ set_env =
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key (from the CI secret store); unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key (from the CI secret store) |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set (was `PYTEST_MERGIFY_ENABLE`) |
 | `MERGIFY_CI_DEBUG` | print the spans instead of uploading them (was `PYTEST_MERGIFY_DEBUG`) |
 
 Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true pytest …` prints a
-`Mergify Test Engine` section (`Mergify CI` in earlier releases; on 2026.10.5,
-use the old names). Compare with
+`Mergify CI` section (on 2026.10.5, use the old names). Compare with
 `pytest -p no:pytest_mergify …` for the run without the plugin.

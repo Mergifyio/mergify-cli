@@ -1,11 +1,9 @@
 # Tests inside tox, Docker or Docker Compose
 
 tox, `docker run` and Docker Compose start the tests in an environment that
-does not inherit the CI job's variables. Pass through the credential (on
-GitHub Actions, `ACTIONS_ID_TOKEN_REQUEST_URL` and
-`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, which GitHub sets in a job granted
-`id-token: write`; `MERGIFY_TOKEN` with a key), `CI`, `MERGIFY_TEST_JOB_NAME`
-if you set it, and every variable the plugin reads to identify the run. tox's `pass_env` accepts globs (`GITHUB_*`); Docker Compose
+does not inherit the CI job's variables. Pass through `MERGIFY_TOKEN`, `CI`,
+`MERGIFY_TEST_JOB_NAME` if you set it, and every variable the plugin reads to
+identify the run. tox's `pass_env` accepts globs (`GITHUB_*`); Docker Compose
 (`environment:`), `docker run -e` and the Buildkite Docker Compose plugin need
 each name:
 
@@ -20,9 +18,8 @@ Buildkite: BUILDKITE BUILDKITE_AGENT_NAME BUILDKITE_BRANCH BUILDKITE_BUILD_ID
   BUILDKITE_BUILD_URL BUILDKITE_COMMIT BUILDKITE_LABEL BUILDKITE_PIPELINE_SLUG
   BUILDKITE_PULL_REQUEST BUILDKITE_PULL_REQUEST_BASE_BRANCH BUILDKITE_REPO
   BUILDKITE_RETRY_COUNT BUILDKITE_STEP_KEY
-Jenkins: JENKINS_URL BUILD_ID BUILD_URL JOB_NAME BRANCH_NAME NODE_NAME GIT_URL
-  GIT_BRANCH GIT_COMMIT CHANGE_ID CHANGE_TARGET CHANGE_BRANCH CHANGE_FORK
-  TAG_NAME
+Jenkins: JENKINS_URL BUILD_ID BUILD_URL JOB_NAME NODE_NAME GIT_URL GIT_BRANCH
+  GIT_COMMIT CHANGE_TARGET
 ```
 
 - Pass them by name (`- GITHUB_SHA` in a Compose `environment:` list, or
@@ -30,10 +27,6 @@ Jenkins: JENKINS_URL BUILD_ID BUILD_URL JOB_NAME BRANCH_NAME NODE_NAME GIT_URL
 - **On GitHub Actions in a container**, also mount the file `GITHUB_EVENT_PATH`
   points to, at the same path: without it the run is recorded against the
   merge commit instead of the pull request's head commit.
-- **On a Jenkins pull request build in a container**, mount the checkout with
-  its `.git` as the working directory, readable by the container's user:
-  under the merge strategy the run reads the pull request's head commit from
-  it, and is recorded against Jenkins' merge commit without it.
 - The image has no `.git`? The repository name comes from the variables above,
   which is why they must all be passed.
 - Shards (`--shard`): every shard keeps the same job name.

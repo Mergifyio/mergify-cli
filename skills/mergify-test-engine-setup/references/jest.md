@@ -64,19 +64,18 @@ export default withMergify(config);
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs Jest, the job's
-  `id-token: write` is enough (`github-actions.md`). With a key,
-  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step
+  that runs Jest.
 - Matrix: `MERGIFY_TEST_JOB_NAME` per leg. `--shard` legs share one name.
 
 ## Variables
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set |
 | `MERGIFY_CI_DEBUG` | print the spans instead of uploading them |
 
 Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true npx jest` prints the spans
-and a `Mergify Test Engine` summary (`Mergify CI` in earlier releases).
+and a `Mergify CI` summary.
