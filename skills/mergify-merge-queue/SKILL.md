@@ -377,7 +377,6 @@ Use `mergify queue show <PR_NUMBER>` to check why a PR is stuck or how it's prog
 | `preparing` | Batch is being set up |
 | `bisecting` | Batch failed, bisecting to find the culprit |
 | `failed` | CI failed for this batch |
-| `waiting_for_later_batch` | CI failed for this batch, and Mergify waits for the nearly done batch tested on top of it: that batch's success merges both, its failure has this one handled as any failed batch |
 | `merged` | PRs in this batch have been merged |
 | `waiting_for_merge` | CI passed, waiting for GitHub to merge |
 | `waiting_for_previous_batches` | Blocked on earlier batches completing |
