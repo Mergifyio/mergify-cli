@@ -67,6 +67,15 @@ The window is echoed so an empty `events` is self-describing. Filter with `jq` o
 - **"Why was this PR dequeued?"** — `mergify queue show <PR>` (the `mergify-merge-queue` skill) is the dedicated answer: it renders the last leave event with the reason, the failing checks' job URLs, and the head-SHA staleness check. `mergify events` is for the *whole* trail or for non-queue events.
 - **Raw API access** (CLI not installed, or a token refused the log): `GET /v1/repos/{owner}/{repo}/logs` — same data; always pass `received_from` (the API silently defaults to 1 day) and keep the span ≤ 93 days.
 
+## When a command says there is no Mergify credential
+
+`no Mergify credential found` means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
+
+- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
+- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
+- Wait until they say it's done, then run the same command again.
+- Don't look for the answer somewhere else (the GitHub API, the PR's comments) without asking them first.
+
 ## When a command or flag is missing
 
 If `mergify` rejects a command or flag this skill names, the CLI is probably older than the skill: follow the `mergify-cli-upgrade` skill.

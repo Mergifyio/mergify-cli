@@ -1,13 +1,13 @@
 ---
 name: mergify-ci
-description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, and retrieve merge queue metadata. ALWAYS use this skill when running `mergify ci` or `mergify tests` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, or reading Mergify merge queue CI context. Triggers on mergify ci, mergify tests, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info.
+description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, retrieve merge queue metadata, and write the OIDC trust policies that let GitHub Actions jobs reach Mergify without a key. ALWAYS use this skill when running `mergify ci`, `mergify tests` or `mergify oidc` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, reading Mergify merge queue CI context, or finding out why a job's ID token was refused. Triggers on mergify ci, mergify tests, mergify oidc, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info, trust policy, OIDC, id-token.
 ---
 
 # Mergify CI Commands
 
 ## Overview
 
-The `mergify ci` command group provides tools for CI pipelines: uploading JUnit test results to Mergify Test Engine, detecting git references for diff-based operations, managing CI scopes for selective testing, and retrieving merge queue batch metadata.
+The `mergify ci` command group provides tools for CI pipelines: uploading JUnit test results to Mergify Test Engine, detecting git references for diff-based operations, managing CI scopes for selective testing, and retrieving merge queue batch metadata. `mergify oidc` writes the trust policies that let a GitHub Actions job reach Mergify with its ID token instead of a key, and reads why a job was refused.
 
 ## Commands
 
@@ -24,6 +24,10 @@ mergify tests quarantines add NAME        # Add a test to the Test Engine quaran
 mergify tests quarantines remove NAME     # Remove a test from the Test Engine quarantine
 mergify tests quarantines get NAME        # Print a single quarantine by test name or id
 mergify tests quarantines list            # List the tests currently in the Test Engine quarantine
+mergify oidc trust-policies list          # List the organization's OIDC trust policies
+mergify oidc trust-policies create        # Write a trust policy (show, update, delete too)
+mergify oidc exchanges list               # List the latest ID token exchanges, and why one was refused
+mergify oidc exchanges show ID            # Show the exchange a refused job's log names
 ```
 
 ## Authentication
@@ -37,9 +41,11 @@ CLI calls, the two lists share only the quarantine list.
 | `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
 | `admin` | Reading test health, the quarantine *list*, and mutating the quarantine. Not trace upload, not `scopes-send`. |
 
-Trace upload and `scopes-send` take a `ci` key only: an `admin` key or a
-user credential gets a `403`. Every other endpoint below that refuses a `ci`
-key accepts a user credential (`mergify auth login`) instead. `GITHUB_TOKEN`
+Trace upload and `scopes-send` take only a `ci` key, or on GitHub Actions the
+job's ID token ([below](#github-actions-jobs-need-no-key-oidc)): an `admin`
+key or a user credential gets a `403`. Every other endpoint below that refuses a `ci`
+key accepts a user credential (`mergify auth login`, which your user runs: see
+[below](#when-a-command-says-there-is-no-mergify-credential)) instead. `GITHUB_TOKEN`
 inside GitHub Actions is not a Mergify credential at all, so do not reach for
 it to clear one of these `403`s.
 
@@ -61,17 +67,30 @@ what an `admin` key carries. Per command:
 `ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
 no token at all.
 
+### GitHub Actions jobs need no key (OIDC)
+
+On GitHub Actions, a job granted `id-token: write` with no `MERGIFY_TOKEN`
+trades its GitHub ID token for a short-lived token that does what a `ci` key
+does, on its own repository only, when a trust policy of the organization
+matches the job: `ci junit-process`, `ci scopes-send` and the test framework
+plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that is set
+always wins. Writing a trust policy needs an organization admin or CI Admin:
+see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
+Fork pull requests get no ID token, as they get no secret. Jobs outside
+GitHub Actions keep a `ci` key.
+
 ## JUnit Processing (`junit-process`)
 
 The primary CI command. Parses JUnit XML reports, checks quarantine status for failing tests, uploads results to Mergify Test Engine, and determines the final CI exit code.
 
 ```bash
 mergify ci junit-process \
-  --token "$MERGIFY_TOKEN" \
   --repository owner/repo \
   --tests-target-branch main \
   path/to/junit-results.xml
 ```
+
+On GitHub Actions, a job granted `id-token: write` needs no key (see [GitHub Actions jobs need no key](#github-actions-jobs-need-no-key-oidc)). On any other CI, the key is read from `MERGIFY_TOKEN`: set it in the job's environment from a secret rather than passing `--token`, which would put it in the process list.
 
 `FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Always quote the pattern so Mergify expands it rather than the shell — this is the recommended approach for large, sharded test suites.
 
@@ -92,22 +111,28 @@ mergify ci junit-process \
 4. Prints a summary: tests run, failures, quarantined vs blocking
 5. Exits with code 0 if all failures are quarantined, code 1 if any are blocking
 6. If `--test-exit-code` is non-zero but no test failures are found, exits with code 1 (silent failure detection)
-7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (refused by the schema check, or HTTP 4xx except 408/429, e.g. a token without CI Insights access) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
+7. Upload failures never affect the exit code (Mergify-side trouble must not break CI), but they are surfaced: on GitHub Actions the command emits an `::error::` annotation when the upload is rejected (refused by the schema check, or HTTP 4xx except 408/429, e.g. a token without access to the repository, or Test Engine turned off for it: the annotation then gives Mergify's reason) or a `::warning::` annotation for transient errors (5xx, 408, 429, network), and appends `test_results_upload=success|rejected|failed` to `$GITHUB_OUTPUT` so workflows can detect dead ingest programmatically
+8. With no `MERGIFY_TOKEN`, a job whose ID token Mergify refuses (no trust policy matches it yet) or does not exchange carries on without Mergify: nothing is uploaded and no test is quarantined, so it exits as points 5 and 6 say with every failure blocking. The report says `MERGIFY_TOKEN is not set, skipping the test results upload and the quarantine check.`, followed by Mergify's reason when it refused, and so does a `::warning::` annotation on GitHub Actions; `$GITHUB_OUTPUT` gets `test_results_upload=rejected`. A Mergify that cannot answer the exchange is an outage instead, reported as in point 7
 
 **GitHub Actions example:**
 ```yaml
-- name: Run tests
-  id: tests
-  run: pytest --junitxml=results.xml || echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+jobs:
+  test:
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # ...
+      - name: Run tests
+        id: tests
+        run: pytest --junitxml=results.xml || echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
-- name: Process test results
-  if: always()
-  run: |
-    mergify ci junit-process \
-      --test-exit-code ${{ steps.tests.outputs.exit_code || 0 }} \
-      results.xml
-  env:
-    MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+      - name: Process test results
+        if: always() && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          mergify ci junit-process \
+            --test-exit-code ${{ steps.tests.outputs.exit_code || 0 }} \
+            results.xml
 ```
 
 ## Git References (`git-refs`)
@@ -141,9 +166,9 @@ BASE=$(mergify ci git-refs --format=json | jq -r '.base // ""')
 
 Sources detected (in priority order): merge queue context, GitHub pull request event, GitHub push event, Jenkins change request, fallback to last commit.
 
-On a Jenkins change request build (`CHANGE_ID` set by a multibranch pipeline), the base is the branch the pull request targets (`CHANGE_TARGET`), printed as the commit `origin/<branch>` names, and the head is `HEAD`. Jenkins fetches `origin/<branch>` when it merges the pull request into its target, and checks out the pull request alone otherwise: `git-refs` then fetches the target branch from `origin`, with the history it shares with `HEAD`, and fails when it cannot. That `git fetch` needs the repository's credentials in the step.
+On a Jenkins change request build (`CHANGE_ID` set by a multibranch pipeline) that is not a merge queue draft (below), the base is the branch the pull request targets (`CHANGE_TARGET`), printed as the commit `origin/<branch>` names, and the head is `HEAD`. Jenkins fetches `origin/<branch>` when it merges the pull request into its target, and checks out the pull request alone otherwise: `git-refs` then fetches the target branch from `origin`, with the history it shares with `HEAD`, and fails when it cannot. That `git fetch` needs the repository's credentials in the step.
 
-The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite builds of the branch, so a merge queue batch built by a `push` trigger with no draft pull request gets the batch's checking base too. A push that creates a branch has no previous commit, so its base is the default branch.
+The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite and Jenkins builds of the branch, so a merge queue batch a CI builds as a branch, by a `push` trigger or a branch job, rather than as its draft pull request, gets the batch's checking base too. On a Jenkins branch build, the branch is `GIT_BRANCH`, or `BRANCH_NAME` in a scripted pipeline, which does not export `GIT_BRANCH`, and the head is `HEAD`. On a Jenkins change request, the branch is the one it comes from (`CHANGE_BRANCH`), unless that is a fork's (`CHANGE_FORK`), and the head is the commit the note is on: the commit Jenkins checked out (`GIT_COMMIT`, else `HEAD`), or its first parent when Jenkins merged a target that moved on since into the draft. The base, the commit the batch was built on, is fetched from `origin` when a shallow clone lacks it, and `git-refs` fails when it cannot. The note's `git fetch` needs the repository's credentials in the step; without them the build is read as any other change request or branch build. A push that creates a branch has no previous commit, so its base is the default branch.
 
 On a GitHub `push` that did not fast-forward (the event's `forced`), such as a push back to an earlier commit, the head is a commit `git-refs` makes in the local clone: the pushed commit's files, with the base, the commit the push replaced, as its only parent. Its merge base with the base is the base, so the `nx show projects --affected --base --head` call above, `git diff base...head` and the other tools that compare from the merge base see every file the push changed, a rollback's included. `git-refs` fetches the base by its SHA when the clone lacks it, and prints the pushed commit with a warning when it cannot, or out of a clone. No ref names that head and no other clone has it: run `mergify ci git-refs` in the clone that compares, where it makes the same commit, rather than passing its head to another job.
 
@@ -180,10 +205,10 @@ A renamed file counts against **both** of its paths, same as the engine: `git mv
 
 Sends scopes tied to a pull request to the Mergify API. Used when scopes are determined manually or from a file rather than auto-detected.
 
-The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, or `CIRCLE_SHA1`); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), Jenkins, any other CI. On Jenkins, `GIT_COMMIT` is the head only when the GitHub Branch Source plugin builds "The current pull request revision", the default for sources created since 2023; a source that merges the pull request into its target branch makes `GIT_COMMIT` that merge. The pull request number is detected on Jenkins (`CHANGE_ID`), so `--head-sha` is the only flag a Jenkins change request build needs. When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
+The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, `CIRCLE_SHA1`, or a Jenkins pull request build's checkout); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), any other CI. A Jenkins multibranch pull request build needs no flag: the number comes from `CHANGE_ID`, and the head is the commit checked out (`GIT_COMMIT`, else `HEAD`) or, when the GitHub Branch Source plugin merges the pull request into its target branch, the first parent of the merge Jenkins made. No head is detected where git cannot read the checkout, such as a container without its `.git`, nor on an agent that merges with JGit, whose merge Jenkins does not make under its own name: pass `--head-sha` with the pull request's head there, or switch the source's strategy to "The current pull request revision". When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
-Needs a `ci` key — an `admin` key or a user credential gets a `403`. See
-[Authentication](#authentication).
+Needs a `ci` key, or on GitHub Actions the job's ID token; an `admin` key or a
+user credential gets a `403`. See [Authentication](#authentication).
 
 ```bash
 # Send specific scopes
@@ -212,7 +237,7 @@ mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 - `--scope` / `-s` -- Scope name (repeatable)
 - `--scopes-json` -- JSON file containing scopes (output of `mergify ci scopes --write`)
 - `--scopes-file` -- Plain-text file with one scope per line
-- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite and CircleCI)
+- `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite, CircleCI and Jenkins pull request builds)
 - `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
 
 ## Tests Show (`tests show`)
@@ -286,7 +311,7 @@ reached Mergify — open the job in your CI to see whether it ran, and read its
 upload output (a plugin that failed before sending, or a refused upload,
 shows there). A name you did not expect, or several jobs under one name,
 means the job name sent is not the one you meant: set `MERGIFY_TEST_JOB_NAME`.
-A repository that refuses every upload (CI Insights not enabled on it) says
+A repository that refuses every upload (Test Engine turned off for it) says
 so above the list (`test_results_ingestion` in `--json`).
 
 Each job reads from its latest CI run: a commit run on push and on its pull
@@ -441,9 +466,88 @@ A null `issue_url` means no issue tracks the fix.
 **Exit codes:**
 - `0` -- Always, including an empty quarantine ("No quarantined tests found.").
 
+## OIDC Trust Policies (`mergify oidc`)
+
+A GitHub Actions job gets a Mergify token for its ID token when one trust
+policy of its organization matches it, and a policy matches when each of its
+lines does: repositories, workflows, events and environments. Policies only
+allow, with no order and no deny, so a narrow one cannot hold back a broad one.
+OIDC is in Preview, open to every organization: it may still change.
+
+Every `mergify oidc` command takes the organization with `--org`, else the
+owner of the current repository, and the credential of one of its admins or CI
+Admins (`mergify auth login`), or an application key with the OIDC trust
+policies permission, and the repositories one to name repositories (an
+`admin` key has both); a `ci` key gets a `403`. Every command takes `--json`,
+which prints what Mergify answered; `exchanges list --json` puts the exchanges
+under `exchanges`, beside `since` and `truncated` (true when `--limit` left
+some out).
+
+```bash
+# Every policy, line by line.
+mergify oidc trust-policies list --org acme
+
+# The narrowest useful policy: one repository's CI jobs, on the CI events
+# (push, pull_request, merge_group, schedule, workflow_dispatch), any
+# workflow, any environment.
+mergify oidc trust-policies create --org acme --name "api CI" --repository api
+
+# Deploys only: one workflow, on push, in the production environment.
+mergify oidc trust-policies create --org acme --name "api deploys" \
+  --repository api --workflow .github/workflows/deploy.yml \
+  --event push --environment production
+
+# Change only the lines named; the others keep their values. A policy's ID
+# is the UUID `list` shows before its name.
+mergify oidc trust-policies update 0b6f3c2e-5f1d-4c7a-9e2b-8d4a1f0c3e57 --org acme \
+  --repository api --repository web
+
+mergify oidc trust-policies delete 0b6f3c2e-5f1d-4c7a-9e2b-8d4a1f0c3e57 --org acme
+```
+
+A line no flag names is the default on `create`: every repository, any
+workflow, the CI events, any environment. `--name` alone therefore trusts every
+CI job of the organization: ask the user before writing a policy, it decides
+which jobs get a token.
+
+**Lines:**
+- `--repository NAME` (repeatable) -- only these repositories; `--except-repository NAME` -- every repository but these; `--all-repositories`. `NAME` or `OWNER/NAME`, of the organization's repositories Mergify's GitHub App can access.
+- `--workflow PATH` (repeatable) -- the workflow file of the job's own repository its run started from, `.github/workflows/ci.yml`, at any ref; `--reusable-workflow OWNER/REPOSITORY/PATH[@REF]` -- a reusable workflow the job runs, even one of its own repository (`uses: ./.github/workflows/...`), optionally pinned to a full ref (`refs/heads/main`) or a commit sha; `--any-workflow`.
+- `--event EVENT` (repeatable) -- replaces the CI events; `--any-event`. `pull_request_target`, `workflow_run` and `issue_comment` run with the repository's identity for people who cannot push to it: add them only when the user asks.
+- `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
+
+**Why a job was refused.** The job's log prints Mergify's reason, which names
+the exchange: `The exchange report lists it as exchange
+5e0c9a7d-2b14-4f3e-8a61-c9d07b2e4f83`. Read it:
+
+```bash
+mergify oidc exchanges show 5e0c9a7d-2b14-4f3e-8a61-c9d07b2e4f83 --org acme
+mergify oidc exchanges list --org acme --result refused --repository api --since 1d
+```
+
+A refused exchange lists, per policy, the first line the job did not match
+(`policy  <NAME> (<ID>) events: pull_request_target is not one of its events`): widen
+that policy, or write another, with the user's go. `exchanges list` reads the last
+7 days by default (`--since`, up to the 90 days the report keeps), latest
+first, 20 at most (`--limit`). The refusal reasons:
+
+| Reason | What to do |
+| --- | --- |
+| `no_policy` | The organization has no trust policy: write one. |
+| `no_matching_policy` | No policy matches the job: see each policy's line above. |
+| `repository_not_installed` | Mergify's GitHub App cannot access the repository: the user adds it to the app's installation. `--repository` cannot name such a repository: list without it. |
+| `audience_mismatch` | The job asked for a token for another Mergify: check `MERGIFY_API_URL`. |
+
 ## Queue Info (`queue-info`)
 
-Outputs the current build's merge queue batch metadata as JSON. Reads the `refs/notes/mergify/<branch>` git note Mergify writes on the merge queue branch head for the current `HEAD`; exits `INVALID_STATE` (7) when no note is found (i.e. not a merge queue batch build). Takes no arguments and needs no GitHub token.
+Outputs the current build's merge queue batch metadata as JSON. Reads the `refs/notes/mergify/<branch>` git note Mergify writes on the merge queue branch head the build is for; exits `INVALID_STATE` (7) when no note is found (i.e. not a merge queue batch build, or a pull request from a fork). Takes no arguments and needs no GitHub token.
+
+It reads the note `ci git-refs` reads, fetching that branch's notes ref alone. On a pull request build it reads no other:
+
+- On a GitHub Actions pull request event (`pull_request`, `pull_request_target`, a review), the note for the pull request's branch on its head (`pull_request.head`), so the default `actions/checkout` of a `pull_request` event, GitHub's merge of the draft into its base, is fine. A pull request from a fork gets none.
+- On a Jenkins change request (`CHANGE_ID` set), the note for the branch the change request comes from (`CHANGE_BRANCH`), on the commit Jenkins checked out (`GIT_COMMIT`, else `HEAD`), or on the first parent of a merge, as when Jenkins merged a target that moved on since into the draft. A fork's change request (`CHANGE_FORK`) gets none.
+
+On a branch build it reads the note for the branch built, on the commit built: the pushed branch on GitHub Actions `push`, `BUILDKITE_BRANCH` on `BUILDKITE_COMMIT` on Buildkite, `GIT_BRANCH` (else `BRANCH_NAME`) on `HEAD` on a Jenkins branch build. Without that note, it reads the note on `HEAD`, as on any other build.
 
 The note's full payload is emitted verbatim (every field Mergify wrote, e.g. `checking_base_sha`, `pull_requests` with per-PR `scopes`, `previous_failed_batches`, top-level `scopes`). New fields appear automatically without a CLI update, so don't assume a fixed schema.
 
@@ -454,7 +558,7 @@ The note's full payload is emitted verbatim (every field Mergify wrote, e.g. `ch
 mergify ci queue-info
 ```
 
-Mergify attaches the batch metadata as a git note to the MQ branch head commit, so reading it needs only git, no PR body and no GitHub token. The command runs `git fetch origin "refs/notes/mergify/*"` itself (notes aren't fetched by default), then returns the note attached to `HEAD`. Requirements: the `origin` remote is reachable and the checkout is at the MQ branch head commit, which is the normal state inside a merge-queue CI run. A detached HEAD is fine.
+Mergify attaches the batch metadata as a git note to the MQ branch head commit, so reading it needs only git, no PR body and no GitHub token. To read the note on `HEAD` (GitLab, CircleCI, another GitHub Actions event, a branch build without its branch's note, ...), the command runs `git fetch origin "refs/notes/mergify/*"` itself (notes aren't fetched by default), then returns the note attached to `HEAD`. Requirements: the `origin` remote is reachable and, off a pull request build, the checkout is at the MQ branch head commit, which is the normal state inside a merge-queue CI run. A detached HEAD is fine.
 
 This command is useful in CI workflows that need to know whether the current run is part of a merge queue batch and what other PRs are in the batch.
 
@@ -464,15 +568,16 @@ This command is useful in CI workflows that need to know whether the current run
 ```yaml
 jobs:
   test:
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run tests
         run: pytest --junitxml=results.xml
       - name: Upload and evaluate
-        if: always()
+        if: always() && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository)
         run: mergify ci junit-process results.xml
-        env:
-          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
 ```
 
 ### Selective testing with scopes
@@ -482,7 +587,7 @@ jobs:
     outputs:
       scopes: ${{ steps.scopes.outputs.scopes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: scopes
@@ -494,6 +599,17 @@ jobs:
     steps:
       - run: pytest backend/
 ```
+
+## When a command says there is no Mergify credential
+
+On your user's machine, `no Mergify credential found` from `tests show`, `tests runs`, `tests quarantines` or `oidc` means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
+
+- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
+- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
+- Wait until they say it's done, then run the same command again.
+- Don't read another source instead (CI logs, the GitHub API) without asking them first.
+
+`ci junit-process` and `ci scopes-send` say something else when they find no credential: they need an application key in `MERGIFY_TOKEN` (or OIDC on GitHub Actions), which logging in does not provide.
 
 ## When a command or flag is missing
 

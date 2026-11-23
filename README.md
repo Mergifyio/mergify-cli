@@ -19,10 +19,12 @@ mergify ci junit-process report.xml   # upload test results to Test Engine
   laptop or a CI runner and go.
 - **One command to sign in.** `mergify auth login` approves the CLI in your
   browser and keeps the credential in your OS keychain; `MERGIFY_TOKEN` or
-  `--token` for scripting.
+  `--token` for scripting. In a GitHub Actions job granted `id-token: write`,
+  `mergify ci` needs neither: it exchanges the job's ID token.
 - **Built for pipelines.** Logs to stderr, structured `--json` output on read
   commands, and stable [exit codes](#exit-codes) for scripts and runbooks.
-- **Cross-platform.** Linux, macOS (x86_64 + aarch64), and Windows.
+- **Cross-platform.** Linux (x86_64 + aarch64, glibc 2.28 or newer), macOS
+  (aarch64; x86_64 as best effort, not tested before a release), and Windows.
 
 ## Installation
 
@@ -37,7 +39,7 @@ The fully-qualified name taps and installs in one step. Upgrade with
 Homebrew-managed binary. See the [tap](https://github.com/Mergifyio/homebrew-tap)
 for tap-trust and short-name details.
 
-### Install script (recommended for Linux; also macOS — x86_64 and aarch64)
+### Install script (recommended for Linux; also macOS)
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Mergifyio/mergify-cli/main/install.sh | sh
@@ -94,9 +96,15 @@ Mergify API is dropping GitHub tokens, and a command with none of the credential
 above fails and says how to get one. Run `mergify auth login`, or set
 `MERGIFY_TOKEN` in CI.
 
-`mergify ci` skips step 3. Those endpoints require an organization
-application key, which is what `MERGIFY_TOKEN` holds in a CI job; the
-per-user credential `mergify auth login` mints is refused there by design.
+`mergify ci` skips step 3: its endpoints take a CI credential, and refuse the
+per-user one `mergify auth login` mints by design. In a GitHub Actions job
+granted `id-token: write`, with neither `--token` nor `MERGIFY_TOKEN`,
+`mergify ci junit-process` and `mergify ci scopes-send` exchange the job's ID
+token for a short-lived Mergify token, once a trust policy of the organization
+allows the job (`mergify oidc`, below). On any other CI, `MERGIFY_TOKEN` holds
+an organization application key with the `ci` scope. With an application key
+in `MERGIFY_TOKEN`, `mergify auth status` names the key, its permissions and
+when it expires: a refused request never says which permission it lacked.
 
 `mergify stack` also calls the **GitHub API** directly, and resolves that
 token separately (`--token`, `MERGIFY_TOKEN`, `GITHUB_TOKEN`, `gh auth
@@ -171,6 +179,11 @@ Every command group maps to a section of the
   provider. [Docs](https://docs.mergify.com/test-engine/)
 - **`mergify tests`** — Look up test health and manage the flaky-test
   quarantine. [Docs](https://docs.mergify.com/test-engine/)
+- **`mergify oidc`** — Write the trust policies that let GitHub Actions jobs
+  reach Mergify with their ID token instead of a stored key, and read why a
+  job's exchange was refused. Takes the organization with `--org`, else the
+  owner of the repository.
+  [Docs](https://docs.mergify.com/integrations/gha/oidc/)
 - **`mergify freeze`** — Schedule merge freezes for release windows and
   maintenance. [Docs](https://docs.mergify.com/merge-protections/freeze/)
 - **`mergify config`** — Validate your configuration and simulate actions
@@ -211,7 +224,7 @@ These are accepted on every command:
 
 | Variable | Effect |
 | --- | --- |
-| `MERGIFY_TOKEN` | API token. Takes precedence over a stored `mergify auth login` credential. |
+| `MERGIFY_TOKEN` | API token. Takes precedence over a stored `mergify auth login` credential. Unset in a GitHub Actions job granted `id-token: write`, `mergify ci` exchanges the job's ID token instead. |
 | `GITHUB_TOKEN` | Not a Mergify API credential. Still the GitHub token `mergify stack` uses. |
 | `GITHUB_REPOSITORY` | Default `owner/repo` when `--repository` is omitted. |
 | `MERGIFY_API_URL` | API base URL (default `https://api.mergify.com`). |
