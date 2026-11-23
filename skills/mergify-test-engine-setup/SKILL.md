@@ -1,12 +1,14 @@
 ---
 name: mergify-test-engine-setup
-description: Set up Mergify Test Engine in a repository so every CI job that runs tests sends its results to Mergify — detect the test frameworks, CI provider and test jobs, install the Mergify test plugin (pytest, RSpec, Minitest, Vitest, Playwright, Jest, Mocha) or wire a JUnit report upload for any other framework, pass MERGIFY_TOKEN from the CI secret store, and open the pull request. Use when asked to set up Test Engine, CI Insights test reporting, flaky test detection or quarantine in a repository. Does not need the mergify CLI installed locally.
+description: Set up Mergify Test Engine in a repository so every CI job that runs tests sends its results to Mergify — detect the test frameworks, CI provider and test jobs, install the Mergify test plugin (pytest, RSpec, Minitest, Vitest, Playwright, Jest, Mocha) or wire a JUnit report upload for any other framework, let the jobs reach Mergify (GitHub Actions jobs with their ID token through an OIDC trust policy written with `mergify oidc`, else MERGIFY_TOKEN from the CI secret store), and open the pull request. Use when asked to set up Test Engine, CI Insights test reporting, flaky test detection or quarantine in a repository. Works without the mergify CLI installed locally, which then can neither write a trust policy nor check the results.
 ---
 
 # Set Up Mergify Test Engine
 
-Each CI job that runs tests sends its results to Mergify, authenticated by a
-key stored in the CI as `MERGIFY_TOKEN`. Follow this procedure in order; load a
+Each CI job that runs tests sends its results to Mergify. A GitHub Actions job
+can reach it with its own ID token, which a trust policy of the organization
+allows (OIDC): no key to create, store or rotate. Any other job uses a key
+stored in the CI as `MERGIFY_TOKEN`. Follow this procedure in order; load a
 file from `references/` only when the repository uses that framework or CI. No
 documentation fetch is needed.
 
@@ -95,6 +97,10 @@ Node.js, **ask the user** before changing it, and set up everything else first.
 The framework and CI references give the exact steps. The rules that apply
 everywhere:
 
+- **How the jobs reach Mergify** (step 8): on GitHub Actions, with their ID
+  token (OIDC): each job is granted `id-token: write` and gets no
+  `MERGIFY_TOKEN` (`references/github-actions.md`). On another CI, or when
+  step 8 picks a key, with `MERGIFY_TOKEN`.
 - **`MERGIFY_TOKEN` comes from the CI's secret store**, never from a file.
   Never ask for its value, never write a token anywhere.
 - **The plugins report only when `CI` is `true`** (or their enable variable is
@@ -111,10 +117,11 @@ everywhere:
     environments);
   - per called workflow, when reusable workflows share a job id;
   - never per shard: shards of one suite share one name.
-- **Without a token** (fork pull requests; Dependabot's until its own secret is
-  stored), the plugins upload nothing and the tests run as usual. The JUnit
-  upload step needs a guard (`references/github-actions.md`). On Jenkins a
-  missing credential fails the stage (`references/jenkins.md`).
+- **Without a credential** (pull requests from forks get no ID token and no
+  secret; with a key, Dependabot's get none until its own secret is stored),
+  the plugins upload nothing and the tests run as usual. The JUnit upload step
+  needs a guard (`references/github-actions.md`). On Jenkins a missing
+  credential fails the stage (`references/jenkins.md`).
 
 ## 6. Keep everything else as it was
 
@@ -135,11 +142,51 @@ as before" only if you ran the tests without the plugin too (pytest:
 `-p no:pytest_mergify`). For a JUnit setup, check that the report file is
 written. Check that the CI files still parse.
 
-## 8. The key
+## 8. How the jobs reach Mergify
 
-The user creates a Mergify application key with the `ci` scope in the Mergify
-dashboard and stores it as `MERGIFY_TOKEN`. Before telling them it is missing,
-check what already exists (GitHub: repository secrets with
+**On GitHub Actions, OIDC.** A job granted `id-token: write` with no
+`MERGIFY_TOKEN` trades its GitHub ID token for a short-lived Mergify token,
+limited to its repository, when a trust policy of the organization matches
+it: no secret to store, Dependabot's included. The plugins and `mergify ci`
+need release 2026.11.2 or later (raise an older pin or lock), and
+`mergifyio/gha-mergify-ci` v30 or later.
+Until a policy matches, Mergify refuses the job's ID token: nothing is
+uploaded or quarantined, the log warns, and the job passes or fails as its
+tests do. A JUnit upload step does so from mergify-cli 2026.11.10, and fails
+the job with an older CLI (`references/github-actions.md` says which CLI a
+step runs). An organization admin or CI Admin writes the policy. Check with the `mergify` CLI
+(`mergify-ci` skill, OIDC Trust Policies), signed in as the user
+(`mergify auth status`; never log in for them):
+
+1. `mergify oidc trust-policies list --org <owner>` shows each policy line by
+   line, its repositories by name. A policy whose lines cover every job you
+   changed (the repository, the events that start them, their workflows and
+   environments): nothing to write.
+2. No such policy: **ask the user before writing one**, since it decides which
+   jobs of the organization get a token. Propose the narrowest that covers the
+   jobs, usually
+   `mergify oidc trust-policies create --org <owner> --name "<repository> CI" --repository <repository>`
+   (CI events, any workflow, any environment), or
+   `mergify oidc trust-policies update <id> --org <owner> --repository …` to
+   add the repository to an existing one (list every repository it already
+   holds: the flags replace the line). With their go, run it. HTTP 403: they
+   are neither an admin nor a CI Admin: give them the command to hand to one.
+3. Without the CLI, or when it cannot authenticate or read the policies, ask
+   the user whether a trust policy of the organization covers the
+   repository's GitHub Actions jobs. If none does, or they do not know, give
+   them the `create` command above for an organization admin or CI Admin.
+
+While no policy covers the jobs, say in the pull request that they send
+nothing until it exists, with the command. When a JUnit upload step runs a
+mergify-cli older than 2026.11.10, also open the pull request as a draft that
+leaves draft once the policy exists: that step fails its job until then. A
+user who would rather not wait uses a key.
+
+**A key instead**, on any other CI, and on GitHub Actions when the user asks
+for one rather than a trust policy: the user creates a Mergify application
+key with the `ci` scope in the Mergify dashboard and stores it as
+`MERGIFY_TOKEN`. Before telling them it is missing, check what already exists
+(GitHub: repository secrets with
 `gh secret list --repo <owner>/<repository>`, organization secrets with
 `gh api repos/<owner>/<repository>/actions/organization-secrets --jq '.secrets[].name'`,
 Dependabot's with `gh secret list --app dependabot --repo <owner>/<repository>`).
@@ -151,14 +198,14 @@ unless Dependabot's list already has it: Dependabot's pull requests run the
 tests but never see Actions secrets, even organization ones. On another
 CI, the CI reference's "The key" section says where it goes.
 
-The repository also needs **CI Insights enabled** on the Repositories page of
-the Mergify dashboard. Without it, uploads are refused while CI stays green.
+The repository also needs **Test Engine turned on** in the Mergify dashboard.
+Without it, uploads are refused while CI stays green.
 
 ## 9. Open the pull request
 
 One pull request with the change. Say per job what changed and why, which jobs
-cannot report and why, and what the user still has to do (the key, a Node.js
-upgrade they did not approve). Describe the lockfile change in words. Follow the
+cannot report and why, and what the user still has to do (the trust policy or
+the key, a Node.js upgrade they did not approve). Describe the lockfile change in words. Follow the
 repository's conventions for the commit message and the pull request.
 
 ## 10. Check that results arrive
@@ -181,4 +228,5 @@ N being the entries whose results were received (three jobs changed, one not
 run on the pull request: "2 of 3"). List every entry with its case, and the legs that
 cannot report by design. Write "done" or "verified" only when N equals M.
 Then: the frameworks and jobs you found, the changes per job, what you could
-not set up and why, and how to store the key.
+not set up and why, and how the jobs reach Mergify: the trust policy that
+covers them, or how to store the key.
