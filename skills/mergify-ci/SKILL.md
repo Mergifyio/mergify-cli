@@ -1,6 +1,6 @@
 ---
 name: mergify-ci
-description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, retrieve merge queue metadata, and write the OIDC trust policies that let GitHub Actions jobs reach Mergify without a key. ALWAYS use this skill when running `mergify ci`, `mergify tests` or `mergify oidc` commands, uploading test results to Mergify, managing Mergify test quarantines, turning Mergify test retry on or off, detecting Mergify CI scopes, reading Mergify merge queue CI context, or finding out why a job's ID token was refused. Triggers on mergify ci, mergify tests, mergify oidc, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify test retry, Mergify scopes, scopes-send, git-refs, queue-info, trust policy, OIDC, id-token.
+description: Use Mergify CI commands to upload JUnit test results, detect git references, manage CI scopes, retrieve merge queue metadata, and write the OIDC trust policies that let GitHub Actions jobs reach Mergify without a key. ALWAYS use this skill when running `mergify ci`, `mergify tests` or `mergify oidc` commands, uploading test results to Mergify, managing Mergify test quarantines, detecting Mergify CI scopes, reading Mergify merge queue CI context, or finding out why a job's ID token was refused. Triggers on mergify ci, mergify tests, mergify oidc, junit-process, Mergify Test Engine, CI Insights, Mergify quarantine, Mergify scopes, scopes-send, git-refs, queue-info, trust policy, OIDC, id-token.
 ---
 
 # Mergify CI Commands
@@ -24,10 +24,6 @@ mergify tests quarantines add NAME        # Add a test to the Test Engine quaran
 mergify tests quarantines remove NAME     # Remove a test from the Test Engine quarantine
 mergify tests quarantines get NAME        # Print a single quarantine by test name or id
 mergify tests quarantines list            # List the tests currently in the Test Engine quarantine
-mergify tests retry show                  # Say whether test retry is on, and with which settings
-mergify tests retry on                    # Turn test retry on (or change its settings)
-mergify tests retry set                   # Change the settings of test retry while it is on
-mergify tests retry off                   # Turn test retry off
 mergify oidc trust-policies list          # List the organization's OIDC trust policies
 mergify oidc trust-policies create        # Write a trust policy (show, update, delete too)
 mergify oidc exchanges list               # List the latest ID token exchanges, and why one was refused
@@ -43,7 +39,7 @@ CLI calls, the two lists share only the quarantine list.
 | Key | Reaches |
 | --- | --- |
 | `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
-| `admin` | Reading test health, the quarantine *list*, mutating the quarantine, and test retry's settings. Not trace upload, not `scopes-send`. |
+| `admin` | Reading test health, the quarantine *list*, and mutating the quarantine. Not trace upload, not `scopes-send`. |
 
 Trace upload and `scopes-send` take only a `ci` key, or on GitHub Actions the
 job's ID token ([below](#github-actions-jobs-need-no-key-oidc)): an `admin`
@@ -67,7 +63,6 @@ what an `admin` key carries. Per command:
 | `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list | yes |
 | `tests show` | **no** — `403` | yes |
 | `tests quarantines add`, `tests quarantines remove` | **no** — `403` | yes |
-| `tests retry show`, `on`, `set`, `off` | **no** — `403` | yes |
 
 `ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
 no token at all.
@@ -75,12 +70,12 @@ no token at all.
 ### GitHub Actions jobs need no key (OIDC)
 
 On GitHub Actions, a job granted `id-token: write` with no `MERGIFY_TOKEN`
-trades its GitHub ID token for a short-lived Mergify OIDC CI token that does
-what a `ci` key does, on its own repository only, when a trust policy of the
-organization matches the job: `ci junit-process`, `ci scopes-send` and the test
-framework plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that
-is set always wins. Writing a trust policy needs an organization admin or CI
-Admin: see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
+trades its GitHub ID token for a short-lived token that does what a `ci` key
+does, on its own repository only, when a trust policy of the organization
+matches the job: `ci junit-process`, `ci scopes-send` and the test framework
+plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that is set
+always wins. Writing a trust policy needs an organization admin or CI Admin:
+see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
 Fork pull requests get no ID token, as they get no secret. Jobs outside
 GitHub Actions keep a `ci` key.
 
@@ -142,7 +137,7 @@ jobs:
 
 ## Git References (`git-refs`)
 
-Detects the base and head git references for the current pull request context. Writes results to `GITHUB_OUTPUT` (`base`, `head`, `source`) when running in GitHub Actions, and to Buildkite meta-data (`mergify-ci.base`, `mergify-ci.head`, `mergify-ci.source`) when running in Buildkite.
+Detects the base and head git references for the current pull request context. Writes results to `GITHUB_OUTPUT` when running in GitHub Actions, and to Buildkite meta-data (`mergify-ci.base`, `mergify-ci.head`, `mergify-ci.source`) when running in Buildkite.
 
 ```bash
 mergify ci git-refs
@@ -198,7 +193,7 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 - `--head` -- Head git reference (default: HEAD)
 - `--write` / `-w` -- Write detected scopes to a JSON file
 
-The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`. On GitHub Actions it also writes the references it compared, as the `base`, `head` and `source` outputs `git-refs` writes, so one step gives both.
+The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`.
 
 When the base is the `before` commit detected from a GitHub `push` event, the changed files are the ones that differ between it and the pushed commit, compared directly rather than from their merge base: a push back to an earlier commit selects the scopes of the files it reverts. Every other base, an explicit `--base` included, counts what `head` adds on top of it, from their merge base.
 
@@ -206,11 +201,9 @@ On a merge queue batch build (a draft pull request, or a `push` build of the mer
 
 A renamed file counts against **both** of its paths, same as the engine: `git mv critical/guard.txt ignored/guard.txt` touches `critical` and `ignored`.
 
-With a source that declares `manual` beside `files`, the command detects the `files` part and says on stderr that Mergify adds the scopes sent with `scopes-send` to them: see [Adding scopes to the file patterns](#adding-scopes-to-the-file-patterns). With `manual` alone it fails outside a merge queue batch build, as there are no patterns to match.
-
 ## Scopes Send (`scopes-send`)
 
-Sends scopes tied to a pull request to the Mergify API. The merge queue takes them from a scopes source that declares `manual`: alone, they are the pull request's only scopes; beside `files`, they are added to those the file patterns match.
+Sends scopes tied to a pull request to the Mergify API. Used when scopes are determined manually or from a file rather than auto-detected.
 
 The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, `CIRCLE_SHA1`, or a Jenkins pull request build's checkout); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), any other CI. A Jenkins multibranch pull request build needs no flag: the number comes from `CHANGE_ID`, and the head is the commit checked out (`GIT_COMMIT`, else `HEAD`) or, when the GitHub Branch Source plugin merges the pull request into its target branch, the first parent of the merge Jenkins made. No head is detected where git cannot read the checkout, such as a container without its `.git`, nor on an agent that merges with JGit, whose merge Jenkins does not make under its own name: pass `--head-sha` with the pull request's head there, or switch the source's strategy to "The current pull request revision". When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
@@ -247,31 +240,6 @@ mergify ci scopes-send -s frontend -p 123 --head-sha "$PR_HEAD_SHA"
 - `--head-sha` -- Head SHA the scopes were computed for, 40 hexadecimal characters (auto-detected under GitHub Actions pull request events, Buildkite, CircleCI and Jenkins pull request builds)
 - `--all` -- Declare the pull request impacts every scope. The merge queue treats it as a barrier: never batched or run in parallel with other pull requests. The concrete scopes are still sent alongside the flag.
 
-### Adding scopes to the file patterns
-
-To add scopes on top of the file patterns, declare `manual: null` beside `files` (`barrier_files` still applies):
-
-```yaml
-scopes:
-  source:
-    files:
-      frontend:
-        include:
-          - apps/web/**/*
-    manual: null
-```
-
-A pull request's scopes are then those its changed files match plus those reported for its head commit. It is a barrier when it changes a `barrier_files` file or the report carries `--all`. The merge queue waits for that report, so send one for every pull request, even with nothing to add. Only a report addressed by the head SHA counts. With `files` alone, the merge queue reads the file patterns and `barrier_files`, not what `scopes-send` reports.
-
-Send extra scopes for what the patterns cannot see, such as the projects a build tool finds affected through dependencies, or a decision a CI step makes. Send `--all` for a change that impacts every scope and that `barrier_files` does not catch.
-
-Send the detection and the extras in **one** report, since a second report for the same head commit replaces the first:
-
-```bash
-mergify ci scopes --write scopes.json
-mergify ci scopes-send --scopes-json scopes.json -s api-contract -s e2e
-```
-
 ## Tests Show (`tests show`)
 
 Looks up tests by name on the repository's default branch and prints their
@@ -279,13 +247,6 @@ health, success/failure ratios, and last failure context. The search is a
 batch API: pass one or more names (globs supported) and one block per match
 is rendered. It is read-only: it exits `0` once it has rendered the matches,
 whatever their health. Gate on health by consuming `--json`, not the exit code.
-
-A last run whose first attempt failed and that then passed on a retry reads
-`✓ passed on a retry (its first attempt failed)`. In `--json`, each test's
-`last_run_passed_on_retry` is then `true`, and its `last_conclusion` stays
-`failed`, as it reports the first attempt. An engine that does not report
-retries yet leaves `last_run_passed_on_retry` out: absent means unknown, not
-`false`.
 
 Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
 [Authentication](#authentication).
@@ -324,12 +285,8 @@ for a commit (the `Test run ID: …` a plugin prints in the CI log), one line
 per job name they arrived under (`MERGIFY_TEST_JOB_NAME`, else the CI's job
 name — on GitHub Actions the job id, not its displayed name): how many runs,
 how many arrived whole, framework, plugin or converted report and the
-client's version, test counts, and how many of the failures then passed on a
-retry. Only a run that did not arrive whole gets a line of its own. In
-`--json`, that count is `passed_on_retry` on each run under
-`jobs[].test_runs[]`, each such test also counted in the run's `failed`; an
-engine that does not report retries yet leaves it out: absent means unknown,
-not zero.
+client's version, test counts. Only a run that did not arrive whole gets a
+line of its own.
 
 ```bash
 mergify tests runs                 # The commit under test (in CI, the one results are uploaded for; else HEAD)
@@ -509,71 +466,13 @@ A null `issue_url` means no issue tracks the fix.
 **Exit codes:**
 - `0` -- Always, including an empty quarantine ("No quarantined tests found.").
 
-## Tests Retry (`tests retry`)
-
-With test retry, the Mergify plugin runs a failing test again in the same job,
-so a flaky failure no longer fails the build. It runs on pushes to the default
-branch and in the runs the merge queue checks, in jobs that run a Mergify test
-framework plugin: a JUnit report upload never retries. It is set per
-repository, and is available on plans that include quarantine. A job whose
-environment sets `MERGIFY_TEST_RETRY_ENABLE=false` never retries.
-
-Two settings limit it: the **Retry Budget**, the extra time a job may spend on
-retries as a percentage of its tests' usual duration, and the **Retries per
-Test**, how many times one failing test may run again.
-
-Reading it needs read access to the repository, and changing it write access,
-with a user credential (`mergify auth login`); or an application key with the
-Test Retry Settings permission, such as an `admin` key. A `ci` key gets a
-`403`. See [Authentication](#authentication).
-
-```bash
-# On or off, with the settings and who changed them last.
-mergify tests retry show -r owner/repo
-
-# Turn it on: settings left out keep Mergify's defaults.
-mergify tests retry on -r owner/repo
-mergify tests retry on -r owner/repo --retry-budget 10% --retries-per-test 3
-
-# Change a setting while it is on, or put Mergify's default back.
-mergify tests retry set -r owner/repo --retry-budget default
-
-# Turn it off: its settings are forgotten.
-mergify tests retry off -r owner/repo
-```
-
-`set` never turns test retry on: on a repository with it off, it fails and
-says `mergify tests retry on` does. `off` on a repository with it off
-succeeds and says it was already off. Mergify refuses a value out of range and
-says what it takes, in its own terms: the budget is a ratio there
-(`budget_ratio`, 5% is `0.05`).
-
-**Key options:**
-- `--repository` / `-r` -- Repository full name (`owner/repo`); auto-detected from the CI environment or the local git remote when omitted.
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored.
-- `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
-- `--retry-budget PERCENT` (`on`, `set`) -- The Retry Budget, written with its `%`, such as `5%`: a bare number is refused, as `--json` gives the budget as a ratio (`0.05`). `set` also takes `default`.
-- `--retries-per-test N` (`on`, `set`) -- The Retries per Test; `set` also takes `default`.
-- `--json` -- Emit `{"enabled": true, "configuration": {...}}` with the
-  configuration as Mergify answered it (`budget_ratio`, the budget as a
-  ratio, and `max_retries_per_test`, each `{value, chosen, default}`, then `created_at`,
-  `created_by`, `updated_at`, `updated_by`), or `{"enabled": false,
-  "defaults": {"budget_ratio": 0.05, "max_retries_per_test": 5}}` when it is
-  off, `off` included.
-
-**Exit codes:**
-- `0` -- Done, or read; off is an answer, not an error.
-- `2` -- An option the CLI cannot read, such as a budget without its `%`.
-- `6` -- Mergify API error: no access, a plan without test retry, a Mergify that does not offer it, or an answer this CLI cannot read (after `on`, `set` or `off`, the change was made all the same: `--json` prints the answer).
-- `7` -- `set` on a repository with test retry off.
-- `8` -- A configuration problem: Mergify refused a setting's value, no token was found, or no repository was given or detected.
-
 ## OIDC Trust Policies (`mergify oidc`)
 
-A GitHub Actions job gets a Mergify OIDC CI token for its ID token when one
-trust policy of its organization matches it, and a policy matches when each of
-its lines does: repositories, workflows, events and environments. Policies only
+A GitHub Actions job gets a Mergify token for its ID token when one trust
+policy of its organization matches it, and a policy matches when each of its
+lines does: repositories, workflows, events and environments. Policies only
 allow, with no order and no deny, so a narrow one cannot hold back a broad one.
+OIDC is in Preview, open to every organization: it may still change.
 
 Every `mergify oidc` command takes the organization with `--org`, else the
 owner of the current repository, and the credential of one of its admins or CI
@@ -592,11 +491,6 @@ mergify oidc trust-policies list --org acme
 # (push, pull_request, merge_group, schedule, workflow_dispatch), any
 # workflow, any environment.
 mergify oidc trust-policies create --org acme --name "api CI" --repository api
-
-# Every private and internal repository, new ones included, never a public
-# one.
-mergify oidc trust-policies create --org acme --name "private CI" \
-  --repository-visibility private --repository-visibility internal
 
 # Deploys only: one workflow, on push, in the production environment.
 mergify oidc trust-policies create --org acme --name "api deploys" \
@@ -617,21 +511,10 @@ CI job of the organization: ask the user before writing a policy, it decides
 which jobs get a token.
 
 **Lines:**
-- `--repository NAME` (repeatable) -- only these repositories; `--except-repository NAME` -- every repository but these; `--all-repositories`. `NAME` or `OWNER/NAME`, of the organization's repositories Mergify's GitHub App can access. Or `--repository-visibility VISIBILITY` (repeatable: `public`, `internal`, `private`) -- every repository of these visibilities, which `list` shows as `every internal or private repository`.
+- `--repository NAME` (repeatable) -- only these repositories; `--except-repository NAME` -- every repository but these; `--all-repositories`. `NAME` or `OWNER/NAME`, of the organization's repositories Mergify's GitHub App can access.
 - `--workflow PATH` (repeatable) -- the workflow file of the job's own repository its run started from, `.github/workflows/ci.yml`, at any ref; `--reusable-workflow OWNER/REPOSITORY/PATH[@REF]` -- a reusable workflow the job runs, even one of its own repository (`uses: ./.github/workflows/...`), optionally pinned to a full ref (`refs/heads/main`) or a commit sha; `--any-workflow`.
 - `--event EVENT` (repeatable) -- replaces the CI events; `--any-event`. `pull_request_target`, `workflow_run` and `issue_comment` run with the repository's identity for people who cannot push to it: add them only when the user asks.
 - `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
-
-**Visibility or a list.** Pick `--repository-visibility` when the rule is the
-visibility itself, such as every private and internal repository and never a
-public one: a repository created later gets tokens without editing the policy,
-once Mergify's GitHub App can access it, and one made public stops getting them
-at once. Pick `--repository` when only
-some repositories' jobs should get a token, which is the narrowest policy, and
-`--except-repository` to leave a few out. Mergify reads the visibility in the
-job's ID token (`repository_visibility`): on a GitHub Enterprise Server whose
-tokens do not give it, a policy by visibility matches no job, so name the
-repositories there.
 
 **Why a job was refused.** The job's log prints Mergify's reason, which names
 the exchange: `The exchange report lists it as exchange
@@ -643,7 +526,7 @@ mergify oidc exchanges list --org acme --result refused --repository api --since
 ```
 
 A refused exchange lists, per policy, the first line the job did not match
-(`policy  <NAME> (<ID>) events: pull_request_target is not one of its events`): widen
+(`policy  <ID> events: pull_request_target is not one of its events`): widen
 that policy, or write another, with the user's go. `exchanges list` reads the last
 7 days by default (`--since`, up to the 90 days the report keeps), latest
 first, 20 at most (`--limit`). The refusal reasons:
