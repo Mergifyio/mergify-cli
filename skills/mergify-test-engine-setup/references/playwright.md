@@ -52,9 +52,8 @@ step, results upload but quarantined tests still fail the run.
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs Playwright, the job's
-  `id-token: write` is enough (`github-actions.md`). With a key,
-  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step
+  that runs Playwright.
 - Matrix: `MERGIFY_TEST_JOB_NAME` per environment leg. `--shard` legs share one
   name: never put the shard index in it.
 - **Several projects** (browsers) in one config share a test identity by
@@ -75,7 +74,7 @@ step, results upload but quarantined tests still fail the run.
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set (was `PLAYWRIGHT_MERGIFY_ENABLE`) |
 | `MERGIFY_PLAYWRIGHT_INCLUDE_PROJECT_IN_TEST_NAME` | prefix test names with the project (was `PLAYWRIGHT_MERGIFY_INCLUDE_PROJECT_IN_TEST_NAME`) |
