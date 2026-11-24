@@ -68,7 +68,7 @@ mergify config simulate https://github.com/owner/repo/pull/123
 - `PULL_REQUEST_URL` -- Full GitHub URL of the pull request to simulate against
 
 **Options:**
-- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored (your user runs it, see [below](#when-a-command-says-there-is-no-mergify-credential)). The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
+- `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify credential. Falls back to the credential `mergify auth login` stored. The CLI no longer falls back to `GITHUB_TOKEN` or `gh auth token`.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- Mergify API URL (default: `https://api.mergify.com`)
 
 **Output:** Shows a title and detailed Markdown summary of what actions Mergify would take on the PR with the local configuration.
@@ -184,15 +184,6 @@ jobs:
       - name: Validate Mergify config
         run: mergify config validate
 ```
-
-## When a command says there is no Mergify credential
-
-`no Mergify credential found` (from `simulate`, which asks the Mergify API) means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
-
-- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
-- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
-- Wait until they say it's done, then run the same command again.
-- Don't guess what Mergify would do instead, or read another source, without asking them first.
 
 ## When a command or flag is missing
 

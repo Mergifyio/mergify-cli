@@ -59,9 +59,8 @@ or with `--require @mergifyio/mocha` on the command line. Mocha merges the
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs Mocha, the job's
-  `id-token: write` is enough (`github-actions.md`). With a key,
-  `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step
+  that runs Mocha.
 - Matrix: `MERGIFY_TEST_JOB_NAME` per leg; a job that splits its files between
   several Mocha runs gives each run its own name.
 
@@ -69,10 +68,10 @@ or with `--require @mergifyio/mocha` on the command line. Mocha merges the
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set |
 | `MERGIFY_CI_DEBUG` | print the spans instead of uploading them |
 
 Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true npx mocha` prints the
-spans and a `Mergify Test Engine` summary (`Mergify CI` in earlier releases).
+spans and a `Mergify CI` summary.

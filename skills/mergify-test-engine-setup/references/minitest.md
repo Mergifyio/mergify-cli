@@ -48,21 +48,18 @@ require 'minitest/mergify' if RUBY_ENGINE == 'ruby' && RUBY_VERSION >= '3.1'  # 
 
 ## CI
 
-- GitHub Actions: nothing to add on the step that runs the tests
-  (`bin/rails test`, `rake test`, …), the job's `id-token: write` is enough
-  (`github-actions.md`). With a key, `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}`
-  on the step.
+- GitHub Actions: `MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}` on the step
+  that runs the tests (`bin/rails test`, `rake test`, …).
 - Matrix: `MERGIFY_TEST_JOB_NAME` per leg.
 
 ## Variables
 
 | Variable | Purpose |
 |---|---|
-| `MERGIFY_TOKEN` | the `ci` application key; unset on GitHub Actions with OIDC |
+| `MERGIFY_TOKEN` | the `ci` application key |
 | `MERGIFY_TEST_JOB_NAME` | the job name to report under |
 | `MERGIFY_CI_ENABLE` | report even when `CI` is not set |
 | `MERGIFY_CI_DEBUG` | print the spans instead of sending them |
 
 Check: `MERGIFY_CI_ENABLE=true MERGIFY_CI_DEBUG=true bundle exec rake test`
-(or `bin/rails test`) prints the spans and a `# Mergify Test Engine:` summary
-(`# Mergify CI:` in earlier releases).
+(or `bin/rails test`) prints the spans and a `Mergify CI` summary.
