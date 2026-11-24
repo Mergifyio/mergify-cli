@@ -1,6 +1,6 @@
 ---
 name: mergify-test-engine-setup
-description: Set up Mergify Test Engine in a repository so every CI job that runs tests sends its results to Mergify — detect the test frameworks, CI provider and test jobs, install the Mergify test plugin (pytest, RSpec, Minitest, Vitest, Playwright, Jest, Mocha) or wire a JUnit report upload for any other framework, let the jobs reach Mergify (GitHub Actions jobs with their ID token through an OIDC trust policy written with `mergify oidc`, else MERGIFY_TOKEN from the CI secret store), and open the pull request. Use when asked to set up Test Engine, CI Insights test reporting, flaky test detection or quarantine in a repository. Works without the mergify CLI installed locally, which then can neither write a trust policy nor check the results.
+description: Set up Mergify Test Engine in a repository so every CI job that runs tests sends its results to Mergify — detect the test frameworks, CI provider and test jobs, install the Mergify test plugin (pytest, RSpec, Minitest, Vitest, Playwright, Jest, Mocha) or wire a JUnit report upload for any other framework, let the jobs reach Mergify (GitHub Actions jobs with their ID token through an OIDC trust policy written with `mergify oidc`, else MERGIFY_TOKEN from the CI secret store), and open the pull request. Use when asked to set up Test Engine, CI Insights test reporting, flaky test detection, quarantine or test retry in a repository. Works without the mergify CLI installed locally, which then can neither write a trust policy nor check the results.
 ---
 
 # Set Up Mergify Test Engine
@@ -128,7 +128,9 @@ everywhere:
 - Test commands, the tests that run, job outcomes, matrices, job names and
   runtime versions stay the same (ask before changing a runtime version). Add
   no workflow, pipeline, job, or `continue-on-error` (unless the user asks for
-  quarantine on a JUnit upload).
+  quarantine on a JUnit upload). The one other change a job may get is
+  `MERGIFY_TEST_RETRY_ENABLE=false` in its environment, when the user asks to
+  keep that job from retrying (step 9).
 - Keep the repository's linters green on what you changed, following its
   conventions (pinned action SHAs, quoting, comment style).
 
@@ -145,10 +147,10 @@ written. Check that the CI files still parse.
 ## 8. How the jobs reach Mergify
 
 **On GitHub Actions, OIDC.** A job granted `id-token: write` with no
-`MERGIFY_TOKEN` trades its GitHub ID token for a short-lived Mergify token,
-limited to its repository, when a trust policy of the organization matches
-it: no secret to store, Dependabot's included. The plugins and `mergify ci`
-need release 2026.11.2 or later (raise an older pin or lock), and
+`MERGIFY_TOKEN` trades its GitHub ID token for a short-lived Mergify OIDC CI
+token, limited to its repository, when a trust policy of the organization
+matches it: no secret to store, Dependabot's included. The plugins and
+`mergify ci` need release 2026.11.2 or later (raise an older pin or lock), and
 `mergifyio/gha-mergify-ci` v30 or later.
 Until a policy matches, Mergify refuses the job's ID token: nothing is
 uploaded or quarantined, the log warns, and the job passes or fails as its
@@ -159,8 +161,11 @@ step runs). An organization admin or CI Admin writes the policy. Check with the 
 (`mergify auth status`; never log in for them):
 
 1. `mergify oidc trust-policies list --org <owner>` shows each policy line by
-   line, its repositories by name. A policy whose lines cover every job you
-   changed (the repository, the events that start them, their workflows and
+   line, its repositories by name, or by visibility (`every internal or
+   private repository`, which covers the repository when it has one of those
+   visibilities, unless its jobs' ID tokens give none, as an older GitHub
+   Enterprise Server's). A policy whose lines cover every job you changed
+   (the repository, the events that start them, their workflows and
    environments): nothing to write.
 2. No such policy: **ask the user before writing one**, since it decides which
    jobs of the organization get a token. Propose the narrowest that covers the
@@ -169,7 +174,8 @@ step runs). An organization admin or CI Admin writes the policy. Check with the 
    (CI events, any workflow, any environment), or
    `mergify oidc trust-policies update <id> --org <owner> --repository …` to
    add the repository to an existing one (list every repository it already
-   holds: the flags replace the line). With their go, run it. HTTP 403: they
+   holds: the flags replace the line; never on a policy by visibility, whose
+   line it would replace: write a new policy instead). With their go, run it. HTTP 403: they
    are neither an admin nor a CI Admin: give them the command to hand to one.
 3. Without the CLI, or when it cannot authenticate or read the policies, ask
    the user whether a trust policy of the organization covers the
@@ -201,14 +207,31 @@ CI, the CI reference's "The key" section says where it goes.
 The repository also needs **Test Engine turned on** in the Mergify dashboard.
 Without it, uploads are refused while CI stays green.
 
-## 9. Open the pull request
+## 9. Test retry
+
+With test retry, the plugin runs a failing test again in the same job, so a
+flaky failure no longer fails the build. It needs a Mergify plugin (a JUnit
+report upload never retries), and runs only on pushes to the default branch
+and in runs the merge queue checks: release 2026.11.12 or later of the plugin
+retries in the merge queue as well as on the default branch. Turn it on or off
+only when the user asks.
+
+- **For the repository**: `mergify tests retry on -r <owner>/<repository>`, or
+  `off` (`show` says which it is). This needs none of the steps above. It
+  needs write access to the repository, or an application key with the Test
+  Retry Settings permission, and is available on plans that include
+  quarantine.
+- **For one job**: set `MERGIFY_TEST_RETRY_ENABLE=false` in that job's
+  environment, the exception step 6 names.
+
+## 10. Open the pull request
 
 One pull request with the change. Say per job what changed and why, which jobs
 cannot report and why, and what the user still has to do (the trust policy or
 the key, a Node.js upgrade they did not approve). Describe the lockfile change in words. Follow the
 repository's conventions for the commit message and the pull request.
 
-## 10. Check that results arrive
+## 11. Check that results arrive
 
 The setup is done when every job you changed sends its results. First list,
 from your own diff, every job and matrix leg you changed (workflow file, job,

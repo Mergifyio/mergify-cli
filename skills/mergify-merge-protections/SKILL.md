@@ -1,6 +1,6 @@
 ---
 name: mergify-merge-protections
-description: Use Mergify merge protections to control when PRs merge — PR dependencies (Depends-On header), delayed merges (Merge-After header), and scheduled freezes (CLI). ALWAYS use this skill when managing Mergify scheduled freezes, or when blocking a PR on another PR or delaying its merge with Mergify's Depends-On or Merge-After headers. Triggers on mergify freeze, Mergify scheduled freeze, Mergify merge freeze, Depends-On, Merge-After, Mergify merge protection.
+description: Use Mergify merge protections to control when pull requests merge — make one wait for other pull requests to merge (Depends-On header), hold one until a date and time (Merge-After header), and pause merges with scheduled freezes (CLI). In a repository that uses Mergify, ALWAYS use this skill when a pull request must not merge before another pull request, in the same repository or in another repository of the organization; when a change split across repositories has to land in order; when a pull request must not merge before a date or a time; when a ready pull request has to be held back; or when managing Mergify scheduled freezes. Triggers on merge after another PR, wait for a PR to merge first, land in order, merge order across repositories, do not merge before, merge on a date, hold back a PR, hold the merge, Depends-On, Merge-After, mergify freeze, Mergify merge freeze, Mergify merge protection.
 ---
 
 # Mergify Merge Protections
@@ -14,6 +14,8 @@ Merge protections control when PRs are allowed to merge:
 | **Scheduled Freezes** | Repository-wide or conditional | CLI commands (`mergify freeze`) |
 
 `Depends-On` and `Merge-After` are built-in — just add the header to the PR description (or commit message body when using `mergify stack push`) and Mergify enforces them automatically, no `.mergify.yml` configuration needed. Freezes are managed via CLI commands.
+
+They work only on a repository where Mergify runs: one with a Mergify configuration file (`.mergify.yml`, `.mergify/config.yml` or `.github/mergify.yml`), or whose pull requests get Mergify's checks or comments. Anywhere else a `Depends-On:` or `Merge-After:` line holds nothing back, so tell your user rather than rely on it.
 
 ## Depends-On
 
@@ -33,14 +35,18 @@ All three formats are supported — use `#NNN` for same-repo, full URL or `org/r
 
 ### Rules
 
-- All referenced PRs must be in repositories with Mergify enabled
-- All referenced PRs must belong to the same GitHub organization
-- Circular dependencies and self-references are silently ignored
-- Multiple `Depends-On:` lines are allowed (one per line)
+- One reference per line, and nothing else on it: `Depends-On:`, a space, then the reference. Mergify ignores a line that holds anything more (a list marker, a second reference, a trailing word or period), and the PR is then not held. Use one `Depends-On:` line per dependency.
+- Every referenced PR must be in a repository with Mergify enabled and with the same repository owner (the user or organization that owns the repository of the PR declaring it)
+- A dependency that is still open blocks the merge until it merges
+- A reference Mergify cannot resolve (another owner, a repository without Mergify, a PR that does not exist) fails the protection, and so does a dependency closed without merging: reopen it or remove the line
+- A circular chain, or a PR that lists itself, never resolves: every PR in the loop stays blocked and none of them merges. Remove a line to break the loop.
+- At most 50 dependencies are resolved. A body declaring more resolves none of them and fails the protection until it names fewer.
 
 ### With `mergify stack push`
 
-The stack tool **automatically** adds `Depends-On: #NNN` between consecutive PRs in a stack. For dependencies *outside* the stack (cross-repo or unrelated PRs), add the header manually to the **commit message body** — it will be copied to the PR description on push.
+The stack tool orders the PRs of a stack itself: it writes `Depends-On: #NNN` between consecutive PRs, or leaves it out when GitHub holds the stack. For a PR *outside* the stack, in another repository or in this one, add the header manually to the **commit message body** — it will be copied to the PR description on push.
+
+`mergify stack push` keeps that line, `Depends-On: #NNN` for a PR of the same repository included, and appends its own marker for the PR below in the stack. Older `mergify` releases removed every `Depends-On: #NNN` line from the description: if the line is missing from the PR after the push, upgrade with the `mergify-cli-upgrade` skill, or write the reference as `owner/repo#NNN` or as a URL, which every release keeps. A `Merge-After:` line in the commit message body is copied as is.
 
 ### When to suggest
 
