@@ -377,6 +377,7 @@ Use `mergify queue show <PR_NUMBER>` to check why a PR is stuck or how it's prog
 | `preparing` | Batch is being set up |
 | `bisecting` | Batch failed, bisecting to find the culprit |
 | `failed` | CI failed for this batch |
+| `waiting_for_later_batch` | CI failed for this batch, and Mergify waits for the nearly done batch tested on top of it: that batch's success merges both, its failure has this one handled as any failed batch |
 | `merged` | PRs in this batch have been merged |
 | `waiting_for_merge` | CI passed, waiting for GitHub to merge |
 | `waiting_for_previous_batches` | Blocked on earlier batches completing |
@@ -419,6 +420,15 @@ mergify queue unpause
 **Queue moving slowly:**
 - Check for failing batches that trigger bisection: `mergify queue status`
 - Bisecting batches test PRs individually, which is slower than batch merging
+
+## When a command says there is no Mergify credential
+
+`no Mergify credential found` means neither `--token`, `MERGIFY_TOKEN` nor a stored login gave the CLI a credential. Stop and ask your user to log in:
+
+- Don't run `mergify auth login` yourself. It prints a URL and a code, then waits until a person approves it in a browser: you cannot finish it, and the tool call hangs.
+- In Claude Code, ask them to type `! mergify auth login` at the prompt. Elsewhere, ask them to run `mergify auth login` in their own terminal.
+- Wait until they say it's done, then run the same command again.
+- Don't look for the answer somewhere else (the GitHub API, the PR's comments) without asking them first.
 
 ## When a command or flag is missing
 
