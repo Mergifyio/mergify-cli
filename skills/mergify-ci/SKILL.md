@@ -38,18 +38,19 @@ mergify oidc exchanges show ID            # Show the exchange a refused job's lo
 
 ## Authentication
 
-Two classes of Mergify application key, both minted in the dashboard. Each
-reaches its own list of endpoints, not a subset of the other's: of what this
-CLI calls, the two lists share only the quarantine list.
+A Mergify application key, minted in the dashboard, holds the
+[permissions](https://docs.mergify.com/api/application-keys/) it was granted,
+resource by resource, each at the level it was granted. A CI key holds CI
+Reporting and nothing else; a key granted every resource does not hold it.
 
 | Key | Reaches |
 | --- | --- |
-| `ci` | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`) and the quarantine *list*. |
-| `admin` | Reading test health, the quarantine *list*, mutating the quarantine, and test retry's settings. Not trace upload, not `scopes-send`. |
+| CI key | What a CI job does: trace upload, `scopes-send`, quarantine *evaluation* (`junit-process`), the quarantine *list* and a commit's test runs. |
+| A key without CI Reporting | What its permissions name: Tests at Read for test health and test runs, Quarantines at Read for the quarantine *list*, at Read & write to change the quarantine, Test Retry Settings for test retry's settings. Never trace upload, never `scopes-send`. |
 
-Trace upload and `scopes-send` take only a `ci` key, or on GitHub Actions the
-job's ID token ([below](#github-actions-jobs-need-no-key-oidc)): an `admin`
-key or a user credential gets a `403`. Every other endpoint below that refuses a `ci`
+Trace upload and `scopes-send` need CI Reporting, so a CI key, or on GitHub
+Actions the job's ID token ([below](#github-actions-jobs-need-no-key-oidc)): a
+key without CI Reporting or a user credential gets a `403`. Every other endpoint below that refuses a CI
 key accepts a user credential (`mergify auth login`, which your user runs: see
 [below](#when-a-command-says-there-is-no-mergify-credential)) instead. `GITHUB_TOKEN`
 inside GitHub Actions is not a Mergify credential at all, so do not reach for
@@ -57,19 +58,19 @@ it to clear one of these `403`s.
 
 The split follows the endpoint each command calls: reads of test health and
 writes to the quarantine are a person inspecting or overriding a repository,
-not something a pipeline does, so they are outside what a `ci` key carries;
+not something a pipeline does, so they are outside what a CI key carries;
 trace upload and scope reports are what a pipeline sends, so they are outside
-what an `admin` key carries. Per command:
+what a key without CI Reporting carries. Per command:
 
-| Command | `ci` key | `admin` key |
+| Command | CI key | A key without CI Reporting needs |
 | --- | --- | --- |
-| `ci junit-process`, `ci junit-upload` | yes | quarantine evaluation only — the upload gets a `403`, reported as a rejected upload (the exit code is unaffected) |
-| `ci scopes-send` | yes | **no** — `403` |
-| `tests runs` | yes | yes (and `mergify auth login`) |
-| `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list | yes |
-| `tests show` | **no** — `403` | yes |
-| `tests quarantines add`, `tests quarantines remove` | **no** — `403` | yes |
-| `tests retry show`, `on`, `set`, `off` | **no** — `403` | yes |
+| `ci junit-process`, `ci junit-upload` | yes | Quarantines at Read, for quarantine evaluation only: the upload gets a `403`, reported as a rejected upload (the exit code is unaffected) |
+| `ci scopes-send` | yes | **refused**: `403` |
+| `tests runs` | yes | Tests at Read (or `mergify auth login`) |
+| `tests quarantines list`, `tests quarantines get` | yes — both read the quarantine list | Quarantines at Read |
+| `tests show` | **no** — `403` | Tests at Read |
+| `tests quarantines add`, `tests quarantines remove` | **no** — `403` | Quarantines at Read & write |
+| `tests retry show`, `on`, `set`, `off` | **no** — `403` | Test Retry Settings at Read for `show`, Read & write for the others |
 
 `ci git-refs`, `ci scopes` and `ci queue-info` are evaluated locally and need
 no token at all.
@@ -78,13 +79,13 @@ no token at all.
 
 On GitHub Actions, a job granted `id-token: write` with no `MERGIFY_TOKEN`
 trades its GitHub ID token for a short-lived Mergify OIDC CI token that does
-what a `ci` key does, on its own repository only, when a trust policy of the
-organization matches the job: `ci junit-process`, `ci scopes-send` and the test
+what the trust policies matching the job grant, CI Reporting by default, on its
+own repository only, when a trust policy of the organization matches the job: `ci junit-process`, `ci scopes-send` and the test
 framework plugins (2026.11.2 or later) do it themselves. A `MERGIFY_TOKEN` that
 is set always wins. Writing a trust policy needs an organization admin or CI
 Admin: see [OIDC Trust Policies](#oidc-trust-policies-mergify-oidc).
 Fork pull requests get no ID token, as they get no secret. Jobs outside
-GitHub Actions keep a `ci` key.
+GitHub Actions keep a CI key.
 
 ## JUnit Processing (`junit-process`)
 
@@ -160,8 +161,9 @@ mergify ci git-refs
 
 ```bash
 # Consume values in a shell script without parsing (a failure inside
-# `eval "$(...)"` would go unnoticed):
-refs=$(mergify ci git-refs --format=shell) || exit 1
+# `eval "$(...)"` would go unnoticed). --for-scopes: nx picks the
+# projects to build, the scopes of the build.
+refs=$(mergify ci git-refs --format=shell --for-scopes) || exit 1
 eval "$refs"
 nx show projects --affected \
   --base="$MERGIFY_GIT_REFS_BASE" \
@@ -176,6 +178,8 @@ Sources detected (in priority order): merge queue context, GitHub pull request e
 On a Jenkins change request build (`CHANGE_ID` set by a multibranch pipeline) that is not a merge queue draft (below), the base is the branch the pull request targets (`CHANGE_TARGET`), printed as the commit `origin/<branch>` names, and the head is `HEAD`. Jenkins fetches `origin/<branch>` when it merges the pull request into its target, and checks out the pull request alone otherwise: `git-refs` then fetches the target branch from `origin`, with the history it shares with `HEAD`, and fails when it cannot. That `git fetch` needs the repository's credentials in the step.
 
 The merge queue context is the git note Mergify writes on the merge queue branch head (`refs/notes/mergify/<branch>`). It is read on pull request builds, on GitHub `push` builds of the branch, and on Buildkite and Jenkins builds of the branch, so a merge queue batch a CI builds as a branch, by a `push` trigger or a branch job, rather than as its draft pull request, gets the batch's checking base too. On a Jenkins branch build, the branch is `GIT_BRANCH`, or `BRANCH_NAME` in a scripted pipeline, which does not export `GIT_BRANCH`, and the head is `HEAD`. On a Jenkins change request, the branch is the one it comes from (`CHANGE_BRANCH`), unless that is a fork's (`CHANGE_FORK`), and the head is the commit the note is on: the commit Jenkins checked out (`GIT_COMMIT`, else `HEAD`), or its first parent when Jenkins merged a target that moved on since into the draft. The base, the commit the batch was built on, is fetched from `origin` when a shallow clone lacks it, and `git-refs` fails when it cannot. The note's `git fetch` needs the repository's credentials in the step; without them the build is read as any other change request or branch build. A push that creates a branch has no previous commit, so its base is the default branch.
+
+A merge queue batch built on top of other batches has two bases. The base `git-refs` gives is the queue base: the commit of the base branch below every batch the queue branch is built on, which the note carries as `queue_base_sha`. A batch that passes can merge the batches it is built on too (`skip_intermediate_results`), so a diff from the queue base holds every pull request its pass merges, which is what a check no scope selects has to read (a secret scan, a dependency audit, a schema compatibility check). With `--for-scopes`, the base is the top of those batches, the note's `checking_base_sha`, so a diff from it holds the batch's own pull requests: what the batch's scopes are detected from, as `ci scopes` does. The two are the same on a batch built on nothing else, and on any other build. On a note without `queue_base_sha`, both are `checking_base_sha`.
 
 On a GitHub `push` that did not fast-forward (the event's `forced`), such as a push back to an earlier commit, the head is a commit `git-refs` makes in the local clone: the pushed commit's files, with the base, the commit the push replaced, as its only parent. Its merge base with the base is the base, so the `nx show projects --affected --base --head` call above, `git diff base...head` and the other tools that compare from the merge base see every file the push changed, a rollback's included. `git-refs` fetches the base by its SHA when the clone lacks it, and prints the pushed commit with a warning when it cannot, or out of a clone. No ref names that head and no other clone has it: run `mergify ci git-refs` in the clone that compares, where it makes the same commit, rather than passing its head to another job.
 
@@ -200,7 +204,7 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 - `--head` -- Head git reference (default: HEAD)
 - `--write` / `-w` -- Write detected scopes to a JSON file
 
-The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`. On GitHub Actions it also writes the references it compared, as the `base`, `head` and `source` outputs `git-refs` writes, so one step gives both.
+The config file defines scopes with file patterns. When files change between base and head, matching scopes are identified and written to `GITHUB_OUTPUT` (on GitHub Actions) or to Buildkite meta-data under `mergify-ci.scopes` (on Buildkite), as a JSON map of scope names to `"true"`/`"false"`. On GitHub Actions it also writes the `base`, `head` and `source` outputs `git-refs` writes, so one step gives both. It compares from the base `git-refs --for-scopes` gives, and on a merge queue batch whose note lists its scopes it takes those instead.
 
 When the base is the `before` commit detected from a GitHub `push` event, the changed files are the ones that differ between it and the pushed commit, compared directly rather than from their merge base: a push back to an earlier commit selects the scopes of the files it reverts. Every other base, an explicit `--base` included, counts what `head` adds on top of it, from their merge base.
 
@@ -216,8 +220,14 @@ Sends scopes tied to a pull request to the Mergify API. The merge queue takes th
 
 The report is addressed by the pull request's **head SHA**, so it says which revision it was computed for and a result computed for an older head cannot be taken for the current one. The head is detected from the CI environment (GitHub Actions event payload, `BUILDKITE_COMMIT`, `CIRCLE_SHA1`, or a Jenkins pull request build's checkout); pass `--head-sha` to name it explicitly wherever it is not detected: a GitHub Actions event with no `pull_request` payload (`push`, `workflow_run`, ...), any other CI. A Jenkins multibranch pull request build needs no flag: the number comes from `CHANGE_ID`, and the head is the commit checked out (`GIT_COMMIT`, else `HEAD`) or, when the GitHub Branch Source plugin merges the pull request into its target branch, the first parent of the merge Jenkins made. No head is detected where git cannot read the checkout, such as a container without its `.git`, nor on an agent that merges with JGit, whose merge Jenkins does not make under its own name: pass `--head-sha` with the pull request's head there, or switch the source's strategy to "The current pull request revision". When no head SHA can be resolved, the command reports against the pull request number alone and warns: that route is deprecated and will be removed. A Mergify deployment that predates the commit endpoint (on-premise before 8.18.0) gets the same pull request route without a warning.
 
-Needs a `ci` key, or on GitHub Actions the job's ID token; an `admin` key or a
-user credential gets a `403`. See [Authentication](#authentication).
+Needs a CI key, or on GitHub Actions the job's ID token; a key without CI
+Reporting or a user credential gets a `403`. See [Authentication](#authentication).
+
+When Mergify fails, times out or throttles the upload (a `5xx`, `408` or `429`
+once the retries run out) or does not answer, the command fails. With
+`--skip-when-mergify-unavailable` it warns and exits 0 instead, so a required
+check that runs it stays green while Mergify is down: the merge queue waits for
+the scopes until the job runs again. Any other `4xx` fails it either way.
 
 ```bash
 # Send specific scopes
@@ -289,7 +299,7 @@ A last run whose first attempt failed and that then passed on a retry reads
 retries yet leaves `last_run_passed_on_retry` out: absent means unknown, not
 `false`.
 
-Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
+Needs an application key with Tests at Read or a user credential (`mergify auth login`): a CI key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -315,7 +325,7 @@ mergify tests show -r owner/repo \
 
 **Exit codes:**
 - `0` -- Tests rendered, or no match at all. Health does **not** affect it.
-- `6` -- Mergify API error, including the `403` a `ci` key gets here.
+- `6` -- Mergify API error, including the `403` a CI key gets here.
 
 ## Tests Runs (`tests runs`)
 
@@ -375,7 +385,7 @@ anyone to fix it. **When you quarantine a test, link the issue tracking its
 fix with `--issue-url`**: file the issue first (or find the existing one),
 then pass its URL. Mergify shows the link on the quarantine.
 
-Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
+Needs an application key with Quarantines at Read & write or a user credential (`mergify auth login`): a CI key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -432,7 +442,7 @@ name (resolved to its quarantine id via the list endpoint) or the quarantine
 id directly (as printed by `tests quarantines add`). A UUID-shaped argument
 is treated as the id and deleted without a lookup.
 
-Needs an `admin` key or a user credential (`mergify auth login`) — a `ci` key gets a `403`. See
+Needs an application key with Quarantines at Read & write or a user credential (`mergify auth login`): a CI key gets a `403`. See
 [Authentication](#authentication).
 
 ```bash
@@ -536,9 +546,9 @@ retries as a percentage of its tests' usual duration, and the **Retries per
 Test**, how many times one failing test may run again.
 
 Reading it needs read access to the repository, and changing it write access,
-with a user credential (`mergify auth login`); or an application key with the
-Test Retry Settings permission, such as an `admin` key. A `ci` key gets a
-`403`. See [Authentication](#authentication).
+with a user credential (`mergify auth login`); or an application key with
+Test Retry Settings at Read to read it, at Read & write to change it. A CI key
+gets a `403`. See [Authentication](#authentication).
 
 ```bash
 # On or off, with the settings and who changed them last.
@@ -587,12 +597,14 @@ A GitHub Actions job gets a Mergify OIDC CI token for its ID token when one
 trust policy of its organization matches it, and a policy matches when each of
 its lines does: repositories, workflows, events and environments. Policies only
 allow, with no order and no deny, so a narrow one cannot hold back a broad one.
+The token may do on the job's repository what the policies matching it grant,
+together: CI Reporting unless one grants more (below).
 
 Every `mergify oidc` command takes the organization with `--org`, else the
 owner of the current repository, and the credential of one of its admins or CI
 Admins (`mergify auth login`), or an application key with the OIDC trust
-policies permission, and the repositories one to name repositories (an
-`admin` key has both); a `ci` key gets a `403`. Every command takes `--json`,
+policies permission, and the repositories one to name repositories (a
+key granted every resource at Read & write has both); a CI key gets a `403`. Every command takes `--json`,
 which prints what Mergify answered; `exchanges list --json` puts the exchanges
 under `exchanges`, beside `since` and `truncated` (true when `--limit` left
 some out).
@@ -634,6 +646,23 @@ which jobs get a token.
 - `--workflow PATH` (repeatable) -- the workflow file of the job's own repository its run started from, `.github/workflows/ci.yml`, at any ref; `--reusable-workflow OWNER/REPOSITORY/PATH[@REF]` -- a reusable workflow the job runs, even one of its own repository (`uses: ./.github/workflows/...`), optionally pinned to a full ref (`refs/heads/main`) or a commit sha; `--any-workflow`.
 - `--event EVENT` (repeatable) -- replaces the CI events; `--any-event`. `pull_request_target`, `workflow_run` and `issue_comment` run with the repository's identity for people who cannot push to it: add them only when the user asks.
 - `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
+
+**More than CI Reporting.** A policy grants CI Reporting, which is all
+`mergify ci` commands and the test framework plugins use, and they are the only
+ones that trade the job's ID token for a token: every other `mergify` command
+reads `MERGIFY_TOKEN`. So grant more only when the user asks for it, for a step
+that calls Mergify's API with the job's OIDC CI token itself.
+`--permission RESOURCE=LEVEL` (repeatable) adds an application key permission on
+the job's own repository: `merge_queue_pause=write`, `quarantines=read`, or
+`*=read` for every resource but CI Reporting. `--no-ci-reporting` leaves CI
+Reporting out. On `update`, they replace what the policy grants;
+`--permission ci_reporting=write` alone brings it back to CI Reporting. Only an
+organization admin signed in as themselves writes, changes or deletes a policy
+granting more: a CI Admin or an application key gets a `403` saying so. Anyone
+who can push a branch to a repository the policy matches can edit a workflow to
+get its grants, unless the policy names protected environments (`--environment`)
+or reusable workflows pinned to a protected ref (`--reusable-workflow
+OWNER/REPOSITORY/PATH@refs/heads/main`): write it that way.
 
 **Visibility or a list.** Pick `--repository-visibility` when the rule is the
 visibility itself, such as every private and internal repository and never a
