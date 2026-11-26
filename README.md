@@ -102,7 +102,7 @@ granted `id-token: write`, with neither `--token` nor `MERGIFY_TOKEN`,
 `mergify ci junit-process` and `mergify ci scopes-send` exchange the job's ID
 token for a short-lived Mergify OIDC CI token, once a trust policy of the
 organization allows the job (`mergify oidc`, below). On any other CI,
-`MERGIFY_TOKEN` holds an organization application key with the `ci` scope.
+`MERGIFY_TOKEN` holds a Mergify CI key.
 With an application key in `MERGIFY_TOKEN`, `mergify auth status` names the
 key, its permissions and when it expires: a refused request never says which
 permission it lacked.
@@ -126,15 +126,15 @@ The repository and API URL resolve as before:
 Credentials are stored per API URL, so one machine can hold a credential for
 the hosted service and one for an on-premise install.
 
-Mergify application keys come in two classes, each reaching its own set of
-endpoints rather than one being a subset of the other. A `ci` key is scoped
-to what a CI job does — trace upload, `ci scopes-send`, quarantine evaluation
-and the quarantine list. Trace upload and `ci scopes-send` take a `ci` key
-only, and answer an `admin` key or a user credential with `403 Forbidden`.
-Reading test health (`mergify tests show`), changing the quarantine
-(`mergify tests quarantines add` / `remove`) and test retry
-(`mergify tests retry`) need an `admin` key or a user credential — the one
-`mergify auth login` stores — and answer a `ci` key with `403 Forbidden`.
+A Mergify application key holds the [permissions it was
+granted](https://docs.mergify.com/api/application-keys/), resource by
+resource. A CI key holds CI Reporting, what a CI job does: trace upload,
+`ci scopes-send`, quarantine evaluation and the quarantine list. Trace upload
+and `ci scopes-send` need CI Reporting, and answer a key without it or a user
+credential with `403 Forbidden`. The `mergify tests` commands that read test
+health, change the quarantine or set test retry answer a CI key with
+`403 Forbidden`: they take a key with the permission their `--help` names, or
+a user credential, the one `mergify auth login` stores.
 `GITHUB_TOKEN` is not a Mergify credential and does not reach the Mergify API.
 
 See the [authentication guide](https://docs.mergify.com/cli/usage) for details.

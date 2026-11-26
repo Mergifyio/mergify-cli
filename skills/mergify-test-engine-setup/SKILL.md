@@ -189,8 +189,9 @@ leaves draft once the policy exists: that step fails its job until then. A
 user who would rather not wait uses a key.
 
 **A key instead**, on any other CI, and on GitHub Actions when the user asks
-for one rather than a trust policy: the user creates a Mergify application
-key with the `ci` scope in the Mergify dashboard and stores it as
+for one rather than a trust policy: the user creates a Mergify CI key in
+the Mergify dashboard (Settings → Security & Access → CI Authentication) and
+stores it as
 `MERGIFY_TOKEN`. Before telling them it is missing, check what already exists
 (GitHub: repository secrets with
 `gh secret list --repo <owner>/<repository>`, organization secrets with
