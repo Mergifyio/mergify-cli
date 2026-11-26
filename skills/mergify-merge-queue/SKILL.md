@@ -398,6 +398,7 @@ mergify queue unpause
 - Pausing does **not** cancel running CI — it prevents new merges from starting
 - The reason is visible to all team members in the queue status
 - Use `--yes-i-am-sure` to skip the confirmation prompt in scripts
+- In a GitHub Actions job granted `id-token: write`, with no `MERGIFY_TOKEN`, the command uses the job's ID token: it needs a trust policy of the organization granting `merge_queue_pause=write` (`mergify oidc trust-policies`, the `mergify-ci` skill)
 
 ## Troubleshooting
 
