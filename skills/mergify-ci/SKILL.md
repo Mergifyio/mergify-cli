@@ -648,10 +648,14 @@ which jobs get a token.
 - `--environment NAME` (repeatable) -- a job in no environment does not match; `--any-environment`.
 
 **More than CI Reporting.** A policy grants CI Reporting, which is all
-`mergify ci` commands and the test framework plugins use, and they are the only
-ones that trade the job's ID token for a token: every other `mergify` command
-reads `MERGIFY_TOKEN`. So grant more only when the user asks for it, for a step
-that calls Mergify's API with the job's OIDC CI token itself.
+`mergify ci` commands and the test framework plugins use. Every other `mergify`
+command that calls Mergify's API trades the job's ID token for a token too, when
+it has neither `--token`, `MERGIFY_TOKEN` nor a stored login, and that token
+holds what the policies allowing the job grant: `mergify queue pause` in a job needs
+`merge_queue_pause=write`, and a request it lacks is refused with a `403`. It
+reaches the job's own repository only, so `mergify oidc` still needs a key. So
+grant more only when the user asks for it, for a step that runs such a command
+or calls Mergify's API with the job's OIDC CI token itself.
 `--permission RESOURCE=LEVEL` (repeatable) adds an application key permission on
 the job's own repository: `merge_queue_pause=write`, `quarantines=read`, or
 `*=read` for every resource but CI Reporting. `--no-ci-reporting` leaves CI
