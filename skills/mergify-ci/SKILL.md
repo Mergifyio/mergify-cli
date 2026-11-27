@@ -34,8 +34,6 @@ mergify oidc exchanges list               # List the latest ID token exchanges, 
 mergify oidc exchanges show ID            # Show the exchange a refused job's log names
 ```
 
-`mergify tests retry` is in Preview: it may still change.
-
 ## Authentication
 
 A Mergify application key, minted in the dashboard, holds the
