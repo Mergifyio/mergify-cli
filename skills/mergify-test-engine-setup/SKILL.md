@@ -150,13 +150,13 @@ written. Check that the CI files still parse.
 `MERGIFY_TOKEN` trades its GitHub ID token for a short-lived Mergify OIDC CI
 token, limited to its repository, when a trust policy of the organization
 matches it: no secret to store, Dependabot's included. The plugins and
-`mergify ci` need release 2026.11.2 or later (raise an older pin or lock), and
-`mergifyio/gha-mergify-ci` v30 or later.
+`mergify ci` need release 2026.11.2 or later, and a JUnit upload step
+mergify-cli 2026.11.10 or later, which `mergifyio/gha-mergify-ci` v31 or later
+installs (raise an older pin or lock, and leave the other gha-mergify-ci steps
+as they are).
 Until a policy matches, Mergify refuses the job's ID token: nothing is
 uploaded or quarantined, the log warns, and the job passes or fails as its
-tests do. A JUnit upload step does so from mergify-cli 2026.11.10, and fails
-the job with an older CLI (`references/github-actions.md` says which CLI a
-step runs). An organization admin or CI Admin writes the policy. Check with the `mergify` CLI
+tests do. An organization admin or CI Admin writes the policy. Check with the `mergify` CLI
 (`mergify-ci` skill, OIDC Trust Policies), signed in as the user
 (`mergify auth status`; never log in for them):
 
@@ -183,10 +183,8 @@ step runs). An organization admin or CI Admin writes the policy. Check with the 
    them the `create` command above for an organization admin or CI Admin.
 
 While no policy covers the jobs, say in the pull request that they send
-nothing until it exists, with the command. When a JUnit upload step runs a
-mergify-cli older than 2026.11.10, also open the pull request as a draft that
-leaves draft once the policy exists: that step fails its job until then. A
-user who would rather not wait uses a key.
+nothing until it exists, with the command. A user who would rather not wait
+uses a key.
 
 **A key instead**, on any other CI, and on GitHub Actions when the user asks
 for one rather than a trust policy: the user creates a Mergify CI key in

@@ -29,8 +29,8 @@ jobs:
   `azure/login`), say in the pull request that a cloud role trusting this
   repository's pull request or branch tokens now trusts the test jobs too.
 
-The plugins and `mergify ci` (2026.11.2 or later) and
-`mergifyio/gha-mergify-ci` (v30 or later) exchange the ID token themselves: no
+The plugins, `mergify ci` and `mergifyio/gha-mergify-ci` (releases: SKILL.md,
+step 8) exchange the ID token themselves: no
 `MERGIFY_TOKEN`, no `token` input, no `--token`. A set `MERGIFY_TOKEN` wins
 over the exchange; an empty one counts as unset.
 
@@ -49,7 +49,7 @@ Nothing to add on the step that runs the tests: `CI` is already set.
 ## JUnit upload jobs
 
 Give the test step an `id`, and upload after it with
-`mergifyio/gha-mergify-ci` (latest major: `v30`; check
+`mergifyio/gha-mergify-ci` (latest major: `v31`; check
 `gh release list -R Mergifyio/gha-mergify-ci --limit 1` for a newer one, and
 pin it to a commit SHA if the repository pins its actions):
 
@@ -67,7 +67,7 @@ jobs:
       - name: Mergify Test Engine Upload
         id: upload
         if: (success() || failure()) && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && hashFiles('junit.xml') != ''
-        uses: mergifyio/gha-mergify-ci@v30
+        uses: mergifyio/gha-mergify-ci@v31
         with:
           report_path: junit.xml
           test_step_outcome: ${{ steps.tests.outcome }}
@@ -81,15 +81,13 @@ jobs:
   from forks, which get no ID token. The second condition skips it on a pull
   request whose head is in another repository; `head.repo.fork` would also
   skip every pull request of a repository that is itself a fork.
-- **While no trust policy matches the job** (SKILL.md, step 8): from
-  mergify-cli 2026.11.10, the step uploads nothing, warns, and passes or fails
-  as the tests did; with an older CLI, it fails the job. The step runs the CLI
-  its `mergify_cli_version` input names (`latest` is the latest release),
-  else the one its gha-mergify-ci release installs, which the first line of
-  the release's notes names
-  (`gh release view <tag> -R Mergifyio/gha-mergify-ci`): v30 installs
-  2026.11.8. When you cannot tell (a version from an expression, a commit
-  that is no release), count it as older.
+- **While no trust policy matches the job** (SKILL.md, step 8): the step
+  uploads nothing, warns, and passes or fails as the tests did. It needs
+  mergify-cli 2026.11.10 or later, which v31 installs unless a
+  `mergify_cli_version` input pins another: raise one older than that. An
+  older CLI (a pin the user keeps, or one you cannot read, such as an
+  expression) fails the job until the policy exists: say so in the pull
+  request, or use a key.
 - `test_step_outcome` lets Mergify detect a runner that crashed while the report
   looks clean.
 - **Matrix**: add `job_name: <name per leg>` to the action's inputs.
@@ -161,7 +159,7 @@ The job reads the `MERGIFY_TOKEN` secret instead, and needs no
         - name: Mergify Test Engine Upload
           id: upload
           if: (success() || failure()) && env.HAS_MERGIFY_TOKEN == 'true' && hashFiles('junit.xml') != ''
-          uses: mergifyio/gha-mergify-ci@v30
+          uses: mergifyio/gha-mergify-ci@v31
           with:
             token: ${{ secrets.MERGIFY_TOKEN }}
             report_path: junit.xml

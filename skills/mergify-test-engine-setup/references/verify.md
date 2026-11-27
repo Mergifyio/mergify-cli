@@ -105,9 +105,9 @@ jq -r '.jobs[] | [.pipeline_name, .job_name, .test_results] | @tsv' /tmp/mergify
 
 - A run on a pull request from a branch of the same repository gets an ID
   token and the repository's secrets, so the upload is real once a trust
-  policy matches the job (a refused exchange only warns, but fails a JUnit
-  upload step that runs a mergify-cli older than 2026.11.10: read the log,
-  SKILL.md step 8).
+  policy matches the job (a refused exchange only warns: read the log,
+  SKILL.md step 8. A JUnit upload step that fails on it runs a mergify-cli
+  older than 2026.11.10: `github-actions.md`).
 - If you cannot finish (rate limit, a job still going after about 20 minutes),
   report the remaining jobs as **not verified yet**, with the commands above
   for the user to run.
