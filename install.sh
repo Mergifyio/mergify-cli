@@ -34,12 +34,16 @@ die() {
     exit 1
 }
 
-# GitHub's release downloads fail now and then for minutes at a time, with a
-# 502 or a 504: curl tries again on those and on a timeout, for about four
-# minutes, its wait doubling from one second. A 404, a version that was never
-# released, still fails at once.
+# fetch URL [CURL_OPTION...]
+# GitHub's release downloads fail now and then for minutes at a time: a 502, a
+# 504 or a stalled connection. A stalled try is caught by its speed, not by a
+# time limit that a slow link would hit on the binary.
 fetch() {
-    curl -fsSL --retry 8 "$@"
+    fetch_url="$1"
+    shift
+    curl -fsSL --retry 8 --retry-max-time 300 --connect-timeout 10 \
+        --speed-limit 1024 --speed-time 30 "$@" "${fetch_url}" \
+        || die "could not download ${fetch_url}"
 }
 
 # Map `uname -s` / `uname -m` to the Rust target triple the release
@@ -139,8 +143,8 @@ main() {
             # (HTTP 200, no `/tag/`), so require the segment before
             # stripping rather than letting the full URL flow into the
             # asset name.
-            VERSION=$(fetch -o /dev/null -w '%{url_effective}' \
-                "https://github.com/${REPO}/releases/latest")
+            VERSION=$(fetch "https://github.com/${REPO}/releases/latest" \
+                -o /dev/null -w '%{url_effective}')
             case "${VERSION}" in
                 */tag/*) VERSION="${VERSION##*/tag/}" ;;
                 *)       VERSION="" ;;
